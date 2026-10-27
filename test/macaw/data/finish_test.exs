@@ -151,6 +151,15 @@ defmodule Macaw.Data.FinishTest do
              Schema.new!(%{"id" => %{type: :text, identity: true}})
            ) ==
              {:error, [{[:latest], {:window, :no_window_field}}]}
+
+    places =
+      Schema.new!(%{
+        "at" => %{type: :point, window: true},
+        "id" => %{type: :text, identity: true}
+      })
+
+    assert Window.check(request(latest: true), places) ==
+             {:error, [{[:latest], {:invalid_for, :point}}]}
   end
 
   @tag verifies: "finish-budget"

@@ -1,7 +1,5 @@
 # 01 — Sources {#sources}
 
-<!-- surfex: deferred #112: the source contract this file introduces is complete with its conformance kit -->
-
 A **source** is anything a component's slot reads. One contract serves feeds, queries, derived sources, state sources and exports. It is a strict superset of visualize's `Visualize.Feed`: an existing feed is a source with no parameters.
 
 ## 1. The data model {#sources-data}
@@ -404,7 +402,7 @@ a request carries every axis with its defaults; every fault of a bad window, box
 4. **`:latest`**: each identity's latest row by the window field, the later in order on a tie; a row whose identity or time is `nil` names nothing and is dropped.
 5. **`:budget`**: the rows reduced to the budget, `reduced_by: :runtime`. Each series (the rows sharing every `:category` field's value) is reduced field by field against the window field, or the row's place without one, by Largest-Triangle-Three-Buckets or, with `reduce: :m4`, by M4 (`Macaw.Data.Reduce`), and the union of the kept rows returned whole, in their order. When many series leave the union over the budget, an even stride over it keeps the first and the last: **never more than the budget**. A delivery within the budget, and a schema with no `:number` field to reduce by, come back as they are.
 
-A step the source honored is not done again. **Finishing only removes rows,** so it never widens the window and never adds a row. A request the schema cannot answer (`Macaw.Data.Window.check/2`) raises `ArgumentError`: a window not of the window field's type or with no window field, a box with no `:point` window field, a region field not described, not `:time` or `:number`, mixed or inverted, or `latest` with no window field or no declared identity; the request is the caller's. `Macaw.Data.Window` holds the comparisons, trims and positions it uses, ported from visualize's `Visualize.Feed.Window`.
+A step the source honored is not done again. **Finishing only removes rows,** so it never widens the window and never adds a row. A request the schema cannot answer (`Macaw.Data.Window.check/2`) raises `ArgumentError`: a window not of the window field's type or with no window field, a box with no `:point` window field, a region field not described, not `:time` or `:number`, mixed or inverted, or `latest` with no declared identity or no `:time` or `:number` window field to order by; the request is the caller's. `Macaw.Data.Window` holds the comparisons, trims and positions it uses, ported from visualize's `Visualize.Feed.Window`.
 
 ```test:finish-window
 a window the source did not honor is trimmed, an open bound open, the served window intersected; an honored window, and no window, leave the delivery as it is; a time window trims by DateTime, and a number window on a time field is the caller's error
@@ -419,7 +417,7 @@ a region trims each ranged field, the window field among them; an honored region
 ```
 
 ```test:finish-latest
-latest keeps each identity's latest row by the window field, dropping a row with no identity; an honored latest is not redone; it needs a declared identity and a window field
+latest keeps each identity's latest row by the window field, dropping a row with no identity; an honored latest is not redone; it needs a declared identity and a time or number window field, a point one refused
 ```
 
 ```test:finish-budget
@@ -601,3 +599,52 @@ These bind the component that draws, not this library's code; each emitting libr
 - **`time`** is the holder's now, passed to the component; a component's event code never reads a clock for it. A Macaw surface always supplies its own clock, which tests and replays control, so a recorded path replays with its times. A **standalone holder** (a visualize chart outside any surface, whose host is its holder) may default its now to the host's wall clock, if the default stays injectable and is checked to answer a `DateTime` (macaw_compose#73, #91; visualize#955).
 - **The drawn-token rule:** an event on an element that maps to data resolves against the drawing it landed on. Each drawing carries a token; an event whose token is not the current drawing's is dropped, never resolved against newer data. (visualize D-170.)
 - **Identity is the declared identity** of the item (§1). Inference from other fields is allowed only for a visitor's one-off pick, never for tracking or recording. (visualize D-167.)
+
+## 9. The conformance kit {#sources-conformance}
+
+Every source runs **one kit**, `Macaw.Data.Source.Conformance`: the contract of §2–§4 as checks, so a provider proves conformance by running it rather than by reading this file. It is visualize's `Visualize.Feed.Conformance` (visualize spec 08 §12), with the checks a source's superset of a feed needs.
+
+**Two layers.** `check(check, source, opts)` answers one check's **findings**, `{check, reason}` terms, `[]` for a source that passes; `check(source, opts)` runs them all, in the order of `checks/0`; `format/1` words a finding as a line a person reads. `use Macaw.Data.Source.Conformance, source: …` inside a module that uses `ExUnit.Case` writes one test per check, in a `describe` block, failing with the findings. The kit itself references no ExUnit function (`describe`, `test` and `flunk` appear only in the code `use` writes), so it loads in production. `use` refuses a missing `source:` and an unknown option at compile time; `check/3` refuses an unknown check, an unknown option and a request key outside the six below.
+
+**The eight checks:**
+
+| Check | Holds |
+|---|---|
+| `:describe` | `describe/2`, given the host's `context:`, answers a description `Description.new/1` accepts as it stands; its schema is one `Schema.new/1` accepts, its version the content hash (§1.10); a measure the vocabulary refuses is its own finding, naming the field; a source naming `:window` has a `:time` or `:number` window field, one naming `:box` a `:point` one; a second describe answers the same description |
+| `:deliveries` | each request, at each budget, answers a well-formed delivery (§3) naming the described version: every row field described; the window field holding values of its type; every other `:time` field instants; every declared identity field present; every row within the served window; no two rows of a series closer than the served resolution; the served window complete (an open fetch holds no row inside it that the delivery lacks); `capped` true only with a shortfall and false only without one; `reduced_by` `:source` only when the source reduced, and never `:runtime`, which is Macaw's (§2.4) |
+| `:supports` | `supports` is distinct capabilities, and each it names is true: the window kept (served within, no row outside), the box kept, every region range kept, `latest` one row per identity and none older than its last, the budget never exceeded, `as_of` answered as of the instant asked (an origin names it, and an hour's later `now` changes nothing), `:push` subscribable; a source not naming `:push` refuses `subscribe/2` |
+| `:push` | the handshake's first message is the schema; every pushed schema is valid; every pushed delivery is well formed, within its served window, and after the schema it names; `push:` makes a delivery arrive (§4) |
+| `:errors` | requests no source can read (a window of no times, of either kind, mixed; a box; a region over an unknown field with `latest`) answer values, a delivery or an error, never a crash; an undeclared parameter never reaches the source (`{:error, {:params, faults}}`, §2.2); `unsubscribe/2` of an unknown reference is `:ok`; a `down:` source answers errors to `describe`, `fetch` and `subscribe` |
+| `:unsubscribe` | after `unsubscribe/2`, a push made by `push:` delivers nothing |
+| `:determinism` | one request, one `now`: two fetches give one answer, the same rows and served terms. A row stamped after `now` arrived between them and is not compared. An answer depends on the request, never on a clock the source reads |
+| `:viewers` | a source declaring `viewer_independent` answers the two `viewers:` alike, which pooling across viewers (§6) relies on |
+
+**Requests.** `requests:` lists what is asked, each a keyword list of request fields among `params`, `window`, `box`, `region`, `latest` and `as_of` (`[[]]` by default), each fetched at every one of `budgets:` (`[nil, 5]`), at `now:` (the moment the check starts by default) and as the first of `viewers:`. A capability the source names that no request probes is a finding (`{:no_probe, capability}`), and so is a request the schema cannot answer (`{:probe, ask, faults}`): both are the run's to fix. The other options are `context:`, `as_of:` (a day before `now` by default), `push:`, `down:`, `timeout:`, `reductions:`, `processes:` and `quiet:`.
+
+**Isolation.** Every callback runs in a process of its own (`Macaw.Data.Bounded`), so a raise or an exit is a finding (`{:raised, call, reason}`), not a crash of the check. A callback is judged by the **reductions** its process spends against `reductions:`, the source author's cost budget (`nil` makes no cost claim), with the reductions of the named `processes:` during the call added for a source that works in a server; liveness is a separate wall-clock bound, `timeout:`, for a call blocked in `receive`, which is `{:hung, call, timeout}`. **Load changes no verdict:** nothing is judged by the clock but a hang.
+
+The kit is **ported, not reinvented**, so visualize's feeds keep their checks when they become sources; the adapter that runs it over them is visualize's (macaw_compose#58, #112).
+
+```test:conformance-honest
+an honest source passes every check, with a down source and declared identities too; a source that cannot describe stops each check with the reason; a finding reads as a line naming its check
+```
+
+```test:conformance-flaws
+every flaw of the broken sources fails the check it targets with the finding that names it, every check is failed by some flaw, and every finding formats as a line
+```
+
+```test:conformance-errors
+a down source that answers describe, fetch and subscribe is three findings; a source raising on an unreadable request is a raised finding, not a crash
+```
+
+```test:conformance-probes
+a capability no request probes is a no_probe finding for the window, budget, push, region and box; a request the schema cannot answer is a probe finding; a request key outside the six is refused
+```
+
+```test:conformance-use
+use writes one test per check into each describe block, refuses a missing source and an unknown option at compile time, and an unknown check is refused
+```
+
+```test:conformance-load
+idle and with every scheduler saturated the verdicts agree: a correct source passes, a budget of one reduction fails describe while a generous one passes, an endless fetch is stopped at its budget, a blocked one is hung at the bound, and work in another process counts only when that process is named
+```

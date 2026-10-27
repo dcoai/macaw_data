@@ -191,7 +191,7 @@ defmodule Macaw.Data.Window do
   `{:error, faults}`, every fault `{path, reason}` by path. A window must apply to a
   `:time` or `:number` window field; a box needs a `:point` window field; each region
   field is described, `:time` or `:number`, its range two ends of its type, not inverted;
-  `latest` needs a window field and a declared identity. A request asking none of them is
+  `latest` needs a `:time` or `:number` window field and a declared identity. A request asking none of them is
   `:ok`.
 
       iex> alias Macaw.Data.{Schema, Source.Request}
@@ -274,9 +274,16 @@ defmodule Macaw.Data.Window do
 
   defp latest_faults(false, _field, _schema), do: []
 
+  # Latest is by the window field's order, which a `:point` field does not have.
   defp latest_faults(true, field, schema) do
-    if(field == nil, do: [{[:latest], {:window, :no_window_field}}], else: []) ++
-      if Schema.identity(schema) == [], do: [{[:latest], {:window, :no_identity}}], else: []
+    by =
+      case field && Schema.fetch(schema, field, :type) do
+        nil -> [{[:latest], {:window, :no_window_field}}]
+        {:ok, type} when type in [:time, :number] -> []
+        {:ok, type} -> [{[:latest], {:invalid_for, type}}]
+      end
+
+    by ++ if Schema.identity(schema) == [], do: [{[:latest], {:window, :no_identity}}], else: []
   end
 
   defp after_from?(_time, nil), do: true

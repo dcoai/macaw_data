@@ -31,12 +31,12 @@ defmodule Macaw.Data.Test.Reference do
   def fetch(%__MODULE__{rows: n}, request) do
     scale = request.params["scale"]
 
-    rows =
+    all =
       for t <- 1..n//1, within?(t, request.window) do
         %{"t" => t, "v" => t * scale, "who" => viewer_name(request.viewer)}
       end
 
-    rows = if request.budget, do: Enum.take(rows, request.budget), else: rows
+    rows = if request.budget, do: Enum.take(all, request.budget), else: all
 
     {:ok,
      Delivery.new(rows,
@@ -44,7 +44,7 @@ defmodule Macaw.Data.Test.Reference do
        schema: Schema.version(@schema),
        served: [
          window: request.window,
-         reduced_by: if(request.budget && n > request.budget, do: :source)
+         reduced_by: if(length(rows) < length(all), do: :source)
        ]
      )}
   end
