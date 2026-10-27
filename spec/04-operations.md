@@ -7,8 +7,6 @@ The operations a design applies to its data and the operations a derived source 
 - **the registry is explicit and default closed** (§2): `macaw_data`'s own package is always in, and anything else only when a host enables its package;
 - **transforms that need geometry** (layouts, geographic operations) implement the same behavior and declare it (`needs: [:frame]`, §1.1). They live in the package that draws, never here, and are never reachable from a derived source, which has no frame.
 
-Each section's tests are written as **`planned-test:` blocks** until its work item is built (macaw_compose#119–#124), as spec/02's were: surfex judges every `test:` hint and can't defer one, so each becomes a `test:` hint, unchanged, in the change that implements it.
-
 | Module | What it is |
 |---|---|
 | `Macaw.Data.Transform` | the transform behavior (§1.1) |
@@ -476,14 +474,12 @@ visualize's sandbox allows `Visualize.Data`. A stored function written against i
 
 ## 7. Budget reducers {#operations-reducers}
 
-<!-- surfex: deferred #124: budget reducers -->
-
 A budget's reducer (01 §2.4, `:budget`) is **any registered transform declaring `reduces/0`** (§1.1), by name: `lttb` (the default) and `m4` in `macaw_data`'s package, and any an enabled package adds. `Macaw.Data.Source.Finish.finish/4` and `reduce/5` take `reduce:` (a name, by spelling) and `operations:` (the registry, `macaw_data`'s own package by default):
 
 - each series and number field is reduced as 01 §2.4 says, by the reducer's node `%{fields: [x, y], <count>: c}`. Here `x` is the window field or the row's place, `<count>` is the option `reduces/0` names, and `c = max(min, div(budget, per · share))`, where `per` is the rows a unit keeps, `share` the series times the number fields, and `min` the least its option's type allows (`lttb`: 3; `m4`: 1);
 - the union of the kept rows is returned whole, in their order, never more than the budget;
 - **a `reduce:` naming no registered reducer** (unknown, or a transform without `reduces/0`) raises `ArgumentError` naming it: the request is the caller's, as a request the schema cannot answer is.
 
-```planned-test:operations-reducers-named
+```test:operations-reducers-named
 a budget reduces by lttb by default, by m4 when named, and by a test reducer of an enabled package; an unknown name and a transform that does not reduce each raise naming it
 ```

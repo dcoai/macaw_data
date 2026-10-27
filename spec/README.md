@@ -7,7 +7,7 @@
 | [00 — Overview](00-overview.md) | what `macaw_data` holds, what it depends on, the order it is built in | |
 | [01 — Sources](01-sources.md) | the data model, the source contract, deliveries, push, change notification, running sources, credentials, **the interaction event** (§8) | §1 and §3 implemented (v0.2.0), §8 (v0.1.0); §2 and §4–§7 are order-of-work step 4 |
 | [02 — Derived sources](02-derived.md) | checked, bounded, deterministic functions over sources | implemented (v0.4.0, order-of-work step 5) |
-| [04 — Operations](04-operations.md) | the transform and aggregate behaviors, the registry, the table operations, the statistics, what a stored function reaches, budget reducers | order-of-work step 6 (macaw_compose#83) |
+| [04 — Operations](04-operations.md) | the transform and aggregate behaviors, the registry, the table operations, the statistics, what a stored function reaches, budget reducers | implemented (v0.5.0, order-of-work step 6) |
 | [03 — Units and quantities](03-units.md) | UCUM codes, dimensions and factors, aliases, the currency extension, symbols, conversion, `Telemetry.Metrics` units; the fixed list of quantities, their kind, bounds, additivity, families, conventions and unit systems; the measure; the label rule | implemented (v0.2.0, order-of-work step 3) |
 
 Sections keep the anchors they had in the family spec (`sources-*`, `derived-*`), so links into them stay stable.

@@ -1,7 +1,7 @@
 defmodule Macaw.Data.MixProject do
   use Mix.Project
 
-  @version "0.4.0"
+  @version "0.5.0"
 
   def project do
     [
@@ -12,7 +12,7 @@ defmodule Macaw.Data.MixProject do
       start_permanent: Mix.env() == :prod,
       deps: deps(),
       description:
-        "Macaw's data layer: the interaction event, the data model, the source contract and derived sources.",
+        "Macaw's data layer: the interaction event, the data model, the source contract, derived sources, and the transforms and aggregates they share with designs.",
       package: [licenses: ["MIT"]],
       docs: [main: "readme", extras: ["README.md"]]
     ]
