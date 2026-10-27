@@ -52,6 +52,13 @@ spelling:
   script:
     - elixir ci/spelling.exs
 
+# No atom from untrusted input (ci/atoms.exs, spec/02 §6.5): a gate the sandbox brought.
+atoms:
+  image: $ELIXIR_IMAGE
+  stage: check
+  script:
+    - elixir ci/atoms.exs
+
 # Every spec link resolves (ci/spec_links.exs): links into another Macaw
 # repository's spec are checked by shape here, where no sibling checkout exists.
 spec-links:

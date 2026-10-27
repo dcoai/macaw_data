@@ -288,13 +288,9 @@ A computation can therefore move between a design and a derived source unchanged
 
 ## 6. The sandbox {#derived-sandbox}
 
-<!-- surfex: deferred #115: the sandbox -->
-
 `Macaw.Data.Derived.Sandbox`: the checker (§6.1) a stored function passes before it is compiled, the allowlist it is held to (§6.2), compiling once (§6.3), and the bounded runner every function is called through (§6.4). It is the one place in the family that runs untrusted code.
 
 ### 6.1 The checker {#derived-checker}
-
-<!-- surfex: deferred #115: the sandbox -->
 
 `Sandbox.check(source, opts)` reads a stored function and answers `{:ok, quoted}`, the checked AST, or `{:error, faults}` with **every** fault found, each `{line, reason}`, `line` the source line the fault is on (`nil` for a fault of the whole source), ordered by line. It evaluates nothing. Its options are `arity:` (the arities the function may take, an integer or a list of them, `[1, 2]`), `fields:` (the field names a `row.field` may read; `nil`, the default, reads any) and `max_source:` (the most bytes a source may have, `10_000`, tighten-only, §6.4).
 
@@ -338,29 +334,27 @@ A refused function's faults are its check's and are shown at their lines; nothin
 
 `Sandbox.format_error/1` words one fault: `line 3: Process.send/3 is not allowed in a derived source`.
 
-```planned-test:derived-checker-refusals
-every refused construct (send, receive, spawn, try, raise, apply, import, quote, sigils, attributes, struct literals, module atoms, special-form variables, dynamic calls, unknown functions) is refused by name at its line, every fault of a source reported at once
+```test:derived-checker-refusals
+every refused construct (send, receive, spawn, try, raise, apply, import, quote, sigils, attributes, struct literals, module atoms, special-form variables, dynamic calls, unknown functions) is refused by name at its line, every fault of a source reported at once; format_error/1 words each reason as a line
 ```
 
-```planned-test:derived-checker-shape
+```test:derived-checker-shape
 a source over the size limit is not parsed; one that is not one fn, or whose clauses disagree on arity or take one arity does not allow, is refused; a syntax error is the parser's words
 ```
 
-```planned-test:derived-checker-names
+```test:derived-checker-names
 parsing a stored function makes no atom: unknown names, keys and atom literals come back as strings and an interpolated atom is refused
 ```
 
-```planned-test:derived-checker-reads
+```test:derived-checker-reads
 a map read is not a call, a dynamic call is refused, a field outside fields is unknown, a context read is not held to fields, and only a literal empty collectable is allowed
 ```
 
-```planned-test:derived-checker-compiles
+```test:derived-checker-compiles
 a variable read before it is bound, a call in a guard that is not guard-safe and a non-pattern in a pattern are each refused at their line
 ```
 
 ### 6.2 The allowlist {#derived-allowlist}
-
-<!-- surfex: deferred #115: the sandbox -->
 
 `Macaw.Data.Derived.Sandbox.Allowlist` holds what a stored function may call as **explicit lists**, never "a module minus a few": visualize#643's allowlist, decided 2026-10-15 (start small, and grow one entry at a time).
 
@@ -389,17 +383,15 @@ a variable read before it is bound, a call in a guard that is not guard-safe and
 
 `Allowlist.modules/0` is the eight modules; `allowed/1` a module's allowed `{function, arity}` list, `excluded/1` its excluded list with each reason (`:nondeterministic`, `:deprecated`, `:atoms`, `:internal`), and `kernel/0` the `{function, arity}` of every `Kernel` function and special form a function may call. Step 6 (§5) adds the registered aggregates and transforms to `modules/0`; nothing else widens it.
 
-```planned-test:derived-allowlist-exact
-for each allowed module, the allowed and excluded lists are disjoint and together exactly its exports on this Elixir; every exclusion carries one of the four reasons
+```test:derived-allowlist-exact
+for each allowed module, the allowed and excluded lists are disjoint and together exactly its exports on this Elixir; every exclusion carries one of the four reasons; the Kernel list names only Kernel's functions and special forms, every is_* guard among them
 ```
 
-```planned-test:derived-allowlist-calls
+```test:derived-allowlist-calls
 a call of every allowed module's allowed function passes the checker, every excluded one is refused, and the guard-safe part alone passes in a guard
 ```
 
 ### 6.3 Compiling once {#derived-compile}
-
-<!-- surfex: deferred #115: the sandbox -->
 
 `Sandbox.compile(source, opts)` checks the source (§6.1) and, when it passes, compiles it **once into a closure**: `{:ok, %Sandbox.Compiled{hash, fun, arity, warnings}}`, or `{:error, faults}` with the checker's faults. It takes the checker's options and the runner's (§6.4).
 
@@ -408,13 +400,11 @@ a call of every allowed module's allowed function passes the checker, every excl
 - **In the bounded runner.** The evaluation runs as any call does (§6.4). A source the checker passed but the compiler refuses is the fault `{nil, {:compile, message}}`, the compiler's exception message, read from the process's exit reason and never rescued.
 - **The cache is a value.** `%Macaw.Data.Derived.Sandbox.Cache{}`, held by whatever owns the functions (the engine, §8), not a process or a table. `Cache.compile(cache, source, opts)` is `{:ok, compiled, cache}` or `{:error, faults, cache}`, keyed by the **SHA-256 of the source** together with the arities and the fields it was checked against. A source compiled before is a map lookup, a refusal included. `hash` is that SHA-256, 64 lowercase hexadecimal digits. The cache never evicts; its owner replaces it.
 
-```planned-test:derived-compile-once
+```test:derived-compile-once
 a checked source compiles once into a closure that reads row.field by either spelling and raises on a non-map; warnings are kept, not printed; a checked source the compiler refuses is one compile fault; the cache answers a second compile, a refusal included, from its key without checking again
 ```
 
 ### 6.4 The bounded runner {#derived-runner}
-
-<!-- surfex: deferred #115: the sandbox -->
 
 `Sandbox.run(function, args, opts)` calls a function (a `Compiled`, or a host's function value) with a list of arguments in a **process of its own** and answers `{:ok, value}` or `{:error, kind, detail}`. A host's function (§7) is trusted, so it skips the checker, but it runs here too: a runaway in it is contained like one in a stored function.
 
@@ -441,21 +431,19 @@ a checked source compiles once into a closure that reads row.field by either spe
 
 **What the limits do not bound.** A heap limit is checked when the process collects, so a single allocation larger than the limit (`String.duplicate("x", 10_000_000_000)`, a huge `**`) is made before the VM kills the process: the host must have room for one such allocation. The check does not refuse these functions, since cost is the author's to weigh (visualize#643's second allowlist decision).
 
-```planned-test:derived-runner-outcomes
+```test:derived-runner-outcomes
 a call answers its value; a raise is its exception's module and never its message; a heap overrun is memory; a call blocked in receive is hung at the bound; nothing the call started outlives it
 ```
 
-```planned-test:derived-runner-reductions
+```test:derived-runner-reductions
 a runaway is stopped as reductions at the cap; a call that answers over the cap is reductions though a value came back; a call within it is ok
 ```
 
-```planned-test:derived-runner-tighten
+```test:derived-runner-tighten
 each bound may be lowered and refuses a value above its default
 ```
 
 ### 6.5 Gates that ship with the sandbox {#derived-gates}
-
-<!-- surfex: deferred #115: the sandbox and its gates -->
 
 The sandbox is the one place in the family that runs untrusted code, so it never loses a check in transit. It moved from visualize to `macaw_data` with every gate, and macaw_data's CI runs them:
 
@@ -469,19 +457,21 @@ The sandbox is the one place in the family that runs untrusted code, so it never
 
 Adopters keep their own sandbox until `macaw_data` passes all of them.
 
-```planned-test:derived-attacks
+```test:derived-attacks
 each of visualize's sandbox attacks is refused by the checker or contained by the runner, and none reaches the caller, the node or an atom
 ```
 
-```planned-test:derived-load
+```test:derived-load
 the runner's and the checker's verdicts are the same idle and with every scheduler saturated
 ```
+
+<!-- The property hint needs §1.2's conformance: macaw_compose#114 makes it a test: hint. -->
 
 ```planned-test:derived-properties
 for generated stored functions and inputs, a run never crashes the caller, no fault holds a data value, and the answer conforms to its schema or is a fault
 ```
 
-```planned-test:derived-atom-gate
+```test:derived-atom-gate
 the atom gate passes this library; it fails on an atom made from a string or an interpolated atom outside the allowlist, on an allowlist entry whose count is stale, and on an entry of a document's or a client's names
 ```
 
