@@ -1,7 +1,5 @@
 # 04 — Operations {#operations}
 
-<!-- surfex: deferred #119: the behaviors, the registry and running -->
-
 The operations a design applies to its data and the operations a derived source may call are **the same code**, here in `macaw_data` beside derived sources (macaw_compose#22, decision 11; R18 of `design/visualize-alignment.md`). A computation therefore moves between a design and a derived source unchanged, and a metresis feed and a visualize chart reduce data the same way. This file is visualize's spec/14 §5.4.1 (the data steps) and its proposals visualize#886 (the transform behavior) and visualize#909 (the aggregate behavior), both folded into Macaw by the owner on 2026-10-26, adapted to Macaw's contracts (macaw_compose#83):
 
 - **a transform reads and returns a `Macaw.Data.Table`** ([01 §1.1](01-sources.md#sources-table)), the currency of deliveries; rows are a view at the edge;
@@ -23,13 +21,9 @@ Each section's tests are written as **`planned-test:` blocks** until its work it
 
 ## 1. The behaviors {#operations-behaviors}
 
-<!-- surfex: deferred #119: the behaviors, the registry and running -->
-
 Each behavior is a module's declaration of what it reads and what it answers, so **one declaration** feeds the validator (§3.1), the drawer's builder forms and vocabulary, the JSON forms and the sandbox (§6); a member is never described a second time anywhere else. **A member is pure and deterministic:** the same node and table give the same table, with no processes, ETS, NIFs, `Regex`, clock or randomness (the portable set, visualize#918). Anything a member needs that varies comes in its node or its context.
 
 ### 1.1 Transforms {#operations-transform}
-
-<!-- surfex: deferred #119: the behaviors, the registry and running -->
 
 `@behaviour Macaw.Data.Transform`:
 
@@ -43,15 +37,13 @@ Each behavior is a module's declaration of what it reads and what it answers, so
 | `reduces() :: {String.t(), pos_integer()}` *(optional)* | a **reducer**: the option holding the target count, and the rows each unit of it keeps at most (`lttb`: `{"n", 1}`; `m4`: `{"width", 4}`), so a budget can name it (§7) |
 | `prepare(nodes, table, context) :: term()` *(optional)* | computed once per design and shared by every mark that reads it (a force layout's positions), passed to `run/3` in the context under `prepared`; the drawer's, never called here |
 
-`run/3` is given **the node checked** (§3.1): its keys strings, each of the op's options present with its default filled in, an enum value its declared atom, a frame-bound value resolved to a number. `outputs/2` is given the same node. `outputs/2` holds for `run/3`: for every fixture of the op's tests, the columns `run/3` answers are, by name and type, the ones `outputs/2` names (`operations-outputs-agree`).
+`run/3` is given **the node checked** (§3.1): its keys strings, each of the op's options present with its default filled in, an enum value its declared atom, a frame-bound value resolved to a number. `outputs/2` is given the same node. `outputs/2` holds for `run/3`: for every fixture of the op's tests, the columns `run/3` answers are, by name and type, the ones `outputs/2` names.
 
-```planned-test:operations-transform-callbacks
+```test:operations-transform-callbacks
 a transform declares its name, options, needs and outputs and runs a checked node over a table; an optional reducer and prepare are declared only by the ops that have them; outputs agree with what run answers on every fixture
 ```
 
 ### 1.2 Aggregates {#operations-aggregate}
-
-<!-- surfex: deferred #119: the behaviors, the registry and running -->
 
 `@behaviour Macaw.Data.Aggregate`: a statistic, the reduction of one column's readings to one value.
 
@@ -64,13 +56,11 @@ a transform declares its name, options, needs and outputs and runs a checked nod
 | `reduce(values, options) :: term()` | the value of the readings, **`nil` readings already dropped**: a gap is absence, never zero (01 §1.1) |
 | `init(options)`, `step(state, value, options)`, `finish(state, options)` *(optional, together)* | the streaming form chunked windows use, over the same readings in the same order: `finish(Enum.reduce(values, init(options), &step(&2, &1, options)), options)` equals `reduce(values, options)` |
 
-```planned-test:operations-aggregate-callbacks
+```test:operations-aggregate-callbacks
 an aggregate declares its name, options, output type and whether it keeps the unit, and reduces readings with nils dropped; where it has the streaming form, the stream equals reduce on every fixture, chunked at every split
 ```
 
 ### 1.3 Options {#operations-options}
-
-<!-- surfex: deferred #119: the behaviors, the registry and running -->
 
 An option is declared `{name, %Option{type: type, default: value, required: boolean, frame: :width | nil, doc: String.t()}}`. A required option has no default; an optional one's `default` is filled in when the node omits it (`nil` is a default). `frame: :width` makes it **frame-bound** (§3.2).
 
@@ -93,15 +83,13 @@ An option is declared `{name, %Option{type: type, default: value, required: bool
 | `:aggregate` | the name of an aggregate in the registry (§2) |
 | `:term` | any value |
 
-`Option.check(option, value)` answers `{:ok, value}`, the value as `run/3` is given it (an enum's atom, an aggregate's module), or `{:error, reason}` (§3.1).
+`Option.check(registry, option, value)` answers `{:ok, value}`, the value as `run/3` is given it (an enum's atom, an aggregate's module), or `{:error, reason}` (§3.1).
 
-```planned-test:operations-option-types
+```test:operations-option-types
 every option type holds the values it names and refuses the rest with a reason naming the type; an enum is read by spelling into its atom; a frame-bound option takes "plot" or its own type
 ```
 
 ## 2. Packages and the registry {#operations-registry}
-
-<!-- surfex: deferred #119: the behaviors, the registry and running -->
 
 **A package is a module with `__members__/0`**, the list of its modules that implement a behavior of this file or of any other Macaw behavior (macaw_compose spec/12 §1). Which behavior a member implements is read from its own `@behaviour` declarations, so a package author maintains one list. `Macaw.Data.Operations` is `macaw_data`'s own package: the twelve table operations of §4 and the thirteen statistics of §5.
 
@@ -112,30 +100,31 @@ every option type holds the values it names and refuses the rest with a reason n
 - **Names are strings, matched by spelling,** and the registry maps each to its module: `transform(registry, name)` and `aggregate(registry, name)` answer `{:ok, module}` or `:error`; `transforms/1` and `aggregates/1` every name, sorted; `packages/1` the packages, `Macaw.Data.Operations` first; `digest/1` a digest of every member's name and module, which a compile cache keys by (§6.2).
 - macaw_compose's registry (step 8) builds on this one for its other behaviors and does not replace it. It knows the packages a host lists but has not enabled, so it is what names the providing package in an unknown name's fault (`transform "sankey" is not available: enable visualize_layouts`); here an unknown name is a fault without one (§3.1).
 
-```planned-test:operations-registry-build
+```test:operations-registry-build
 the registry holds macaw_data's own package and exactly the packages listed; a duplicate name, an aggregate declaring a step's key and a member implementing no behavior each raise naming what collides; names resolve by spelling to their module and the digest changes with the members
 ```
 
 ## 3. Running {#operations-run}
 
-<!-- surfex: deferred #119: the behaviors, the registry and running -->
-
 | Function | Contract |
 |---|---|
 | `Operations.validate(registry, nodes, context)` | `{:ok, checked}`, every node checked (§3.1), or `{:error, faults}` |
-| `Operations.apply(registry, nodes, table, context)` | the nodes run in order over the table, each step's output the next one's input: `{:ok, table}` or `{:error, faults}`, the validation's |
+| `Operations.apply(registry, nodes, table, context)` | the context `%{}` by default; the nodes run in order over the table, each step's output the next one's input: `{:ok, table}` or `{:error, faults}`, the validation's |
 | `Operations.apply!/4` | as `apply/4`, raising `ArgumentError` naming every fault |
 | `Operations.aggregate(registry, name, values, options)` | the aggregate's value of `values`, `nil`s dropped: `{:ok, value}` or `{:error, faults}` |
-| `Operations.outputs(registry, nodes, columns)` | the columns after every node, by `outputs/2`: `{:ok, columns}` or `{:error, faults}` |
-| `Operations.format_error/1` | one fault as a sentence: `step 2 (sort): order is one of ascending, descending, got "up"` |
+| `Operations.outputs(registry, nodes, columns, context)` | the columns after every node, by `outputs/2`, the context `%{}` by default: `{:ok, columns}` or `{:error, faults}` |
+| `Operations.format_error/1` | one fault as a sentence: `step 2, order: is one of ascending or descending`. Like every fault, it carries no value from the data |
+| `Operations.columns/1`, `table/2` | for members: a table's `[{name, type}]`, and the table of rows with given columns, each read by either spelling |
 
 `table` is a `Macaw.Data.Table` or any source `Table.from/2` reads (a list of rows, a map of columns); a node is a map with string or atom keys.
 
+```test:operations-run-apply
+apply runs the checked nodes in order, each step's table the next one's input, and refuses before any runs; apply! raises the worded faults; aggregate reduces with nils dropped after checking its options; outputs names the columns; format_error words a fault
+```
+
 ### 3.1 Validation {#operations-validate}
 
-<!-- surfex: deferred #119: the behaviors, the registry and running -->
-
-Every node is checked before any runs, and **every** fault is answered at once, each `{[index, key], reason}`: `index` the node's place in the list, `key` the option's string (`"op"` for the op itself).
+Every node is checked before any runs, and **every** fault is answered at once, each `{[index, key], reason}`: `index` the node's place in the list, `key` the option's string (`"op"` for the op itself). `aggregate/4`'s faults are at `[key]`, and at `[]` for an unknown name.
 
 | Reason | Meaning |
 |---|---|
@@ -151,13 +140,11 @@ A transform whose node names an aggregate (`fn: "quantile"`) is checked with the
 
 A step whose reading is wrong only at run time (a `window` over a column that holds no time, a `stack` over a value that is not a number) **raises `ArgumentError`** naming the step, the option and the reading, as visualize's steps do: the data is the caller's, and the bounded runner reports it as any raise (02 §6.4). A step never catches.
 
-```planned-test:operations-validate-faults
+```test:operations-validate-faults
 every fault of every node is answered at once at its index and key: an unknown op or aggregate, a missing required key or op, a key the op does not read, a value of the wrong type, an unmet need, and a node that is not a map; format_error words each
 ```
 
 ### 3.2 The context {#operations-context}
-
-<!-- surfex: deferred #119: the behaviors, the registry and running -->
 
 The context is plain data, a map:
 
@@ -172,7 +159,7 @@ The context is plain data, a map:
 - **A need is met by its key.** A transform declaring `needs: [:frame]` runs only with `frame` in the context; otherwise its node is `{:needs, :frame}` at validation. A derived source has no frame, projection or text, so a member that needs one is never callable from a stored function (§6).
 - **A frame-bound option** (`lttb`'s `n`, `m4`'s `width`) may be written `"plot"` (or `:plot`): the plot's width in whole pixels, `ceil` of the frame's `width`, resolved **before** `run/3` is called, so the step itself is a pure data operation. Without a frame it is `{:needs, :frame}` at that option, never a crash. So `lttb(fields: ["t", "bpm"], n: "plot")` says "one point per pixel" and follows the plot when it is resized.
 
-```planned-test:operations-context-needs
+```test:operations-context-needs
 a transform needing a frame runs with one and is refused without one; plot resolves to the ceiling of the frame's width before the step runs and is refused without a frame; now and schema reach the step
 ```
 
