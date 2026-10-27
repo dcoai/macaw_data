@@ -41,7 +41,8 @@ A derived source is **data**: a struct with no function in it, its function a na
 **Alone and in context.** `new/1` checks what the source says of itself: its keys and their types, its schema through `Schema.new/1`, its inputs' shapes, `per` against the inputs' count, and the function's text through `Sandbox.check/2` with `fields: nil`, since what its inputs hold is not known alone. `Macaw.Data.Derived.validate(derived, opts)` checks it **given what it reads**:
 
 - `inputs:` a map from each input's key to the input's `%Schema{}`, where it is known: the function's text is then checked against the fields of its inputs' schemas and its own (`{:unknown_field, name}` for any other, §6.1), each window that is a request is checked against its input's schema (`Macaw.Data.Window.check/2`, [01 §2.4](01-sources.md#sources-finishing)), and `per` against the identity input's declared identity (§1.3);
-- `functions:` the host functions' registry (§7): a `function` no registered module defines is `{:undeclared, :function, name}`.
+- `functions:` the host functions' registry (§7): a `function` no registered module defines is `{:undeclared, :function, name}`;
+- `operations:` the registry of operations ([04 §2](04-operations.md#operations-registry)) a stored function's `Macaw.Data.Ops` calls are held to, or `nil`, the default, to hold their names only to being literals, as `new/1` does ([04 §6.1](04-operations.md#operations-allowlist)).
 
 The engine validates every source in context before it first runs, and again whenever an input's schema version changes (§8.2), where every input's schema is known.
 
@@ -265,12 +266,12 @@ The operations a design applies to its data and the operations a derived source 
 
 ### 6.1 The checker {#derived-checker}
 
-`Sandbox.check(source, opts)` reads a stored function and answers `{:ok, quoted}`, the checked AST, or `{:error, faults}` with **every** fault found, each `{line, reason}`, `line` the source line the fault is on (`nil` for a fault of the whole source), ordered by line. It evaluates nothing. Its options are `arity:` (the arities the function may take, an integer or a list of them, `[1, 2]`), `fields:` (the field names a `row.field` may read; `nil`, the default, reads any) and `max_source:` (the most bytes a source may have, `10_000`, tighten-only, §6.4).
+`Sandbox.check(source, opts)` reads a stored function and answers `{:ok, quoted}`, the checked AST, or `{:error, faults}` with **every** fault found, each `{line, reason}`, `line` the source line the fault is on (`nil` for a fault of the whole source), ordered by line. It evaluates nothing. Its options are `arity:` (the arities the function may take, an integer or a list of them, `[1, 2]`), `fields:` (the field names a `row.field` may read; `nil`, the default, reads any), `max_source:` (the most bytes a source may have, `10_000`, tighten-only, §6.4) and `operations:` (the registry a `Macaw.Data.Ops` call's literal name is held to, `macaw_data`'s own package by default, or `nil` to hold it only to being a literal; [04 §6.1](04-operations.md#operations-allowlist)).
 
 - **Parsing.** A source longer than `max_source` is `{:too_long, max, size}` and is not parsed. Otherwise it is parsed with a **static atoms encoder** (`Code.string_to_quoted(source, static_atoms_encoder: …, existing_atoms_only: true)`): every name the source writes comes back as its string, and one pass gives each its meaning by where it stands, from tables the library builds when it compiles. No atom is ever made from a stored function, and what parses does not depend on what the node has loaded:
   - a **call's name** (an allowed or excluded function of an allowed module, a `Kernel` function or macro, a special form) is the checker's own atom; one the checker does not know is a sentinel it refuses by the name as written (`{:restricted, {"frobnicate", 1}}`);
   - a **variable** is one of a fixed pool of the library's own atoms, one per distinct name (256 for the plain and 256 for the `_`-prefixed; more is `{:too_many_variables, 256}`), its written name kept beside it for every fault that names it;
-  - an **alias part** of an allowed module (`Enum`, `Map`, `Macaw`, `Data`, `Reduce`, …) is its atom; any other is its string, which the checker refuses as an alias;
+  - an **alias part** of an allowed module (`Enum`, `Map`, `Macaw`, `Data`, `Ops`, …) is its atom; any other is its string, which the checker refuses as an alias;
   - a **literal atom, a map key or a keyword key** is the atom of a word an allowed function takes or the checker refuses by name (`:ok`, `:error`, `:desc`, `:second`, `:trim`, `:do`, `:__struct__`, `:erlang`, …), else **its string**: `:warning` in a source is `"warning"`, and `:"Elixir.File.Stream"` is a string that names no module;
   - a **map read** `row.field` keeps the field as written, and reads it by spelling when the function runs (§6.3).
 
@@ -303,6 +304,9 @@ A refused function's faults are its check's and are shown at their lines; nothin
 | `{:guard, call}` | a call in a guard that is not guard-safe |
 | `{:pattern, form}` | a form in a pattern that is not a pattern |
 | `{:fn_arity, arities}` | the clauses take different arities, or one `arity:` does not hold |
+| `{:operation_name, :literal}` | a `Macaw.Data.Ops` call whose operation is not named by a literal ([04 §6.1](04-operations.md#operations-allowlist)) |
+| `{:unknown_operation, kind, name}` | a `Macaw.Data.Ops` call naming an aggregate or transform the registry does not hold |
+| `{:needs, name, need}` | a `Macaw.Data.Ops` call naming a transform that needs a frame, a projection or text |
 | `{:compile, message}` | the checked source does not compile (§6.3) |
 
 `Sandbox.format_error/1` words one fault: `line 3: Process.send/3 is not allowed in a derived source`.
@@ -334,7 +338,7 @@ a variable read before it is bound, a call in a guard that is not guard-safe and
 - **Control:** `case`, `cond`, `if`, `unless`, `with`, `for`, `fn`, pattern matching (`=`), guards (`when`), the pin `^`, blocks, and `&` captures, of an allowed function (`&Enum.sum/1`, `&max/2`) or of an expression over `&1`, `&2`, ….
 - **Math and comparison:** `+`, `-`, `*`, `/` and unary `-` and `+`; `==`, `!=`, `===`, `!==`, `<`, `>`, `<=`, `>=`; `and`, `or`, `not`, `&&`, `||`, `!`; `in` and `not in`; `div/2`, `rem/2`, `abs/1`, `round/1`, `trunc/1`, `min/2`, `max/2` and `**/2`; and every `is_*` guard of `Kernel`.
 - **Data:** literals, ranges (`..`, `..//`), tuples, lists (`|`, `++`, `--`), maps (`%{}`, `%{m | k: v}`), binaries (`<<>>` with the segment types `binary`, `bits`, `bitstring`, `bytes`, `integer`, `float`, `utf8`, `utf16`, `utf32`, `signed`, `unsigned`, `big`, `little`, `native`, `size/1` and `unit/1`; `<>`), `|>`, `[]` access (`row[:key]`, `Access.get/2`) and `row.field`; `to_string/1`, and with it **string interpolation**: `"#{x}"` is a binary whose segment calls `Kernel.to_string/1`, so a label is `"#{row.host}: #{row.load}"`. An atom written with interpolation (`:"a#{x}"`) stays refused, as `{:restricted, {:erlang, :binary_to_existing_atom, 2}}`; a sigil with interpolation is refused as every sigil is.
-- **Modules:** `Enum`, `Map`, `Keyword`, `String`, `Integer`, `Float`, `:math` and `Macaw.Data.Reduce`, each an explicit list of `{function, arity}`. Every export of these modules on the Elixir and OTP the library is built with is on its module's allowed list or its excluded list, and the test suite holds each module's exports to the union of the two, exactly: a new Elixir that adds a function fails that test, and the function is reviewed before it is allowed. `Macaw.Data.Reduce` is the library's own: `lttb/2,3` and `m4/2,3` are pure, an accessor argument is an `fn` the stored function made. `Integer.is_even/1` and `Integer.is_odd/1` are macros and allowed.
+- **Modules:** `Enum`, `Map`, `Keyword`, `String`, `Integer`, `Float`, `:math` and `Macaw.Data.Ops`, each an explicit list of `{function, arity}`. Every export of these modules on the Elixir and OTP the library is built with is on its module's allowed list or its excluded list, and the test suite holds each module's exports to the union of the two, exactly: a new Elixir that adds a function fails that test, and the function is reviewed before it is allowed. `Macaw.Data.Ops` is the library's own: `aggregate/2,3` and `transform/2,3` reach the registered operations by literal name ([04 §6](04-operations.md#operations-sandbox)), and which operations is the registry's, never this list. `Integer.is_even/1` and `Integer.is_odd/1` are macros and allowed.
 
 | Module | Excluded | Why |
 |---|---|---|
@@ -348,13 +352,13 @@ a variable read before it is bound, a call in a guard that is not guard-safe and
 | `Map` | `map/2`, `size/1` | `:deprecated` |
 | `Keyword` | `delete/3`, `map/2`, `size/1` | `:deprecated` |
 | `:math` | none | pure; random numbers live in `:rand`, which is not on the list |
-| `Macaw.Data.Reduce` | none | pure |
+| `Macaw.Data.Ops` | `__run__/5` | `:internal`: the call a checked `aggregate` or `transform` is compiled to ([04 §6.1](04-operations.md#operations-allowlist)) |
 
 `Enum.into/2,3` is allowed with a literal empty target only (§6.1). Everything else these modules export is allowed, `String.splitter/2,3` included.
 
 **The guard-safe part** is what Erlang allows in a guard: the comparison, arithmetic and boolean operators (`and`, `or`, `not`; not `&&`, `||` or `!`), `in` over a literal list or range, `div`, `rem`, `abs`, `round`, `trunc`, `min`, `max`, every `is_*` guard, `Integer.is_even/1`, `Integer.is_odd/1` and a map read.
 
-`Allowlist.modules/0` is the eight modules; `allowed/1` a module's allowed `{function, arity}` list, `excluded/1` its excluded list with each reason (`:nondeterministic`, `:deprecated`, `:atoms`, `:internal`), and `kernel/0` the `{function, arity}` of every `Kernel` function and special form a function may call. Step 6 (§5) adds the registered aggregates and transforms to `modules/0`; nothing else widens it.
+`Allowlist.modules/0` is the eight modules; `allowed/1` a module's allowed `{function, arity}` list, `excluded/1` its excluded list with each reason (`:nondeterministic`, `:deprecated`, `:atoms`, `:internal`), and `kernel/0` the `{function, arity}` of every `Kernel` function and special form a function may call. The registered aggregates and transforms are reached through `Macaw.Data.Ops` ([04 §6.1](04-operations.md#operations-allowlist)), so enabling a package widens what a stored function reaches without widening this list.
 
 ```test:derived-allowlist-exact
 for each allowed module, the allowed and excluded lists are disjoint and together exactly its exports on this Elixir; every exclusion carries one of the four reasons; the Kernel list names only Kernel's functions and special forms, every is_* guard among them
@@ -527,6 +531,7 @@ a failing source keeps its last good output, is down with its kind, and does not
 |---|---|---|
 | `sources:` | `[]` | the names of the sources the derived sources may read |
 | `functions:` | `%{}` | the host functions' registry (§7), default closed |
+| `packages:` | `[]` | the packages of operations a stored function may reach besides `macaw_data`'s own ([04 §6.1](04-operations.md#operations-allowlist)), default closed |
 | `debounce:` | `250` | milliseconds a pulse waits for more changes |
 | `max_reductions:`, `timeout:`, `max_heap:` | §6.4's | each call's bounds, tighten-only |
 

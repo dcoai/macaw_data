@@ -30,7 +30,7 @@ defmodule Macaw.Data.Derived.Engine do
   variable is an input, spec/02 §2.3) and with sources in place of feeds.
   """
 
-  alias Macaw.Data.{Delivery, Derived, Schema}
+  alias Macaw.Data.{Delivery, Derived, Operations, Schema}
   alias Macaw.Data.Derived.{Context, Output, Sandbox}
   alias Macaw.Data.Derived.Sandbox.Cache
   alias Macaw.Data.Derived.Sandbox.Names, as: Spelling
@@ -55,7 +55,8 @@ defmodule Macaw.Data.Derived.Engine do
             marked: MapSet.new(),
             due: nil,
             debounce: 250,
-            run_opts: []
+            run_opts: [],
+            operations: nil
 
   @type path :: [String.t(), ...]
   @type ref :: {:derived, path()} | {:source, String.t()}
@@ -82,8 +83,10 @@ defmodule Macaw.Data.Derived.Engine do
   `{:error, errors}`: every input that resolves to nothing, every host function the
   registry lacks, then every cycle by name. Options (spec/02 §8.4): `sources:` (the names
   of the sources the derived sources may read, `[]`), `functions:` (the registry, `%{}`,
-  default closed), `debounce:` (milliseconds, `250`), and `max_reductions:`, `timeout:`
-  and `max_heap:` (each call's bounds, tighten-only).
+  default closed), `packages:` (the packages of operations a stored function may reach
+  besides `macaw_data`'s own, `[]`, default closed, spec/04 §6.1), `debounce:`
+  (milliseconds, `250`), and `max_reductions:`, `timeout:` and `max_heap:` (each call's
+  bounds, tighten-only).
   """
   @spec new(%{list() => Derived.t()}, keyword()) :: {:ok, t()} | {:error, [error(), ...]}
   def new(derived, opts) when is_map(derived) do
@@ -91,6 +94,7 @@ defmodule Macaw.Data.Derived.Engine do
       Keyword.validate!(opts,
         sources: [],
         functions: %{},
+        packages: [],
         debounce: 250,
         max_reductions: 100_000_000,
         timeout: 30_000,
@@ -121,7 +125,8 @@ defmodule Macaw.Data.Derived.Engine do
           inputs: inputs,
           functions: functions,
           debounce: opts[:debounce],
-          run_opts: run_opts
+          run_opts: run_opts,
+          operations: Operations.registry(opts[:packages])
         }
 
         {:ok, engine |> rank() |> compile()}
@@ -237,7 +242,7 @@ defmodule Macaw.Data.Derived.Engine do
   defp compile(engine) do
     Enum.reduce(engine.derived, engine, fn
       {path, %{elixir: text}}, engine when is_binary(text) ->
-        case Cache.compile(engine.cache, text, engine.run_opts) do
+        case Cache.compile(engine.cache, text, [operations: engine.operations] ++ engine.run_opts) do
           {:ok, compiled, cache} ->
             %{
               engine
@@ -391,7 +396,12 @@ defmodule Macaw.Data.Derived.Engine do
 
         _stale ->
           schemas = Map.new(inputs, &{&1.key, &1.schema})
-          Derived.validate(source, inputs: schemas, functions: engine.functions)
+
+          Derived.validate(source,
+            inputs: schemas,
+            functions: engine.functions,
+            operations: engine.operations
+          )
       end
 
     engine = %{engine | checked: Map.put(engine.checked, path, {key, result})}

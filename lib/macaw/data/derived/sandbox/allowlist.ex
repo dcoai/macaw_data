@@ -6,13 +6,13 @@ defmodule Macaw.Data.Derived.Sandbox.Allowlist do
 
   Each module's allowed list and its excluded list together are exactly its exports on
   Elixir 1.20.4 and OTP 29; the test suite holds them to it, so a function a new Elixir
-  adds fails that test until it is reviewed and listed. `Macaw.Data.Reduce` is the library's
-  own and held the same way: a function added to it is listed before a stored function may
-  call it. Ported from visualize's `Visualize.VirtualSource.Sandbox.Allowlist`, whose
-  `Visualize.Data` aggregates arrive with step 6 (macaw_compose#83).
+  adds fails that test until it is reviewed and listed. `Macaw.Data.Ops` is the library's
+  own and held the same way: through it a stored function reaches the registered transforms
+  and aggregates by literal name, and which ones is the registry's, never a list here
+  (spec/04 §6). Ported from visualize's `Visualize.VirtualSource.Sandbox.Allowlist`.
   """
 
-  @modules [Enum, Map, Keyword, String, Integer, Float, :math, Macaw.Data.Reduce]
+  @modules [Enum, Map, Keyword, String, Integer, Float, :math, Macaw.Data.Ops]
 
   @enum [
     all?: 1,
@@ -351,7 +351,7 @@ defmodule Macaw.Data.Derived.Sandbox.Allowlist do
 
   # The library's own reductions (spec/02 §6.2): pure, every export. Step 6 (#83) adds the
   # registered aggregates and transforms.
-  @reduce [lttb: 2, lttb: 3, m4: 2, m4: 3]
+  @ops [aggregate: 2, aggregate: 3, transform: 2, transform: 3]
 
   # The decided exclusions (visualize#643, 2026-10-15) and every deprecated export (visualize D-194).
   @excluded %{
@@ -396,7 +396,7 @@ defmodule Macaw.Data.Derived.Sandbox.Allowlist do
       {{:to_string, 2}, :deprecated}
     ],
     :math => [],
-    Macaw.Data.Reduce => []
+    Macaw.Data.Ops => [{{:__run__, 5}, :internal}]
   }
 
   @allowed %{
@@ -407,7 +407,7 @@ defmodule Macaw.Data.Derived.Sandbox.Allowlist do
     Integer => @integer,
     Float => @float,
     :math => @math,
-    Macaw.Data.Reduce => @reduce
+    Macaw.Data.Ops => @ops
   }
 
   @is_guards [

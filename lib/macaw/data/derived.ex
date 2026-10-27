@@ -297,7 +297,7 @@ defmodule Macaw.Data.Derived do
   defp function(source) do
     case {Map.get(source, :elixir), Map.get(source, :function)} do
       {nil, nil} -> [{[:elixir], :required}]
-      {elixir, nil} -> elixir(elixir, [])
+      {elixir, nil} -> elixir(elixir, operations: nil)
       {nil, name} when is_binary(name) and name != "" -> []
       {nil, _name} -> [{[:function], {:type, :name}}]
       {_elixir, _name} -> [{[:function], {:exclusive, :elixir}}]
@@ -332,15 +332,17 @@ defmodule Macaw.Data.Derived do
   `:ok`, or every fault of the source given what it reads (spec/02 §1.1): `inputs:`, a map
   from an input's key (or name) to its `%Macaw.Data.Schema{}` where it is known, and
   `functions:`, the host functions' registry (`Macaw.Data.Derived.Functions.registry/1`),
-  or `nil` to leave the name unchecked.
+  or `nil` to leave the name unchecked, and `operations:`, the registry a stored
+  function's `Macaw.Data.Ops` calls are held to (`Macaw.Data.Operations.registry/1`), or
+  `nil` to hold their names only to being literals (spec/04 §6.1).
   """
   @spec validate(t(), keyword()) :: :ok | {:error, [error(), ...]}
   def validate(%__MODULE__{} = source, opts \\ []) do
-    opts = Keyword.validate!(opts, inputs: %{}, functions: nil)
+    opts = Keyword.validate!(opts, inputs: %{}, functions: nil, operations: nil)
     inputs = opts[:inputs]
 
     errors =
-      elixir_check(source, inputs) ++
+      elixir_check(source, inputs, opts[:operations]) ++
         functions_check(source, opts[:functions]) ++
         windows_check(source, inputs) ++ identity_check(source, inputs)
 
@@ -351,9 +353,9 @@ defmodule Macaw.Data.Derived do
   end
 
   # With every input's schema known, a map read names one of their fields or the output's.
-  defp elixir_check(%{elixir: nil}, _inputs), do: []
+  defp elixir_check(%{elixir: nil}, _inputs, _operations), do: []
 
-  defp elixir_check(source, inputs) do
+  defp elixir_check(source, inputs, operations) do
     if Enum.all?(source.from, fn {name, _window} -> fetch_input(inputs, name) != :error end) do
       fields =
         Enum.flat_map(source.from, fn {name, _window} ->
@@ -361,7 +363,7 @@ defmodule Macaw.Data.Derived do
           Map.keys(schema.fields)
         end) ++ Map.keys(source.schema.fields)
 
-      elixir(source.elixir, fields: fields)
+      elixir(source.elixir, fields: fields, operations: operations)
     else
       []
     end

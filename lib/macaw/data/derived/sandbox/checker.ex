@@ -12,6 +12,7 @@ defmodule Macaw.Data.Derived.Sandbox.Checker do
   # variables.
 
   alias Macaw.Data.Derived.Sandbox.{Allowlist, Names}
+  alias Macaw.Data.Operations.Registry
 
   @special_vars [:__MODULE__, :__ENV__, :__CALLER__, :__DIR__, :__STACKTRACE__]
 
@@ -30,7 +31,7 @@ defmodule Macaw.Data.Derived.Sandbox.Checker do
     [:Float] => Float,
     [:Access] => Access,
     [:Kernel] => Kernel,
-    [:Macaw, :Data, :Reduce] => Macaw.Data.Reduce
+    [:Macaw, :Data, :Ops] => Macaw.Data.Ops
   }
 
   @doc false
@@ -38,7 +39,10 @@ defmodule Macaw.Data.Derived.Sandbox.Checker do
     max = Keyword.fetch!(opts, :max_source)
     arity = Keyword.fetch!(opts, :arity)
 
-    known = %{fields: names(Keyword.fetch!(opts, :fields))}
+    known = %{
+      fields: names(Keyword.fetch!(opts, :fields)),
+      operations: Keyword.fetch!(opts, :operations)
+    }
 
     if byte_size(source) > max do
       {:error, [{nil, {:too_long, max, byte_size(source)}}]}
@@ -85,6 +89,7 @@ defmodule Macaw.Data.Derived.Sandbox.Checker do
       faults: [],
       vars: MapSet.new(),
       fields: known.fields,
+      operations: known.operations,
       context: nil,
       line: meta[:line]
     }
@@ -324,6 +329,9 @@ defmodule Macaw.Data.Derived.Sandbox.Checker do
             module == Enum and name == :into and not literal_target?(Enum.at(args, 1)) ->
               fault(state, {:into, :literal})
 
+            module == Macaw.Data.Ops ->
+              operation(name, Enum.at(args, 1), state)
+
             true ->
               state
           end
@@ -342,6 +350,28 @@ defmodule Macaw.Data.Derived.Sandbox.Checker do
 
       :value ->
         exprs(args, expr(receiver, fault(state, {:dynamic_call, shown(name, meta)})))
+    end
+  end
+
+  # A call of `Macaw.Data.Ops` names its operation by a literal string the registry holds,
+  # one that needs nothing a derived source lacks (spec/04 §6.1). With no registry given
+  # (a source checked before it is placed), the name need only be a literal.
+  defp operation(kind, name, state) when is_binary(name), do: registered(kind, name, state)
+  defp operation(_kind, _name, state), do: fault(state, {:operation_name, :literal})
+
+  defp registered(_kind, _name, %{operations: nil} = state), do: state
+
+  defp registered(:aggregate, name, state) do
+    case Registry.aggregate(state.operations, name) do
+      {:ok, _module} -> state
+      :error -> fault(state, {:unknown_operation, :aggregate, name})
+    end
+  end
+
+  defp registered(:transform, name, state) do
+    case Registry.transform(state.operations, name) do
+      {:ok, module} -> Enum.reduce(module.needs(), state, &fault(&2, {:needs, name, &1}))
+      :error -> fault(state, {:unknown_operation, :transform, name})
     end
   end
 
@@ -400,6 +430,10 @@ defmodule Macaw.Data.Derived.Sandbox.Checker do
     case module(receiver) do
       {:module, Enum} when name == :into ->
         fault(state, {:into, :literal})
+
+      # A captured operation would be named when called, not when checked.
+      {:module, Macaw.Data.Ops} when name in [:aggregate, :transform] ->
+        fault(state, {:operation_name, :literal})
 
       {:module, module} ->
         if Allowlist.remote?(module, name, arity),

@@ -286,31 +286,42 @@ defmodule Macaw.Data.Derived.SandboxTest do
       for module <- Allowlist.modules(), {name, arity} <- Allowlist.allowed(module) do
         receiver = if module == :math, do: ":math", else: inspect(module)
         # Enum.into takes a literal empty target (§6.1), so its second argument is one.
+        # A Macaw.Data.Ops call names its operation by a literal (spec/04 §6.1), so its
+        # second argument is one, and a capture of it is refused.
         args =
-          for i <- 1..arity//1,
-              do: if({module, name, i} == {Enum, :into, 2}, do: "[]", else: "rows")
+          for i <- 1..arity//1 do
+            case {module, name, i} do
+              {Enum, :into, 2} -> "[]"
+              {Macaw.Data.Ops, :aggregate, 2} -> ~S("sum")
+              {Macaw.Data.Ops, :transform, 2} -> ~S("sort")
+              _other -> "rows"
+            end
+          end
 
         call = "#{receiver}.#{name}(#{Enum.join(args, ", ")})"
         assert ok?("fn rows -> #{call} end"), call
 
         assert ok?("fn rows -> &#{receiver}.#{name}/#{arity} end") or
-                 {module, name} == {Enum, :into},
+                 {module, name} == {Enum, :into} or module == Macaw.Data.Ops,
                call
       end
     end
 
     @tag verifies: "derived-allowlist-calls"
-    test "a function Macaw.Data.Reduce does not export, and the step-6 aggregates, are refused" do
+    test "Macaw.Data.Reduce is no longer reachable, and Ops refuses what it does not export" do
+      assert [{:restricted, {"Macaw.Data.Reduce", "lttb", 3}}] =
+               reasons("fn rows -> Macaw.Data.Reduce.lttb(rows, 3, & &1) end")
+
       for name <- ["mode", "mean"] do
-        assert [{:restricted, {Macaw.Data.Reduce, ^name, 1}}] =
-                 reasons("fn rows -> Macaw.Data.Reduce.#{name}(rows) end")
+        assert [{:restricted, {Macaw.Data.Ops, ^name, 1}}] =
+                 reasons("fn rows -> Macaw.Data.Ops.#{name}(rows) end")
       end
     end
 
     test "a stored function with interpolation and lttb runs through the bounded runner" do
       source = ~S"""
       fn rows ->
-        kept = Macaw.Data.Reduce.lttb(rows, 3, &{&1.t, &1.load})
+        kept = Macaw.Data.Ops.transform(rows, "lttb", %{fields: ["t", "load"], n: 3})
         total = Enum.sum_by(rows, & &1.load)
         "#{Enum.count(rows)} samples, total #{total}, kept #{Enum.map_join(kept, ",", & &1.t)}"
       end
@@ -484,7 +495,10 @@ defmodule Macaw.Data.Derived.SandboxTest do
           {1, {:fn_arity, [1, 2]}},
           {nil, {:compile, "no"}},
           {nil, {:compile, {:reductions, 1}}},
-          {nil, {:compile, {:hung, 1}}}
+          {nil, {:compile, {:hung, 1}}},
+          {1, {:operation_name, :literal}},
+          {1, {:unknown_operation, :aggregate, "mode"}},
+          {1, {:needs, "layout", :frame}}
         ] do
       assert is_binary(Sandbox.format_error(fault))
     end

@@ -5,13 +5,15 @@ defmodule Macaw.Data.Derived.Sandbox.Cache do
   cache is (spec/01 §1.12).
 
   An entry is keyed by the SHA-256 of the source, the arities and the fields it was checked
-  against, and holds the compilation's answer, a refusal included,
+  against, and the digest of the registry its `Macaw.Data.Ops` calls were checked and
+  compiled against (spec/04 §6.1), and holds the compilation's answer, a refusal included,
   so a source is checked and compiled once. A compilation the runner cut short
   (`:reductions`, `:hung`, `:memory`) is not kept, since it says nothing about the source.
   The cache never evicts.
   """
 
   alias Macaw.Data.Derived.Sandbox
+  alias Macaw.Data.Operations
 
   defstruct entries: %{}
 
@@ -29,9 +31,11 @@ defmodule Macaw.Data.Derived.Sandbox.Cache do
   @spec compile(t(), String.t(), keyword()) ::
           {:ok, Sandbox.Compiled.t(), t()} | {:error, [Sandbox.fault(), ...], t()}
   def compile(%__MODULE__{} = cache, source, opts \\ []) when is_binary(source) do
+    opts = Keyword.put_new_lazy(opts, :operations, &Operations.registry/0)
+
     key =
       {Sandbox.hash(source), opts |> Keyword.get(:arity, [1, 2]) |> List.wrap() |> Enum.sort(),
-       names(opts[:fields])}
+       names(opts[:fields]), Operations.digest(opts[:operations])}
 
     case Map.fetch(cache.entries, key) do
       {:ok, {:ok, compiled}} ->

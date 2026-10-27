@@ -120,6 +120,32 @@ defmodule Macaw.Data.Derived.SandboxAttackTest do
     {"fn xs -> Enum.map(xs, &Enum.into/2) end", {:into, :literal}}
   ]
 
+  # Attacks through an operation's name (spec/04 §6.2): a name decides what code runs, so
+  # it is a literal the registry holds, and nothing else reaches Macaw.Data.Ops's runner.
+  @operations [
+    {~S'fn xs -> name = "sum"; Macaw.Data.Ops.aggregate(xs, name) end',
+     {:operation_name, :literal}},
+    {~S'fn xs -> Macaw.Data.Ops.aggregate(xs, "s#{1}um") end', {:operation_name, :literal}},
+    {~S'fn xs -> Macaw.Data.Ops.aggregate(xs, Enum.join(["s", "um"])) end',
+     {:operation_name, :literal}},
+    {~S'fn xs -> Macaw.Data.Ops.aggregate(xs, nil) end', {:operation_name, :literal}},
+    {~S'fn xs -> Macaw.Data.Ops.aggregate(xs, xs.name) end', {:operation_name, :literal}},
+    {~S'fn xs -> xs |> Macaw.Data.Ops.transform(xs) end', {:operation_name, :literal}},
+    {~S'fn xs -> Enum.map(xs, &Macaw.Data.Ops.aggregate/2) end', {:operation_name, :literal}},
+    {~S|fn xs -> Macaw.Data.Ops.aggregate(xs, Macaw.Data.Operations.Aggregates.Sum) end|,
+     {:restricted_atom, "Macaw.Data.Operations.Aggregates.Sum"}},
+    {~S|fn xs -> Macaw.Data.Ops.__run__(:aggregate, xs, "sum", xs, %{}) end|,
+     {:restricted, {Macaw.Data.Ops, :__run__, 5}}},
+    {~S'fn xs -> Macaw.Data.Ops.aggregate(xs, "frobnicate") end',
+     {:unknown_operation, :aggregate, "frobnicate"}},
+    {~S'fn xs -> Macaw.Data.Ops.transform(xs, "sankey", %{}) end',
+     {:unknown_operation, :transform, "sankey"}},
+    {~S|fn xs -> Macaw.Data.Operations.apply!(xs, xs, xs, %{}) end|,
+     {:restricted, {"Macaw.Data.Operations", "apply!", 4}}},
+    {~S'fn xs -> Macaw.Data.Reduce.lttb(xs, 3, & &1) end',
+     {:restricted, {"Macaw.Data.Reduce", "lttb", 3}}}
+  ]
+
   for {group, attacks} <- [
         atoms: @atoms,
         calls: @calls,
@@ -138,6 +164,16 @@ defmodule Macaw.Data.Derived.SandboxAttackTest do
         {:any, alternatives} -> assert Enum.any?(alternatives, &(&1 in reasons))
         reason -> assert Enum.any?(reasons, &(spelled(&1) == spelled(reason)))
       end
+    end
+  end
+
+  for {{source, reason}, i} <- Enum.with_index(@operations) do
+    @tag verifies: "operations-sandbox-attacks"
+    test "operations #{i}: #{source}" do
+      reasons = refused(unquote(source))
+
+      assert Enum.any?(reasons, &(spelled(&1) == spelled(unquote(Macro.escape(reason))))),
+             inspect(reasons)
     end
   end
 
@@ -228,11 +264,13 @@ defmodule Macaw.Data.Derived.SandboxAttackTest do
     assert {:error, :raised, ArithmeticError} = call("fn x -> 1 / x end", [0])
   end
 
-  @tag verifies: ["derived-checker-names", "derived-attacks"]
+  @tag verifies: ["derived-checker-names", "derived-attacks", "operations-sandbox-attacks"]
   test "the node makes no atom from any attack" do
     sources =
-      Enum.map(@atoms ++ @calls ++ @processes ++ @code ++ @structs ++ @collectables, &elem(&1, 0)) ++
-        @strings
+      Enum.map(
+        @atoms ++ @calls ++ @processes ++ @code ++ @structs ++ @collectables ++ @operations,
+        &elem(&1, 0)
+      ) ++ @strings
 
     run = fn ->
       for source <- sources, do: Sandbox.check(source)

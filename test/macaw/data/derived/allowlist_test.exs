@@ -21,7 +21,7 @@ defmodule Macaw.Data.Derived.AllowlistTest do
     Enum.uniq(functions ++ module.__info__(:macros))
   end
 
-  @modules [Enum, Map, Keyword, String, Integer, Float, :math, Macaw.Data.Reduce]
+  @modules [Enum, Map, Keyword, String, Integer, Float, :math, Macaw.Data.Ops]
 
   @tag verifies: "derived-allowlist-exact"
   test "the eight modules, in order" do
@@ -73,10 +73,18 @@ defmodule Macaw.Data.Derived.AllowlistTest do
     for fa <- Allowlist.kernel(), do: assert(fa in kernel, "#{inspect(fa)} is not Kernel's")
   end
 
-  test "Macaw.Data.Reduce excludes nothing: its reductions are pure" do
-    assert Allowlist.excluded(Macaw.Data.Reduce) == []
-    assert {:lttb, 3} in Allowlist.allowed(Macaw.Data.Reduce)
-    assert {:m4, 2} in Allowlist.allowed(Macaw.Data.Reduce)
+  @tag verifies: "operations-sandbox-cache"
+  test "Macaw.Data.Ops replaces Macaw.Data.Reduce, its compiled call excluded as internal" do
+    assert Allowlist.allowed(Macaw.Data.Ops) == [
+             aggregate: 2,
+             aggregate: 3,
+             transform: 2,
+             transform: 3
+           ]
+
+    assert Allowlist.excluded(Macaw.Data.Ops) == [{{:__run__, 5}, :internal}]
+    refute Macaw.Data.Reduce in Allowlist.modules()
+    assert Allowlist.allowed(Macaw.Data.Reduce) == []
   end
 
   test "to_string/1, string interpolation's call, is on the Kernel list (visualize#769)" do

@@ -23,8 +23,10 @@ defmodule Macaw.Data.Derived.Sandbox do
   """
 
   alias Macaw.Data.Derived.Sandbox.{Checker, Compiled}
+  alias Macaw.Data.Operations
+  alias Macaw.Data.Operations.Registry
 
-  @check_opts [arity: [1, 2], fields: nil, max_source: 10_000]
+  @check_opts [arity: [1, 2], fields: nil, max_source: 10_000, operations: nil]
   @run_opts [max_reductions: 100_000_000, timeout: 30_000, max_heap: 10_000_000]
 
   # The bounds are the ceiling: an option may lower one, never raise it (spec/02 §6.4).
@@ -47,12 +49,18 @@ defmodule Macaw.Data.Derived.Sandbox do
 
   Options: `arity:` (the arities the function may take, an integer or a list, `[1, 2]`:
   its inputs, or its inputs and its context), `fields:` (the names a `row.field` may read;
-  `nil` reads any) and `max_source:` (bytes, `10_000`, which may be lowered, never raised).
+  `nil` reads any), `max_source:` (bytes, `10_000`, which may be lowered, never raised) and
+  `operations:` (the registry a `Macaw.Data.Ops` call's name is held to,
+  `macaw_data`'s own package by default; `nil` holds the name only to being a literal,
+  for a source checked before it is placed, spec/04 §6.1).
   """
   @spec check(String.t(), keyword()) :: {:ok, Macro.t()} | {:error, [fault(), ...]}
   def check(source, opts) when is_binary(source) and is_list(opts) do
-    Checker.check(source, opts |> Keyword.validate!(@check_opts) |> tightened!())
+    Checker.check(source, opts |> defaults() |> Keyword.validate!(@check_opts) |> tightened!())
   end
+
+  # The registry is the library's own package unless the caller gives one, or `nil`.
+  defp defaults(opts), do: Keyword.put_new_lazy(opts, :operations, &Operations.registry/0)
 
   @doc "As `compile/2` with no options."
   @spec compile(String.t()) :: {:ok, Compiled.t()} | {:error, [fault(), ...]}
@@ -66,7 +74,12 @@ defmodule Macaw.Data.Derived.Sandbox do
   """
   @spec compile(String.t(), keyword()) :: {:ok, Compiled.t()} | {:error, [fault(), ...]}
   def compile(source, opts) when is_binary(source) and is_list(opts) do
-    opts = opts |> Keyword.validate!(@check_opts ++ @run_opts) |> tightened!()
+    opts = opts |> defaults() |> Keyword.validate!(@check_opts ++ @run_opts) |> tightened!()
+
+    match?(%Registry{}, opts[:operations]) ||
+      raise ArgumentError,
+            "compile needs the registry its Macaw.Data.Ops calls run against, got " <>
+              "operations: #{inspect(opts[:operations])} (spec/04 §6.1)"
 
     with {:ok, quoted} <- Checker.check(source, Keyword.take(opts, Keyword.keys(@check_opts))) do
       evaluate(source, quoted, opts)
@@ -80,7 +93,7 @@ defmodule Macaw.Data.Derived.Sandbox do
     code =
       quote do
         require Integer
-        unquote(rewrite(quoted))
+        unquote(rewrite(quoted, opts[:operations]))
       end
 
     compile = fn ->
@@ -105,8 +118,18 @@ defmodule Macaw.Data.Derived.Sandbox do
     end
   end
 
-  defp rewrite(quoted) do
+  # A `Macaw.Data.Ops` call, piped into or not, becomes `Ops.__run__/5` with the registry it
+  # was checked against, escaped into the code (spec/04 §6.1). The rest are map reads.
+  defp rewrite(quoted, registry) do
     Macro.prewalk(quoted, fn
+      {:|>, _meta, [left, {{:., _dm, [receiver, name]}, call_meta, args}]} = node
+      when name in [:aggregate, :transform] and is_list(args) ->
+        if ops?(receiver), do: run_call(name, [left | args], call_meta, registry), else: node
+
+      {{:., _dm, [receiver, name]}, call_meta, args} = node
+      when name in [:aggregate, :transform] and is_list(args) and args != [] ->
+        if ops?(receiver), do: run_call(name, args, call_meta, registry), else: node
+
       # A guard calls nothing: its map reads stay `:erlang.map_get/2` of the field as its
       # inputs spell it, a word's atom or the string (spec/02 §2.3, visualize D-195).
       {:->, meta, [[{:when, when_meta, args}], body]} ->
@@ -123,6 +146,22 @@ defmodule Macaw.Data.Derived.Sandbox do
       node ->
         node
     end)
+  end
+
+  defp ops?({:__aliases__, _meta, parts}),
+    do: Enum.reject(parts, &(&1 == Elixir)) == [:Macaw, :Data, :Ops]
+
+  defp ops?(_receiver), do: false
+
+  defp run_call(kind, [subject, name | rest], meta, registry) do
+    options =
+      case rest do
+        [] -> {:%{}, [], []}
+        [options] -> options
+      end
+
+    {{:., meta, [Macaw.Data.Ops, :__run__]}, Keyword.delete(meta, :no_parens),
+     [kind, Macro.escape(registry), name, subject, options]}
   end
 
   defp guarded(guard) do
@@ -295,6 +334,15 @@ defmodule Macaw.Data.Derived.Sandbox do
 
   defp words({:guard, {name, arity}}), do: "#{name}/#{arity} cannot be used in a guard"
   defp words({:pattern, form}), do: "#{form} cannot be used in a pattern"
+
+  defp words({:operation_name, :literal}),
+    do: "a Macaw.Data.Ops call names its operation with a literal string"
+
+  defp words({:unknown_operation, kind, name}),
+    do: "#{kind} #{inspect(name)} is not available: no enabled package provides it"
+
+  defp words({:needs, name, need}),
+    do: "transform #{inspect(name)} needs a #{need}, which a derived source does not have"
 
   defp words({:fn_arity, [arity]}),
     do:

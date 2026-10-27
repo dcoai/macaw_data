@@ -390,18 +390,16 @@ the streaming form of every statistic that has one equals its reduce over every 
 
 ## 6. In a stored function {#operations-sandbox}
 
-<!-- surfex: deferred #123: the sandbox's reach -->
-
 A derived source's stored function (02 §6) reaches the registered operations through **one module, `Macaw.Data.Ops`**, and through nothing else:
 
 | Function | Contract |
 |---|---|
-| `Ops.aggregate(name, values)`, `aggregate(name, values, options)` | the aggregate's value of `values`, `nil`s dropped |
+| `Ops.aggregate(values, name)`, `aggregate(values, name, options)` | the aggregate's value of `values`, `nil`s dropped |
 | `Ops.transform(rows, name)`, `transform(rows, name, options)` | the transform run over the rows, its answer as rows |
 
 ```elixir
 fn %{hosts: rows} ->
-  p95 = Macaw.Data.Ops.aggregate("quantile", Enum.map(rows, & &1.cpu), %{p: 0.95})
+  p95 = rows |> Enum.map(& &1.cpu) |> Macaw.Data.Ops.aggregate("quantile", %{p: 0.95})
 
   rows
   |> Macaw.Data.Ops.transform("filter", %{field: "cpu", test: :gte, value: p95})
@@ -409,57 +407,56 @@ fn %{hosts: rows} ->
 end
 ```
 
-**Options are the nodes a design writes**, the same keys and values, so a step moves between a design and a stored function unchanged. They are read by spelling: an option key or enum value the checker doesn't know as an atom comes back as its string (02 §6.1), and the operation reads it as the same option. The checker's word table therefore doesn't grow with the registry, and a stored function makes no atom through one.
+**Both take their subject first**, so a pipe reads in order, and the name second. Called from a host's own code rather than a stored function, they use `macaw_data`'s own package (`Macaw.Data.Operations.registry/0`). **Options are the nodes a design writes**, the same keys and values, so a step moves between a design and a stored function unchanged; a transform's options name no `op`, since the name is the op, and one that does raises. They are read by spelling: an option key or enum value the checker doesn't know as an atom comes back as its string (02 §6.1), and the operation reads it as the same option. The checker's word table therefore doesn't grow with the registry, and a stored function makes no atom through one.
+
+```test:operations-sandbox-ops
+Ops takes its subject first and the name second, so a pipe reads in order; called from host code it runs macaw_data's own package, rows in and rows out; a transform's options that name an op raise
+```
 
 ### 6.1 The allowlist is generated {#operations-allowlist}
 
-<!-- surfex: deferred #123: the sandbox's reach -->
+**`Macaw.Data.Ops` is on the allowlist (02 §6.2); the operations it reaches are the registry's**, never written by hand. Enabling a package is the only way to widen it: the engine's `packages:` (02 §8.4), `[]` by default, so a stored function reaches `macaw_data`'s own package alone unless its host enables another. The checker is given the registry (`Sandbox.check/2`'s `operations:`, `macaw_data`'s own package by default), and holds every call of `Ops`:
 
-**`Macaw.Data.Ops` is on the allowlist (02 §6.2); the operations it reaches are the registry's**, never written by hand. Enabling a package is the only way to widen it. The checker is given the engine's registry (`operations:`), and holds every call of `Ops`:
-
-- **The name is a literal string.** An operation named by a variable, an expression or an interpolation is `{:operation_name, :literal}` at its line. A name decides what code runs, so it is known when the function is checked.
+- **The name is a literal string.** An operation named by a variable, an expression, an interpolation or a capture (`&Macaw.Data.Ops.aggregate/2`) is `{:operation_name, :literal}` at its line. A name decides what code runs, so it is known when the function is checked. An atom literal that is not one of the checker's words reads as its string (02 §6.1), so `:mean` names `"mean"`.
 - **The name is registered.** One the registry doesn't hold is `{:unknown_operation, :transform | :aggregate, name}`.
 - **It needs nothing a derived source lacks.** A transform whose `needs/0` isn't empty is `{:needs, name, need}`, since a derived source has no frame, projection or text.
-- **The checker compiles the call to its member.** The call becomes a call of `Ops.__run__/4` with the member's module, so nothing is looked up when the function runs, and a module atom never passes through the stored source. `__run__/4` is not on the allowlist, so a stored source that writes it is refused like any other call.
+- **The call is compiled against the registry it was checked against.** It becomes `Ops.__run__(kind, registry, name, subject, options)` with the registry escaped into the compiled code, so it runs exactly what was checked, with nothing read from the node's environment, and no module atom passes through the stored source. `__run__/5` is on `Macaw.Data.Ops`'s excluded list (`:internal`), so a stored source that writes it is refused like any other unlisted call.
+- **Before it is placed,** a source is checked with `operations: nil` (`Derived.new/1`, which knows no engine): its names need only be literals. `Derived.validate/2` takes `operations:` as it takes `functions:`, and the engine passes its registry, so a name its packages do not hold is a fault at define time. `Sandbox.compile/2` needs a registry and raises `ArgumentError` without one.
 - **The options are checked when the call runs.** They may be built by the function, so a fault in them (§3.1) raises `ArgumentError` with `format_error/1`'s words, which the runner reports as `:raised` (02 §6.4).
 - **Rows in, rows out.** `transform/2,3` reads its rows with `Table.from/2` and answers `Table.rows/1` of the result. The context a stored call runs with has no `now`, `frame` or `schema` (02 §2.3), so a `window` measures from its data's newest reading, and `latest` raises: a function asks its input for `latest` instead (02 §2.2).
 
 **The compile cache is keyed by the source and the registry's digest** (§2), so the same text compiled against another registry is compiled again. `Macaw.Data.Reduce` leaves the allowlist: `lttb` and `m4` are reached as transforms, so a stored function has one way to reduce. `Allowlist.modules/0` is then `Enum`, `Map`, `Keyword`, `String`, `Integer`, `Float`, `:math` and `Macaw.Data.Ops`.
 
-```planned-test:operations-sandbox-calls
+```test:operations-sandbox-calls
 a stored function calls a registered aggregate and transform by literal name and gets the same answer apply gives; a name that is not literal, not registered, or of a transform with needs is refused at its line; a bad option raises when the call runs; a test package's members are callable only when enabled
 ```
 
-```planned-test:operations-sandbox-cache
+```test:operations-sandbox-cache
 the same source compiled against registries with different digests compiles twice, and against the same registry once; Reduce is no longer allowed and Ops is
 ```
 
 ### 6.2 The gates {#operations-gates}
 
-<!-- surfex: deferred #123: the sandbox's reach -->
-
 The sandbox's gates (02 §6.5) grow with its reach:
-- **The attack suite** adds attacks through an operation's name: a variable, an interpolated string, a name built at run time, `__run__/4` written directly, an unregistered name, a module atom as the name, and a drawing transform. Each is refused by name at its line, and none makes an atom.
-- **The load gate** runs every operation of `macaw_data`'s package over the gate's largest input, within the runner's default bounds.
+- **The attack suite** adds attacks through an operation's name: a variable, an interpolated string, a name built at run time, a `nil` and a map read as the name, a pipe that puts the rows where the name goes, a captured operation, a module alias as the name, `__run__/5` written directly, an unregistered aggregate or transform, `Macaw.Data.Operations` called directly, and `Macaw.Data.Reduce`, no longer reachable. Each is refused by name at its line, and none makes an atom. A drawing transform's `{:needs, name, need}` is tested beside them, with a host package enabled.
+- **The load suite** calls every operation of `macaw_data`'s package from a stored function, every `stack` offset and every statistic among them, over five thousand rows: each verdict is the same idle and with every scheduler saturated, and each is an answer within the runner's default bounds.
 
-```planned-test:operations-sandbox-attacks
+```test:operations-sandbox-attacks
 every attack through an operation's name is refused at its line, and parsing them makes no atom
 ```
 
-```planned-test:operations-sandbox-load
-every operation of macaw_data's package runs over the load gate's largest input within the default bounds
+```test:operations-sandbox-load
+every operation of macaw_data's package, called from a stored function over five thousand rows, answers within the default bounds, the same idle and saturated
 ```
 
 ### 6.3 From `Visualize.Data` {#operations-migration}
-
-<!-- surfex: deferred #123: the sandbox's reach -->
 
 visualize's sandbox allows `Visualize.Data`. A stored function written against it moves to Macaw by this table, and the move is the adopter's (visualize#939):
 
 | visualize | Macaw |
 |---|---|
-| `min/1,2`, `max/1,2`, `extent/1,2`, `sum/1,2`, `mean/1,2`, `median/1,2`, `variance/1,2`, `deviation/1,2`, `slope/1,2`, `delta/1,2` | `Ops.aggregate(name, values)`, the accessor applied first (`Enum.map(rows, & &1.cpu)`) |
-| `quantile(data, p)`, `quantile(data, p, accessor)` | `Ops.aggregate("quantile", values, %{p: p})` |
+| `min/1,2`, `max/1,2`, `extent/1,2`, `sum/1,2`, `mean/1,2`, `median/1,2`, `variance/1,2`, `deviation/1,2`, `slope/1,2`, `delta/1,2` | `Ops.aggregate(values, name)`, the accessor applied first (`Enum.map(rows, & &1.cpu)`) |
+| `quantile(data, p)`, `quantile(data, p, accessor)` | `Ops.aggregate(values, "quantile", %{p: p})` |
 | `extent` as `{min, max}` | `[min, max]` |
 | `lttb/2,3`, `m4/2,3` | `Ops.transform(rows, "lttb", %{fields: [x, y], n: n})`, `"m4"` with `width` |
 | `bin/1,2` | `Ops.transform(rows, "bin", %{field: f, thresholds: t})` |
