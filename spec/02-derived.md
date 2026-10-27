@@ -23,13 +23,9 @@ Each section's tests are written as **`planned-test:` blocks** until its work it
 
 ## 1. The model {#derived-model}
 
-<!-- surfex: deferred #114: the derived source model -->
-
 A derived source is **data**: a struct with no function in it, its function a name or a source text, so a document holds it and its forms write it (§1.5).
 
 ### 1.1 The value {#derived-value}
-
-<!-- surfex: deferred #114: the derived source model -->
 
 `%Macaw.Data.Derived{}`:
 
@@ -71,17 +67,15 @@ The engine validates every source in context before it first runs, and again whe
 
 The schema's faults are reported at `[:schema | path]`, `path` the schema's own (`[:state, :values, 1]`). `Macaw.Data.Derived.format_error/1` words one fault, the root named `derived source`.
 
-```planned-test:derived-new
+```test:derived-new
 a source of id, inputs, schema and an elixir or function is built, names held as strings; every fault of a bad source is reported at once, by path, each table reason among them; new! raises naming them
 ```
 
-```planned-test:derived-validate
+```test:derived-validate
 in context, a function reading a field no input or output describes, a window its input cannot answer, an undeclared host function and a per over an input without identity are each refused at their path; with every input's schema known a valid source passes
 ```
 
 ### 1.2 The output and its conformance {#derived-conform}
-
-<!-- surfex: deferred #114: the derived source model -->
 
 **Rows in, rows out.** A source's function answers a list of rows in its schema: one summary row (many to one), a row per region (many to many) or several rows per input row (one to many) all fall out of it. A row is a map whose keys are its schema's fields, by either spelling.
 
@@ -99,17 +93,15 @@ in context, a function reading a field no input or output describes, a window it
 
 An answer that does not conform is the engine's fault `:nonconforming` (§8.3), this its detail; the output the source last held stays.
 
-```planned-test:derived-conform-answers
+```test:derived-conform-answers
 a conforming answer is its rows keyed by strings; a non-list, a non-row, an undescribed key, a value of the wrong type, a category outside its values and a missing identity are each the first fault's index, field and reason, and no fault holds the value
 ```
 
-```planned-test:derived-conform-no-value
+```test:derived-conform-no-value
 no fault of conform ever holds a value of the rows (property over rows carrying a unique marker)
 ```
 
 ### 1.3 Per identity {#derived-per}
-
-<!-- surfex: deferred #114: the derived source model -->
 
 With `per`, the function is called **once per entity** of one input, its **identity input**: the only input under `:identity`, the one named under `{:identity, input}`. Its schema must declare identity (`{:per, :no_identity}`).
 
@@ -121,25 +113,21 @@ With `per`, the function is called **once per entity** of one input, its **ident
 
 `Macaw.Data.Derived.per(derived, inputs, call)` is the batch over already-read inputs: `call` the function applied to one entity's arguments, answering the joined rows or the first fault.
 
-```planned-test:derived-per-entity
+```test:derived-per-entity
 a per source is called once per entity in order of first appearance, a row without identity dropped, each answer given its entity's identity and the answers joined; a row naming another identity does not conform
 ```
 
 ### 1.4 Joined fields {#derived-join}
 
-<!-- surfex: deferred #114: the derived source model -->
-
 **A reader of the input reads a per-identity source's answer for its own identity** (visualize D-194). `Macaw.Data.Derived.Join.join(rows, schema, outputs)` hands rows that carry, beside their own fields, the fields of every per-identity source over the same input: `outputs` a list of `{id, output_schema, output_rows}`. Each row's identity is looked up in each output, and the output's every field but its identity is written on the row as the **string** `"<id>.<field>"` (`"health.state"`, `"health.trend"`), `nil` for a row whose entity the output does not hold (the source loading, or failing before its first answer). The joined name is a string, never an atom: it is made from a document's names.
 
 `Join.schema(schema, outputs)` is the input's schema with each joined field described as the source's output describes it, without `identity`, so a joined field's `values` reach a component's legend and coverage checks; its version is computed as any schema's. Which sources a reader sees (the ones its scope resolves to, §3) is the owner's to decide; on a Macaw page, `macaw_compose`'s.
 
-```planned-test:derived-join-fields
+```test:derived-join-fields
 each row gains every per-identity output's fields but its identity as "id.field" strings, nil where its entity has no output row; the joined schema describes them as the outputs do, without identity, and no atom is made
 ```
 
 ### 1.5 The map and JSON forms {#derived-forms}
-
-<!-- surfex: deferred #114: the derived source model -->
 
 `Macaw.Data.Derived.to_map/1` is the source's **map form**, JSON-ready, with every name a string:
 
@@ -154,13 +142,11 @@ each row gains every per-identity output's fields but its identity as "id.field"
 
 `new/1` reads that form back: `new(to_map(derived)) == {:ok, derived}` for every valid source. `to_json/1` is the map form encoded, and `from_json(json, opts)` reads JSON through `macaw_layers`' gates (`Macaw.Layers.Document.read/3`: bytes, nesting and counts within `Macaw.Layers.Limits`, `opts` tightening them) before `new/1`. A pair list is used wherever a JSON object's keys would lose a name's spelling. A document that holds derived sources (a `macaw_compose` page) writes each in this form, with no tag of its own.
 
-```planned-test:derived-forms-inverse
+```test:derived-forms-inverse
 to_map and new are exact inverses for valid sources, every name a string, every input form, window form and per form among them; to_json and from_json likewise, and from_json refuses input over the limits before reading it
 ```
 
 ## 2. Inputs {#derived-inputs}
-
-<!-- surfex: deferred #114: the derived source model -->
 
 Inputs are **sources, by name**: anything that satisfies the source contract ([01](01-sources.md#sources-contract)). That covers feeds and other derived sources, and, on a Macaw page, state sources and exports, which `macaw_compose` makes satisfy the contract ([macaw_compose 03](https://gitlab.conet.yarina.org/dco-tek/macaw_compose/-/blob/main/spec/03-state.md#state-sources)). `macaw_data` knows nothing of pages; it sees named sources.
 
@@ -170,8 +156,6 @@ An input is `{name, window}`.
 
 ### 2.1 Names and keys {#derived-input-names}
 
-<!-- surfex: deferred #114: the derived source model -->
-
 **The name** says what is read:
 
 - a **short id**, a name (a string, or an atom Elixir input spells it with, held as its string) that is a derived source's id or a source's name, resolved as §3 says: a derived source from the inside out, else a source; a dotted name never splits (`"vm.memory.total"`);
@@ -180,13 +164,11 @@ An input is `{name, window}`.
 
 The function reads the input under its **key**: the short id, the source's name, or a path's last name, its string (`Macaw.Data.Derived.key/1`). Two inputs of one key are `{:duplicate_input, key}`: an atom and a string of one spelling are one key.
 
-```planned-test:derived-input-keys
+```test:derived-input-keys
 a short id, a source name and a path each read under their key's string; an atom and a string of one spelling are one key, so two such inputs are a duplicate
 ```
 
 ### 2.2 Windows: the history each input needs {#derived-input-windows}
-
-<!-- surfex: deferred #114: the derived source model -->
 
 **The window** says how much history the function needs (visualize#643, D-168):
 
@@ -203,15 +185,17 @@ The function **gets what is there** (visualize#643, settled question 3): a windo
 - **A stored function reads a name as it reads its own literals** (§6.1): an input's key, a row's field and a row's category value is the atom of a word an allowed function takes (`:ok`, `:error`, `:day`, `:first`, …), else its string. So a row's `:ok` is the function's `:ok`, a row's `:warning` and the function's `:warning` are both `"warning"`, and `row.field` reads either spelling (§6.3).
 - **A host's function** (§7) receives the inputs keyed by their strings (`inputs["hosts"]`) and each row as its source gave it.
 
-Whichever function answers, its rows are keyed by their fields' strings in the output (§1.2).
+Whichever function answers, its rows are keyed by their fields' strings in the output (§1.2). `Macaw.Data.Derived.argument(derived, inputs)` is that first argument, each input `%{name, rows, schema}` as its owner read it.
 
-```planned-test:derived-input-history
+```test:derived-argument
+the first argument is the inputs keyed by their key; a stored function reads keys, fields and category values as its literals, a word's atom else the string, a host's function its rows as given
+```
+
+```test:derived-input-history
 nil hands every row, last n each identity's newest n rows by the window field (or the newest n without identity), fewer when fewer are there; a request window is the finished rows of its window, box, region and latest
 ```
 
 ### 2.3 The context {#derived-context}
-
-<!-- surfex: deferred #114: the derived source model -->
 
 A function of **two arguments** is called with the inputs and its **context**, the facts that stand beside the rows and not in them. **The arity decides:** `fn inputs, context -> … end`, or `defsource name(inputs, context)` (§7), takes it; a function of one argument is called with its inputs alone. `Macaw.Data.Derived.Context.new(inputs)` builds it, a map with **string keys** throughout:
 
@@ -235,13 +219,11 @@ A function of **two arguments** is called with the inputs and its **context**, t
 
 A stored function reads its context with `[]`: `context["inputs"]["hosts"]["schema"]["cpu"]["bounds"]`.
 
-```planned-test:derived-context-facts
+```test:derived-context-facts
 the context holds each input's schema as string-keyed data and its delivery's window, resolution and capped, keyed as the inputs are; it has no clock and no variables; a derived input gives its output's schema and nil, nil, false
 ```
 
 ## 3. Scoping {#derived-scoping}
-
-<!-- surfex: deferred #114: the derived source model -->
 
 A derived source is defined at a scope: on a Macaw page, the page, a surface, a container or a cell ([macaw_compose 03](https://gitlab.conet.yarina.org/dco-tek/macaw_compose/-/blob/main/spec/03-state.md#state-dag)). `macaw_data` knows scopes only as **paths**: a source's path is its scopes' names from the outside in, then its id, a **list of strings** (visualize#643, settled question 1), so a name that holds a dot cannot break it. It is shown **dotted**, `ops.health` (`Macaw.Data.Derived.dotted/1`).
 
@@ -253,11 +235,11 @@ A derived source is defined at a scope: on a Macaw page, the page, a surface, a 
 
 **Cycles are refused, named.** The sources and the sources they read are a directed graph. Each strongly connected component that holds a cycle (by `:digraph_utils.cyclic_strong_components/1`, a source that reads itself included) is `{:cycle, paths}`, `paths` every member's path, sorted. A count of what is left after a topological sort cannot name the cycle, since it also holds every source downstream of one (visualize#643's prior-art review). `Macaw.Data.Derived.cycles/1` answers them over a map of definitions by path whose inputs are resolved.
 
-```planned-test:derived-resolve
+```test:derived-resolve
 a short id resolves from the inside out, the nearest definition shadowing an outer one; a full path names exactly one; a source name never resolves to a derived source; dotted joins a path; atoms and strings of one spelling are one name
 ```
 
-```planned-test:derived-cycles
+```test:derived-cycles
 each cycle, a self-read included, is named once with every member's path, sorted; sources downstream of a cycle are not named; an acyclic set has none
 ```
 
@@ -465,9 +447,7 @@ each of visualize's sandbox attacks is refused by the checker or contained by th
 the runner's and the checker's verdicts are the same idle and with every scheduler saturated
 ```
 
-<!-- The property hint needs §1.2's conformance: macaw_compose#114 makes it a test: hint. -->
-
-```planned-test:derived-properties
+```test:derived-properties
 for generated stored functions and inputs, a run never crashes the caller, no fault holds a data value, and the answer conforms to its schema or is a fault
 ```
 
