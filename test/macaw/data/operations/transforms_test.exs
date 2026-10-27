@@ -502,9 +502,9 @@ defmodule Macaw.Data.Operations.TransformsTest do
 
   describe "the package" do
     @tag verifies: "operations-table-package"
-    test "the table operations are macaw_data's transforms, every one needing nothing" do
+    test "the twelve table operations are macaw_data's transforms, every one needing nothing" do
       assert Enum.map(Transforms.all(), & &1.name()) ==
-               ~w(filter take window lttb m4 sort fold aggregate sum)
+               ~w(filter take window lttb m4 sort fold stack bin aggregate sum spectrum)
 
       for module <- Transforms.all() do
         assert module.needs() == []

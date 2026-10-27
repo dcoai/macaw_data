@@ -14,7 +14,10 @@ defmodule Macaw.Data.Operations.Transforms do
   | `m4` | `fields*`, `width*` |
   | `sort` | `field*`, `order` |
   | `fold` | `fields*`, `as` |
+  | `stack` | `fields*`, `order`, `offset` |
+  | `bin` | `field*`, `thresholds`, `as`, `fn` |
   | `aggregate`, `sum` | `field*`, `fn*` (`aggregate` only), `by`, `as` |
+  | `spectrum` | `field*`, `time`, `every`, `samples`, `window`, `detrend`, `as` |
   """
 
   alias Macaw.Data.{Operations, Table}
@@ -31,8 +34,11 @@ defmodule Macaw.Data.Operations.Transforms do
       __MODULE__.M4,
       __MODULE__.Sort,
       __MODULE__.Fold,
+      __MODULE__.Stack,
+      __MODULE__.Bin,
       __MODULE__.Aggregate,
-      __MODULE__.Sum
+      __MODULE__.Sum,
+      __MODULE__.Spectrum
     ]
   end
 

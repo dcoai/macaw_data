@@ -281,8 +281,6 @@ fold makes one row per input row per listed column it has, in row then field ord
 
 ### 4.8 stack {#operations-stack}
 
-<!-- surfex: deferred #122: table operations II -->
-
 `fields` (`{:list, :field}`, required: the series keys); `order` (`{:one_of, [{:enum, [:none, :ascending, :descending, :inside_out, :reverse, :appearance]}, {:keys, {:list, :field}}]}`, `:none`); `offset` (`{:enum, [:none, :expand, :silhouette, :wiggle, :diverging]}`, `:none`). d3-shape's stack (`Macaw.Data.Stack`, ported from `Visualize.Shape.Stack`), each series' value its reading, `nil` read as `0`; a reading that is neither raises `ArgumentError` naming the step.
 
 **The order** is a permutation of the series, bottom first:
@@ -304,13 +302,11 @@ Every order but `keys` is computed from the rows the step is given, so over a st
 
 **Rows:** one per series in `fields` order, per datum in data order: the datum's columns plus `key` (the series' key), `series` (its stacking position, 0 the bottom), `value`, `y0` and `y1`, the names visualize's marks read. **Outputs:** the input's columns, then `key` (`:category`), `series`, `value`, `y0` and `y1` (`:number`).
 
-```planned-test:operations-stack-orders
+```test:operations-stack-orders
 every order and offset matches d3-shape's on the reference fixtures, keys fixed and the others computed from the rows; nil reads as zero and a non-number raises; each row carries the datum's columns and its key, series, value, y0 and y1
 ```
 
 ### 4.9 bin {#operations-bin}
-
-<!-- surfex: deferred #122: table operations II -->
 
 `field` (`:field`, required); `thresholds` (`{:one_of, [{:integer, 1}, {:list, :number}]}`, `10`); `as` (`:name`, `"count"`); `fn` (`:aggregate`, `nil`) and the named aggregate's options. The readings of `field` with `nil`s dropped, binned:
 - **The domain** is the readings' extent `[d0, d1]`.
@@ -322,7 +318,7 @@ every order and offset matches d3-shape's on the reference fixtures, keys fixed 
 
 **Outputs:** `x0`, `x1`, `y0` (`:number`), `as` (`:number`, or the aggregate's output type) and `values` (`:term`).
 
-```planned-test:operations-bin-counts
+```test:operations-bin-counts
 bin splits the extent into n equal bins or at the given thresholds, each reading in its half-open bin and the maximum in the last, counting by default or reducing each bin's readings by fn; no readings yield no rows
 ```
 
@@ -342,8 +338,6 @@ aggregate makes one row per distinct by value in order of first appearance, or o
 
 ### 4.11 spectrum {#operations-spectrum}
 
-<!-- surfex: deferred #122: table operations II -->
-
 `field` (`:field`, required: the sample column); `time` (`:field`, `nil`); `every` (`:positive`, `nil`: the seconds between samples); `samples` (`:power_of_two`, `nil`); `window` (`{:enum, [:hann, :hamming, :none]}`, `:hann`); `detrend` (`:boolean`, `false`); `as` (`{:one_of, [{:list, :name}, :name]}`, `["frequency", "magnitude"]`).
 
 A time series to its **one-sided amplitude spectrum** by a radix-2 Cooley–Tukey FFT, `Macaw.Data.FFT` (ported from `Visualize.Data.FFT`; pure Elixir, `O(N log N)`):
@@ -353,11 +347,11 @@ A time series to its **one-sided amplitude spectrum** by a radix-2 Cooley–Tuke
 - **The taper:** `hann` is `0.5 − 0.5 cos(2πi/(N−1))` and `hamming` is `0.54 − 0.46 cos(2πi/(N−1))`. A sequence shorter than four is not tapered.
 - **The lines:** the samples are transformed and read as `samples / 2` lines, `k` from 0. A line's frequency is `k / (samples · every)` hertz. Its magnitude is `|X_k| · 2 / (samples · gain)`, where `gain` is the window's mean, and the DC line is not doubled. Its phase is the argument of `X_k`.
 
-Each row holds `as`'s names for the frequency and the magnitude, and a third name, when `as` gives one, for the phase. A single name is the frequency's, with the magnitude `"magnitude"`.
+Each row holds `as`'s names for the frequency and the magnitude, and a third name, when `as` gives one, for the phase. A single name is the frequency's, with the magnitude `"magnitude"`; a list of any other length raises `ArgumentError` naming the step.
 
 **Outputs:** the `as` names, `:number`.
 
-```planned-test:operations-spectrum-lines
+```test:operations-spectrum-lines
 a sine's spectrum peaks at its frequency with its amplitude under every window; the interval is every, else the time column's median gap, else 1; samples default to the largest power of two and are refused when not one; detrend removes the DC leak; as names two or three columns
 ```
 
