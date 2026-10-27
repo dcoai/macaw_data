@@ -18,7 +18,7 @@ None required at runtime beyond Elixir and OTP, so an adopter using no other Mac
 
 Built in the family's order of work, which puts first what adopters consume:
 1. **the interaction event** (step 1): done, v0.1.0;
-2. **the data model** (step 3, macaw_compose#57);
+2. **the data model** (step 3, macaw_compose#57): done, v0.2.0;
 3. **the source contract and its kit** (step 4, macaw_compose#58);
 4. **derived sources** (step 5), then **transforms, table operations and aggregates** (step 6).
 

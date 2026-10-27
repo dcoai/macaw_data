@@ -6,8 +6,6 @@ A **source** is anything a component's slot reads. One contract serves feeds, qu
 
 ## 1. The data model {#sources-data}
 
-<!-- surfex: deferred #57: the data model, order-of-work step 3 -->
-
 - **`Data.Table`:** columnar typed data, the currency of deliveries, derived sources and components. Row lists are accepted at the edge ([§1.1](#sources-table)). (visualize.md C1.)
 - **`Data.Schema`:** each field's **meaning**: `type` (`:time | :number | :category | :text | :color | :point`, a `:point` being a geographic position), and where known `unit` (UCUM), `quantity`, `label`, `order`, `status`, `polarity`, `continuity`, `bounds`, `identity`, `window`, and declared `values` with names and colors ([§1.2](#sources-schema)). (visualize.md C1.)
 - **The window field** is the field a request's window applies to: the one marked `window: true`, else the schema's only `:time` field. A `box` window applies to a `:point` window field. A schema with neither, or with several `:time` fields and none marked, has no window field, and requests to it carry none ([§1.5](#sources-schema-window)).
@@ -328,14 +326,41 @@ a cached version costs nothing, an unknown one calls describe once and is cached
 
 ## 3. Deliveries {#sources-delivery}
 
-<!-- surfex: deferred #57: deliveries are the data model, step 3 -->
+**`Macaw.Data.Delivery` is one answer of a source:** its rows, and what it actually served, a handful of terms beside the rows, never per row. `%Delivery{table, schema, served, origin}`:
+- **`table`**, the rows, a `Macaw.Data.Table` (§1.1). `new/2` reads any source shape into one at the edge (`types:` passed to `Table.from/2`; a table passes as it is), and raises `ArgumentError` for rows no table reads. `rows/1` is the row view.
+- **`schema`**, the **version** of the schema the rows were produced under (§1.10), never the schema itself, which the cache holds by version (§1.12); `nil` when the source has none.
+- **`served`**, what this answer served, which may differ from what was asked:
+  - `window`: a range `[from, to]` over a `:time` or `:number` window field; a **box** `%{west: w, south: s, east: e, north: n}` over a `:point` one, in degrees, latitudes from −90 to 90 with `south` at most `north`, longitudes from −180 to 180 (`west` east of `east` crosses the antimeridian); or `nil`;
+  - `resolution`: the spacing of the rows as served (seconds, or a name such as `:minute`), or `nil`;
+  - `capped`: whether the source stopped short of the window it was asked for, `false` by default;
+  - `reduced_by`: who brought the rows within budget: **`:source`** (the source honored the budget) or **`:runtime`** (Macaw reduced a pooled delivery to this reader's budget, finished a budget the source didn't honor, or clamped a budget to the host ceiling); `nil` when nobody had to. A component that draws fewer rows than it was handed says so in its own drawn state ([macaw_compose 05](https://gitlab.conet.yarina.org/dco-tek/macaw_compose/-/blob/main/spec/05-components.md#components-states)), not in the delivery;
+  - `params`: the parameters it was answered for, a map, `%{}` by default;
+  - `note`: a line for a person (`"coarsened from raw"`), or `nil`.
+- **`origin`**: `%{source: name, request: digest, as_of: time}`, the source, a digest of the request (`Macaw.Layers.Document.digest/1` of it), and the `DateTime` it is as of when used, else `nil`; or `nil`.
 
-A delivery reports what it actually served:
-- `served`: the window, resolution, `capped`, `reduced_by`, the params, and a note (for example, "coarsened from raw");
-- `reduced_by` says who brought the rows within budget: `:source` (the source honored the budget) or `:runtime` (Macaw reduced a pooled delivery to this reader's budget, finished a budget the source didn't honor, or clamped a budget to the host ceiling). A component that draws fewer rows than it was handed says so in its own drawn state, `capped` ([macaw_compose 05](https://gitlab.conet.yarina.org/dco-tek/macaw_compose/-/blob/main/spec/05-components.md#components-states)), not in the delivery;
-- `origin`: the source, a digest of the request, and `as_of` when used.
+`new/2` raises `ArgumentError` naming the fault for a key that is not a delivery's or a served fact, or a value a field does not take. visualize's `Visualize.Data.Delivery` holds these facts flat, with `reduced_by: :feed | :visualize` and no `served` or `origin`; mapping them at adoption is visualize's.
 
-Absence is never zero: a source never fills a gap with 0. (metresis.md C1.)
+**Absence is never zero:** a source never fills a gap with 0, and a delivery's table keeps every gap `nil` (§1.1). (metresis.md C1.)
+
+```test:delivery-table
+a delivery's rows are a table read from rows, columns and keyword columns, a table passing as it is, types taken; rows no table reads and a delivery of a delivery are refused
+```
+
+```test:delivery-absence
+for generated values with gaps, every gap reads back nil through the delivery's table, and only the gaps
+```
+
+```test:delivery-served
+served holds the window, resolution, capped, reduced_by (source or runtime), params and note, with their defaults; visualize's feed and visualize reductions, a one-element window and every other bad fact are refused
+```
+
+```test:delivery-box
+a box window over a point field takes four bounds, may cross the antimeridian, and refuses latitudes out of order or range, a longitude out of range, a missing or an extra bound
+```
+
+```test:delivery-schema-origin
+a delivery names the schema's version, never the schema; its origin is the source, the request's digest and as_of, nil by default; malformed versions and origins are refused
+```
 
 ## 4. Push {#sources-push}
 
