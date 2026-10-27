@@ -8,7 +8,10 @@
 # `@behaviour`, and "behaviour" naming Elixir's feature: "OTP behaviours", "a
 # `TextMeasure` behaviour", "the Access behaviour"), third-party texts kept
 # verbatim (font licenses), binaries, and the word lists here and in this
-# check's own test.
+# check's own test. A `spelling: allow` marker exempts its own line and the
+# line after it (a code comment sits above the line it names, where the
+# formatter keeps it): that line holds a spelling someone else owns, such as
+# `Telemetry.Metrics`' `:metre` atom, and says so where it stands.
 
 defmodule Spelling do
   # British words, matched where a word or identifier part starts (colours,
@@ -103,7 +106,9 @@ defmodule Spelling do
       for file <- checked,
           text = File.read!(file),
           String.valid?(text),
-          {line, n} <- Enum.with_index(String.split(text, "\n"), 1),
+          lines = String.split(text, "\n"),
+          {{line, above}, n} <- Enum.with_index(Enum.zip(lines, ["" | lines]), 1),
+          not String.contains?(line <> above, "spelling: allow"),
           word <- words(regex, Regex.replace(@exempt_tokens, line, "")),
           do: "#{file}:#{n}: #{word}"
 

@@ -8,6 +8,7 @@ defmodule Macaw.Data.MixProject do
       app: :macaw_data,
       version: @version,
       elixir: "~> 1.18",
+      elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
       deps: deps(),
       description:
@@ -18,6 +19,10 @@ defmodule Macaw.Data.MixProject do
   end
 
   def application, do: [extra_applications: [:logger]]
+
+  # `test/support` holds the metresis parity table (spec/03), compiled in test only.
+  defp elixirc_paths(:test), do: ["lib", "test/support"]
+  defp elixirc_paths(_), do: ["lib"]
 
   defp deps do
     [
