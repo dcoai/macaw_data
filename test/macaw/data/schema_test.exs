@@ -1,0 +1,1048 @@
+defmodule Macaw.Data.SchemaTest do
+  @moduledoc """
+  `Macaw.Data.Schema` and its cache (spec/01 §1.2–§1.12): a source's fields described by
+  meaning, never by drawing colors; a version every node agrees on, through JSON too; a
+  cache that asks a source once.
+  """
+  use ExUnit.Case, async: true
+  use ExUnitProperties
+
+  alias Macaw.Data.{Schema, Table}
+  alias Macaw.Data.Schema.Cache
+
+  doctest Schema
+  doctest Cache
+
+  @full %{
+    t: %{type: :time, label: "Time"},
+    latency: %{
+      type: :number,
+      unit: "s",
+      quantity: :duration,
+      label: "Request time",
+      polarity: :lower_is_better,
+      target: 0.25,
+      continuity: 60
+    },
+    route: %{type: :text, label: "Route"},
+    state: %{
+      type: :category,
+      order: ["ok", "warn", "fail"],
+      status: %{"ok" => :good, "warn" => :warning, "fail" => :bad}
+    }
+  }
+
+  defp faults(fields) do
+    {:error, errors} = Schema.new(fields)
+    errors
+  end
+
+  describe "new/1: a description by meaning" do
+    @tag verifies: "schema-new"
+    test "every key with a value it takes" do
+      assert {:ok, %Schema{fields: @full}} = Schema.new(@full)
+    end
+
+    @tag verifies: "schema-new"
+    test "the fourteen keys are the vocabulary" do
+      assert Schema.attributes() ==
+               [
+                 :type,
+                 :unit,
+                 :quantity,
+                 :label,
+                 :order,
+                 :status,
+                 :polarity,
+                 :target,
+                 :continuity,
+                 :window,
+                 :metric_kind,
+                 :bounds,
+                 :identity,
+                 :values
+               ]
+
+      assert Map.keys(@full.latency) -- Schema.attributes() == []
+      assert Schema.entry_keys() == [:value, :name, :color]
+    end
+
+    @tag verifies: "schema-values"
+    test "a category field declares the values it takes, every one" do
+      values = [:ok, :warning, :error]
+
+      assert {:ok, schema} =
+               Schema.new(%{
+                 state: %{
+                   type: :category,
+                   values: values,
+                   order: [:ok, :warning, :error],
+                   status: %{ok: :good, error: :bad}
+                 }
+               })
+
+      assert Schema.fetch(schema, :state, :values) == {:ok, values}
+
+      assert {:error, errors} =
+               Schema.new(%{
+                 a: %{type: :category, values: [:ok, :ok]},
+                 b: %{type: :category, values: []},
+                 c: %{type: :number, values: [1]},
+                 d: %{
+                   type: :category,
+                   values: [:ok],
+                   order: [:ok, :error],
+                   status: %{warning: :warning}
+                 }
+               })
+
+      assert errors == [
+               {[:a, :values, 1], :duplicate},
+               {[:b, :values], {:type, :values}},
+               {[:c, :values], {:invalid_for, :number}},
+               {[:d, :order, 1], :not_in_values},
+               {[:d, :status, :warning], :not_in_order},
+               {[:d, :status, :warning], :not_in_values}
+             ]
+
+      for error <- errors, do: assert(is_binary(Schema.format_error(error)))
+    end
+
+    @tag verifies: "schema-values"
+    test "a declared value may be an entry with a name and a color" do
+      values = [
+        %{value: "ok", name: "OK", color: "#2e7d32"},
+        %{value: "degraded", name: "Degraded", color: "orange"},
+        %{value: :down, color: "#B71C1Ccc"},
+        "unknown",
+        3
+      ]
+
+      assert {:ok, schema} =
+               Schema.new(%{
+                 state: %{
+                   type: :category,
+                   values: values,
+                   order: ["ok", "degraded"],
+                   status: %{"ok" => :good, "degraded" => :warning}
+                 }
+               })
+
+      # The description is kept as declared; the accessors read it.
+      assert Schema.fetch(schema, :state, :values) == {:ok, values}
+      assert Schema.values(schema, :state) == ["ok", "degraded", :down, "unknown", 3]
+      assert Schema.values(schema, "state") == Schema.values(schema, :state)
+      assert Schema.value_names(schema, :state) == %{"ok" => "OK", "degraded" => "Degraded"}
+
+      assert Schema.value_colors(schema, :state) == %{
+               "ok" => "#2e7d32",
+               "degraded" => "orange",
+               down: "#B71C1Ccc"
+             }
+    end
+
+    @tag verifies: "schema-values"
+    test "a field with no values: values/2 is nil, the maps empty" do
+      schema =
+        Schema.new!(%{s: %{type: :category}, b: %{type: :category, values: [:a, :b]}})
+
+      assert Schema.values(schema, :s) == nil
+      assert Schema.values(schema, :missing) == nil
+      assert Schema.values(schema, :b) == [:a, :b]
+
+      for field <- [:s, :missing, :b] do
+        assert Schema.value_names(schema, field) == %{}
+        assert Schema.value_colors(schema, field) == %{}
+      end
+    end
+
+    @tag verifies: "schema-values"
+    test "an entry that says only its value is that value, one version" do
+      entry = Schema.new!(%{s: %{type: :category, values: [%{value: :ok}, "x"]}})
+      bare = Schema.new!(%{s: %{type: :category, values: [:ok, "x"]}})
+
+      assert entry == bare
+      assert Schema.fetch(entry, :s, :values) == {:ok, [:ok, "x"]}
+    end
+
+    @tag verifies: "schema-values"
+    test "every fault of a value entry, by path" do
+      assert faults(%{
+               s: %{
+                 type: :category,
+                 values: [
+                   %{name: "No value"},
+                   %{value: nil},
+                   %{value: "a", name: :a},
+                   %{value: "b", color: "not-a-color"},
+                   %{value: "c", color: {:ramp, :status, 0.5}},
+                   %{value: "d", color: "#12345"},
+                   %{value: "e", label: "E"},
+                   "a",
+                   %{value: "b", name: "B again"}
+                 ]
+               }
+             }) == [
+               {[:s, :values, 0, :value], :required},
+               {[:s, :values, 1, :value], {:type, :state}},
+               {[:s, :values, 2, :name], {:type, :string}},
+               {[:s, :values, 3, :color], {:type, :color}},
+               {[:s, :values, 4, :color], {:type, :color}},
+               {[:s, :values, 5, :color], {:type, :color}},
+               {[:s, :values, 6, :label], :unknown_entry_key},
+               {[:s, :values, 7], :duplicate},
+               {[:s, :values, 8], :duplicate}
+             ]
+
+      for reason <- [{:type, :state}, {:type, :color}, :unknown_entry_key] do
+        assert is_binary(Schema.format_error({[:s, :values, 0, :x], reason}))
+      end
+
+      assert Schema.format_error({[:s, :values, 6, :label], :unknown_entry_key}) =~ ":color"
+
+      # An entry that is neither a value nor a map is the list's fault, as it was.
+      assert faults(%{s: %{type: :category, values: [:a, [:b]]}}) ==
+               [{[:s, :values], {:type, :values}}]
+
+      # A field-level color key is still the fault it was: the hint lives on a value.
+      assert faults(%{s: %{type: :category, values: [:a], color: "#fff"}}) ==
+               [{[:s, :color], {:color_key, :color}}]
+    end
+
+    @tag verifies: "schema-values"
+    test "order and status are checked against the bare values" do
+      values = [%{value: :ok, name: "OK"}, %{value: :error, color: "#c62828"}]
+
+      assert {:ok, _} =
+               Schema.new(%{
+                 s: %{type: :category, values: values, order: [:ok, :error], status: %{ok: :good}}
+               })
+
+      assert faults(%{s: %{type: :category, values: values, status: %{warning: :warning}}}) ==
+               [{[:s, :status, :warning], :not_in_values}]
+    end
+
+    @tag verifies: "schema-version"
+    test "values do not move the version of a schema that does not use them" do
+      assert Schema.version(Schema.new!(%{v: %{type: :number}})) ==
+               "34a96e0edc698a78cb79c83781c3edcb394de328937dde489e58c85aec6c002b"
+    end
+
+    @tag verifies: "schema-new"
+    test "a numeric field says its metric kind and its bounds" do
+      for kind <- [:gauge, :counter, :rate] do
+        assert {:ok, _} = Schema.new(%{v: %{type: :number, quantity: :count, metric_kind: kind}})
+      end
+
+      for bounds <- [[0, nil], [nil, 100], [-5, 5], [0.0, 1.0], [nil, nil]] do
+        assert {:ok, _} = Schema.new(%{v: %{type: :number, bounds: bounds}}), inspect(bounds)
+      end
+
+      assert faults(%{v: %{type: :number, metric_kind: :sum}}) ==
+               [{[:v, :metric_kind], {:enum, [:gauge, :counter, :rate]}}]
+
+      for bounds <- [[5, 0], [1, 1], [0], {0, 1}, ["0", 1], [0, 1, 2]] do
+        assert faults(%{v: %{type: :number, bounds: bounds}}) == [
+                 {[:v, :bounds], {:type, :bounds}}
+               ],
+               inspect(bounds)
+      end
+
+      assert faults(%{v: %{type: :category, metric_kind: :gauge, bounds: [0, 1]}}) == [
+               {[:v, :bounds], {:invalid_for, :category}},
+               {[:v, :metric_kind], {:invalid_for, :category}}
+             ]
+
+      assert Schema.format_error({[:v, :bounds], {:type, :bounds}}) =~ "[min, max]"
+    end
+
+    @tag verifies: "schema-new"
+    test "type is required and one of the six column types" do
+      assert faults(%{v: %{unit: "s"}}) == [{[:v, :type], :required}]
+
+      assert faults(%{v: %{type: :float}}) ==
+               [{[:v, :type], {:enum, [:time, :number, :category, :text, :color, :point]}}]
+    end
+
+    @tag verifies: "schema-color-keys"
+    test "a color key is refused, whatever its value, and says why" do
+      # spelling: allow — either spelling is refused.
+      for key <- [:color, :colour, :colors, :colours, :palette, :fill, :stroke] do
+        assert faults(%{s: %{key => %{"ok" => :good}, :type => :category}}) ==
+                 [{[:s, key], {:color_key, key}}]
+      end
+
+      line = Schema.format_error({[:s, :colors], {:color_key, :colors}})
+      assert line =~ "s.colors"
+      assert line =~ "never"
+      assert line =~ "status"
+      assert line =~ "theme"
+    end
+
+    @tag verifies: "schema-color-keys"
+    test "a color cannot hide in a status either: a role is a word, never a color" do
+      assert faults(%{s: %{type: :category, status: %{"fail" => {:palette, 5}}}}) ==
+               [{[:s, :status], {:type, :status}}]
+
+      for role <- ["#c00", "red", :orange],
+          do:
+            assert(
+              faults(%{s: %{type: :category, status: %{"fail" => role}}}) == [
+                {[:s, :status], {:type, :status}}
+              ]
+            )
+
+      # A role read back from JSON is its string, and still a role.
+      assert {:ok, _} = Schema.new(%{s: %{type: :category, status: %{"fail" => "bad"}}})
+    end
+
+    @tag verifies: "schema-new"
+    test "an unknown key is reported with the keys there are" do
+      assert faults(%{v: %{type: :number, scale: 2}}) == [{[:v, :scale], :unknown_key}]
+      assert Schema.format_error({[:v, :scale], :unknown_key}) =~ ":continuity"
+    end
+
+    @tag verifies: "schema-new"
+    test "a key the field's type does not take" do
+      assert faults(%{v: %{type: :category, unit: "s", target: 1}}) ==
+               [
+                 {[:v, :target], {:invalid_for, :category}},
+                 {[:v, :unit], {:invalid_for, :category}}
+               ]
+
+      assert faults(%{v: %{type: :number, order: [1, 2]}}) ==
+               [{[:v, :order], {:invalid_for, :number}}]
+
+      assert faults(%{v: %{type: :time, status: %{}, quantity: :duration}}) ==
+               [
+                 {[:v, :quantity], {:invalid_for, :time}},
+                 {[:v, :status], {:invalid_for, :time}}
+               ]
+    end
+
+    @tag verifies: "schema-window-field"
+    test "window names a clock: a boolean on a :time or :number field, one field at most" do
+      assert {:ok, _} = Schema.new(%{t: %{type: :number, window: true}, v: %{type: :number}})
+      assert {:ok, _} = Schema.new(%{t: %{type: :time, window: true}})
+      assert {:ok, _} = Schema.new(%{t: %{type: :time, window: false}})
+
+      assert faults(%{s: %{type: :category, window: true}, x: %{type: :text, window: true}}) ==
+               [
+                 {[:s, :window], {:invalid_for, :category}},
+                 {[:x, :window], {:invalid_for, :text}}
+               ]
+
+      assert faults(%{t: %{type: :number, window: :yes}}) == [{[:t, :window], {:type, :boolean}}]
+
+      assert faults(%{a: %{type: :time, window: true}, b: %{type: :number, window: true}}) ==
+               [{[:b, :window], {:duplicate_window, :a}}]
+
+      assert Schema.format_error({[:b, :window], {:duplicate_window, :a}}) =~ "one field"
+      assert Schema.format_error({[:t, :window], {:type, :boolean}}) =~ "true or false"
+    end
+
+    @tag verifies: "schema-faults"
+    test "values of the wrong shape" do
+      assert faults(%{v: %{type: :number, unit: ""}}) == [{[:v, :unit], {:type, :unit}}]
+      assert faults(%{v: %{type: :number, unit: :s}}) == [{[:v, :unit], {:type, :unit}}]
+
+      assert faults(%{v: %{type: :number, quantity: "duration"}}) == [
+               {[:v, :quantity], {:type, :name}}
+             ]
+
+      assert faults(%{v: %{type: :number, quantity: nil}}) == [{[:v, :quantity], {:type, :name}}]
+      assert faults(%{v: %{type: :number, label: :x}}) == [{[:v, :label], {:type, :string}}]
+      assert faults(%{v: %{type: :number, target: "1"}}) == [{[:v, :target], {:type, :number}}]
+
+      assert faults(%{v: %{type: :number, continuity: 0}}) == [
+               {[:v, :continuity], {:type, :positive}}
+             ]
+
+      assert faults(%{v: %{type: :number, polarity: :up}}) ==
+               [{[:v, :polarity], {:enum, [:higher_is_better, :lower_is_better, :neutral]}}]
+    end
+
+    @tag verifies: "schema-measure"
+    test "any role word is carried: its list is the theme's" do
+      assert {:ok, _} = Schema.new(%{s: %{type: :category, status: %{"x" => :mauve}}})
+    end
+
+    @tag verifies: "schema-faults"
+    test "an order is non-empty, of states, each once" do
+      assert faults(%{s: %{type: :category, order: []}}) == [{[:s, :order], {:type, :order}}]
+      assert faults(%{s: %{type: :category, order: [%{}]}}) == [{[:s, :order], {:type, :order}}]
+
+      assert faults(%{s: %{type: :category, order: ["a", "b", "a", "b"]}}) ==
+               [{[:s, :order, 2], :duplicate}, {[:s, :order, 3], :duplicate}]
+    end
+
+    @tag verifies: "schema-values"
+    test "a status names only states the order lists" do
+      assert faults(%{
+               s: %{type: :category, order: ["ok"], status: %{"ok" => :good, "down" => :bad}}
+             }) == [{[:s, :status, "down"], :not_in_order}]
+
+      assert {:ok, _} = Schema.new(%{s: %{type: :category, status: %{"down" => :bad}}})
+    end
+
+    @tag verifies: "schema-faults"
+    test "field names: atoms or strings, each column once" do
+      assert {:ok, _} = Schema.new(%{"v" => %{type: :number}, t: %{type: :time}})
+      assert faults(%{1 => %{type: :number}}) == [{[1], {:type, :name}}]
+      assert faults(%{"" => %{type: :number}}) == [{[""], {:type, :name}}]
+      assert faults(%{nil => %{type: :number}}) == [{[nil], {:type, :name}}]
+
+      assert faults(%{:v => %{type: :number}, "v" => %{type: :number}}) ==
+               [{["v"], {:duplicate_field, :v}}]
+    end
+
+    @tag verifies: "schema-faults"
+    test "a schema is a map of description maps" do
+      assert Schema.new(v: %{type: :number}) == {:error, [{[], {:type, :schema}}]}
+      assert faults(%{v: [type: :number]}) == [{[:v], {:type, :description}}]
+    end
+
+    @tag verifies: "schema-faults"
+    test "every fault is reported, by path" do
+      errors = faults(%{a: %{}, b: %{type: :number, fill: "#000"}})
+      assert errors == [{[:a, :type], :required}, {[:b, :fill], {:color_key, :fill}}]
+    end
+
+    @tag verifies: "schema-faults"
+    test "new!/1 raises with every fault formatted" do
+      error = assert_raise ArgumentError, fn -> Schema.new!(%{a: %{}, b: %{type: :x}}) end
+      assert error.message =~ "a.type: is required"
+      assert error.message =~ "b.type: must be one of :time"
+    end
+
+    @tag verifies: "schema-faults"
+    test "every fault formats as a line" do
+      for {path, reason} <- [
+            {[], {:type, :schema}},
+            {[1], {:type, :name}},
+            {[:v], {:type, :description}},
+            {[:v, :unit], {:type, :unit}},
+            {[:v, :label], {:type, :string}},
+            {[:v, :target], {:type, :number}},
+            {[:v, :continuity], {:type, :positive}},
+            {[:v, :order], {:type, :order}},
+            {[:v, :status], {:type, :status}},
+            {["v"], {:duplicate_field, :v}},
+            {[:v, :order, 2], :duplicate},
+            {[:v, :status, "down"], :not_in_order}
+          ] do
+        assert is_binary(Schema.format_error({path, reason}))
+      end
+
+      assert Schema.format_error({[:v, :order, 2], :duplicate}) == "v.order[2]: is listed twice"
+    end
+  end
+
+  describe "new/1: a measure is checked against the vocabulary" do
+    @tag verifies: "schema-measure"
+    test "a misspelled unit is refused at the field's unit, in parse/1's words" do
+      assert faults(%{latency: %{type: :number, unit: "mss"}}) ==
+               [{[:latency, :unit], {:unit, "mss", {:unknown_atom, "mss"}}}]
+
+      assert Schema.format_error({[:latency, :unit], {:unit, "mss", {:unknown_atom, "mss"}}}) ==
+               ~s(latency.unit: "mss" is not a UCUM unit this vocabulary reads \(spec/03 §1\))
+    end
+
+    @tag verifies: "schema-measure"
+    test "a symbol a person types is not a code" do
+      assert [{[:v, :unit], {:unit, "°C", _reason}}] = faults(%{v: %{type: :number, unit: "°C"}})
+      assert {:ok, _} = Schema.new(%{v: %{type: :number, unit: "Cel"}})
+    end
+
+    @tag verifies: "schema-measure"
+    test "an unknown quantity is refused at the field's quantity" do
+      assert faults(%{v: %{type: :number, quantity: :sheep_per_hour}}) ==
+               [{[:v, :quantity], {:unknown_quantity, :sheep_per_hour}}]
+
+      assert Schema.format_error({[:v, :quantity], {:unknown_quantity, :sheep_per_hour}}) =~
+               "v.quantity: :sheep_per_hour is not a quantity"
+    end
+
+    @tag verifies: "schema-measure"
+    test "a unit that does not measure its quantity is refused at the quantity, as resolve/1 says" do
+      assert faults(%{v: %{type: :number, unit: "By", quantity: :duration}}) ==
+               [{[:v, :quantity], {:quantity, :duration, "By"}}]
+
+      assert Schema.format_error({[:v, :quantity], {:quantity, :duration, "By"}}) ==
+               ~s(v.quantity: unit "By" does not measure :duration \(spec/03 §13\))
+    end
+
+    @tag verifies: "schema-measure"
+    test "a pair is checked only once each of it is good" do
+      assert faults(%{v: %{type: :number, unit: "mss", quantity: :duration}}) ==
+               [{[:v, :unit], {:unit, "mss", {:unknown_atom, "mss"}}}]
+
+      assert faults(%{v: %{type: :number, unit: "By", quantity: :durration}}) ==
+               [{[:v, :quantity], {:unknown_quantity, :durration}}]
+
+      # A bad label beside a bad pair hides neither.
+      assert faults(%{v: %{type: :number, unit: "By", quantity: :duration, label: 1}}) ==
+               [{[:v, :label], {:type, :string}}, {[:v, :quantity], {:quantity, :duration, "By"}}]
+    end
+
+    @tag verifies: "schema-measure"
+    test "every quantity in its base unit, and the units feeds write, pass" do
+      for q <- Macaw.Data.Quantity.all() do
+        unit = Macaw.Data.Quantity.base_unit(q) || "{iso4217:USD}"
+        assert {:ok, _} = Schema.new(%{v: %{type: :number, unit: unit, quantity: q}})
+      end
+
+      for unit <- ~w(ms % 1 {request}/s {request} kW.h MiBy [lb_av] {iso4217:EUR}/kW/h) do
+        assert {:ok, _} = Schema.new(%{v: %{type: :number, unit: unit}})
+      end
+
+      assert {:ok, _} = Schema.new(%{v: %{type: :number, unit: "%", quantity: :ratio}})
+      assert {:ok, _} = Schema.new(%{v: %{type: :number, unit: "{request}", quantity: :count}})
+    end
+
+    @tag verifies: "schema-measure"
+    test "Telemetry's schemas pass: every unit it maps, with the quantity it implies" do
+      for unit <- [
+            :second,
+            :millisecond,
+            :microsecond,
+            :nanosecond,
+            :byte,
+            :kilobyte,
+            :megabyte,
+            :gigabyte,
+            :percent
+          ] do
+        {:ok, code} = Macaw.Data.Unit.from_telemetry(unit)
+        measure = %{unit: code, quantity: Macaw.Data.Quantity.of_unit(code)}
+        description = Map.reject(Map.put(measure, :type, :number), fn {_k, v} -> v == nil end)
+        assert {:ok, _} = Schema.new(%{value: description}), "#{inspect(unit)} → #{code}"
+      end
+    end
+  end
+
+  describe "fetch/2 and fetch/3" do
+    @tag verifies: "schema-fetch"
+    test "by either spelling, never creating an atom" do
+      schema = Schema.new!(%{"latency" => %{type: :number, unit: "ms"}, t: %{type: :time}})
+      assert Schema.fetch(schema, :latency) == {:ok, %{type: :number, unit: "ms"}}
+      assert Schema.fetch(schema, "t") == {:ok, %{type: :time}}
+      assert Schema.fetch(schema, "never_an_atom_#{System.unique_integer([:positive])}") == :error
+      assert Schema.fetch(schema, :latency, :unit) == {:ok, "ms"}
+      assert Schema.fetch(schema, :latency, :label) == :error
+      assert Schema.fetch(schema, :other, :unit) == :error
+    end
+  end
+
+  describe "identity" do
+    @tag verifies: "schema-identity"
+    test "one field, or several, may declare it; a :category, :text or :number one" do
+      for type <- [:category, :text, :number] do
+        assert {:ok, schema} = Schema.new(%{id: %{type: type, identity: true}})
+        assert Schema.identity(schema) == [:id]
+      end
+
+      assert {:ok, schema} =
+               Schema.new(%{
+                 "iface" => %{type: :category, identity: true},
+                 host: %{type: :category, identity: true},
+                 t: %{type: :time},
+                 bytes: %{type: :number}
+               })
+
+      assert Schema.identity(schema) == [:host, "iface"]
+    end
+
+    @tag verifies: "schema-identity"
+    test "new/1 keeps the identity fields, and a struct assembled by hand derives them" do
+      schema =
+        Schema.new!(%{
+          iface: %{type: :category, identity: true},
+          host: %{type: :category, identity: true}
+        })
+
+      assert schema.identity == [:host, :iface]
+      by_hand = %Schema{fields: schema.fields, version: schema.version}
+      assert by_hand.identity == nil
+      assert Schema.identity(by_hand) == [:host, :iface]
+
+      assert Schema.identity(by_hand, %{host: "mx1", iface: "eth0"}) == %{
+               host: "mx1",
+               iface: "eth0"
+             }
+    end
+
+    @tag verifies: "schema-identity"
+    test "never on a :time field, and only a boolean" do
+      assert faults(%{t: %{type: :time, identity: true}}) ==
+               [{[:t, :identity], {:invalid_for, :time}}]
+
+      assert faults(%{id: %{type: :category, identity: "yes"}}) ==
+               [{[:id, :identity], {:type, :boolean}}]
+
+      assert Schema.format_error({[:t, :identity], {:invalid_for, :time}}) ==
+               "t.identity: is not a key a :time field takes"
+    end
+
+    @tag verifies: "schema-identity"
+    test "false is absent: one schema, one version, and nothing declared" do
+      said = Schema.new!(%{id: %{type: :category, identity: false}})
+      unsaid = Schema.new!(%{id: %{type: :category}})
+
+      assert said == unsaid
+      assert Schema.identity(said) == []
+      assert Schema.fetch(said, :id, :identity) == :error
+    end
+
+    @tag verifies: "schema-identity"
+    test "a row's identity: bare for one field, a map for several, nil when it lacks one" do
+      none = Schema.new!(%{name: %{type: :category}})
+      one = Schema.new!(%{"car" => %{type: :number, identity: true}, x: %{type: :number}})
+
+      two =
+        Schema.new!(%{
+          host: %{type: :category, identity: true},
+          iface: %{type: :category, identity: true}
+        })
+
+      assert Schema.identity(none, %{name: "api"}) == nil
+      assert Schema.identity(one, %{car: 7, x: 1.5}) == 7
+      assert Schema.identity(one, %{"car" => 7}) == 7
+      assert Schema.identity(one, %{x: 1.5}) == nil
+
+      assert Schema.identity(two, %{"host" => "mx1", iface: "eth0"}) == %{
+               host: "mx1",
+               iface: "eth0"
+             }
+
+      assert Schema.identity(two, %{host: "mx1", iface: nil}) == nil
+    end
+  end
+
+  describe "compatibility/2" do
+    @live Schema.new!(%{
+            t: %{type: :time, label: "Time"},
+            value: %{type: :number, unit: "ms", quantity: :duration, label: "Panel load time"},
+            panel: %{type: :category}
+          })
+
+    @tag verifies: "schema-compatibility"
+    test "names compare as strings; labels, facts and extra fields are not compared" do
+      store =
+        Schema.new!(%{
+          "t" => %{type: :time},
+          "value" => %{
+            type: :number,
+            unit: "s",
+            quantity: :duration,
+            label: "metresis.panel.load.duration.max",
+            polarity: :lower_is_better,
+            bounds: [0.0, nil],
+            metric_kind: :gauge
+          },
+          "panel" => %{type: :category, label: "panel"},
+          "host" => %{type: :category}
+        })
+
+      assert Schema.compatibility(@live, store) == :ok
+      # Not symmetric: the store's extra field is missing from the live schema.
+      assert Schema.compatibility(store, @live) == {:error, [{"host", :missing}]}
+    end
+
+    @tag verifies: "schema-compatibility"
+    test "every fault, in the first schema's spelling, ordered by name" do
+      other =
+        Schema.new!(%{"t" => %{type: :number}, "value" => %{type: :number, unit: "By"}})
+
+      assert Schema.compatibility(@live, other) ==
+               {:error,
+                [
+                  {:panel, :missing},
+                  {:t, {:type, :time, :number}},
+                  {:value, {:unit, "ms", "By"}}
+                ]}
+    end
+
+    @tag verifies: "schema-compatibility"
+    test "units: two absent agree, one absent facing a present one and two currencies do not" do
+      bare = Schema.new!(%{v: %{type: :number}})
+      ms = Schema.new!(%{v: %{type: :number, unit: "ms"}})
+      usd = Schema.new!(%{v: %{type: :number, unit: "{iso4217:USD}"}})
+      eur = Schema.new!(%{v: %{type: :number, unit: "{iso4217:EUR}"}})
+
+      assert Schema.compatibility(bare, bare) == :ok
+      assert Schema.compatibility(ms, bare) == {:error, [{:v, {:unit, "ms", nil}}]}
+      assert Schema.compatibility(bare, ms) == {:error, [{:v, {:unit, nil, "ms"}}]}
+
+      assert Schema.compatibility(usd, eur) ==
+               {:error, [{:v, {:unit, "{iso4217:USD}", "{iso4217:EUR}"}}]}
+
+      assert Schema.compatibility(usd, usd) == :ok
+    end
+
+    @tag verifies: "schema-compatibility"
+    test "identity: different declared fields are a fault, whichever schema declares" do
+      host = %{type: :category, identity: true}
+      hosts = Schema.new!(%{host: host, v: %{type: :number}})
+      bare = Schema.new!(%{host: %{type: :category}, v: %{type: :number}})
+      ifaces = Schema.new!(%{"host" => host, "iface" => host, "v" => %{type: :number}})
+
+      assert Schema.compatibility(hosts, hosts) == :ok
+      assert Schema.compatibility(hosts, bare) == {:error, [{:host, {:identity, true, false}}]}
+      assert Schema.compatibility(bare, hosts) == {:error, [{:host, {:identity, false, true}}]}
+      # Extra fields are not faults, but an extra identity field is.
+      assert Schema.compatibility(hosts, ifaces) ==
+               {:error, [{"iface", {:identity, false, true}}]}
+
+      assert Schema.compatibility(ifaces, hosts) ==
+               {:error, [{"iface", :missing}]}
+    end
+  end
+
+  describe "version/1: the kernel's digest" do
+    @tag verifies: "schema-version"
+    test "is pinned: a change of encoding is a deliberate, visible change" do
+      # The canonical JSON {"fields":[["v",{"type":"number"}]]}: `sha256sum` agrees.
+      assert Schema.version(Schema.new!(%{v: %{type: :number}})) ==
+               "34a96e0edc698a78cb79c83781c3edcb394de328937dde489e58c85aec6c002b"
+
+      assert Schema.version(Schema.new!(@full)) ==
+               "fb5676163072ddb04e8689323388a5209eaeca8651755dd1fd88c2d2fd885f6c"
+    end
+
+    @tag verifies: "schema-version"
+    test "is the kernel's digest of the map form, the SHA-256 of its canonical JSON" do
+      bytes = ~s({"fields":[["v",{"type":"number"}]]})
+
+      assert Schema.version(Schema.new!(%{v: %{type: :number}})) ==
+               Macaw.Layers.Document.digest(%{
+                 "fields" => Schema.to_map(Schema.new!(%{v: %{type: :number}}))
+               })
+
+      assert Schema.version(Schema.new!(%{v: %{type: :number}})) ==
+               Base.encode16(:crypto.hash(:sha256, bytes), case: :lower)
+    end
+
+    @tag verifies: "schema-version"
+    test "is the same whichever way a field name is spelled" do
+      assert Schema.new!(%{v: %{type: :number}}).version ==
+               Schema.new!(%{"v" => %{type: :number}}).version
+    end
+
+    @tag verifies: "schema-version"
+    property "is independent of the order the maps were built in" do
+      entries = Enum.flat_map(@full, fn {name, d} -> Enum.map(d, &{name, &1}) end)
+
+      check all(shuffled <- shuffled(entries)) do
+        rebuilt =
+          Enum.reduce(shuffled, %{}, fn {name, {k, v}}, acc ->
+            v = if is_map(v), do: v |> Enum.shuffle() |> Map.new(), else: v
+            Map.update(acc, name, %{k => v}, &Map.put(&1, k, v))
+          end)
+
+        assert Schema.new!(rebuilt).version == Schema.new!(@full).version
+      end
+    end
+
+    @tag verifies: "schema-version"
+    test "changes with any change of content" do
+      base = Schema.new!(@full).version
+
+      variants = [
+        put_in(@full, [:latency, :label], "Latency"),
+        put_in(@full, [:latency, :unit], "ms"),
+        put_in(@full, [:latency, :target], 0.3),
+        put_in(@full, [:latency, :continuity], 60.0),
+        put_in(@full, [:state, :order], ["ok", "fail", "warn"]),
+        put_in(@full, [:state, :status, "warn"], :bad),
+        Map.delete(@full, :route),
+        put_in(@full, [:route, :type], :category),
+        Map.put(@full, :route2, %{type: :text})
+      ]
+
+      versions = Enum.map(variants, &Schema.new!(&1).version)
+      refute base in versions
+      assert length(Enum.uniq(versions)) == length(variants)
+    end
+
+    @tag verifies: "schema-version"
+    test "a string state and the atom state are one value, by its spelling" do
+      # They are one value after a trip through JSON, so the version is the same before it:
+      # a delivery read on another node names a version its reader can resolve.
+      a = Schema.new!(%{s: %{type: :category, order: ["ok"], status: %{"ok" => :good}}})
+      b = Schema.new!(%{s: %{type: :category, order: [:ok], status: %{ok: "good"}}})
+      assert a.version == b.version
+      refute a.version == Schema.new!(%{s: %{type: :category, order: ["OK"]}}).version
+    end
+
+    defp shuffled(list), do: StreamData.map(StreamData.integer(), fn _ -> Enum.shuffle(list) end)
+  end
+
+  describe "Cache" do
+    setup do
+      v1 = Schema.new!(%{v: %{type: :number, unit: "s"}})
+      v2 = Schema.new!(%{v: %{type: :number, unit: "ms"}})
+      %{v1: v1, v2: v2}
+    end
+
+    defp counting(answer) do
+      test = self()
+
+      fn feed ->
+        send(test, {:described, feed})
+        answer
+      end
+    end
+
+    @tag verifies: "schema-cache"
+    test "a cached version costs nothing: describe is not called", %{v1: v1} do
+      cache = Cache.new([{:latency, v1}])
+
+      assert {:ok, ^v1, ^cache} =
+               Cache.resolve(cache, :latency, v1.version, counting({:error, :not_asked}))
+
+      refute_received {:described, _}
+    end
+
+    @tag verifies: "schema-cache"
+    test "an unknown version calls describe once, then is cached", %{v1: v1} do
+      describe = counting({:ok, v1})
+      {:ok, ^v1, cache} = Cache.resolve(Cache.new(), :latency, v1.version, describe)
+      assert_received {:described, :latency}
+
+      {:ok, ^v1, ^cache} = Cache.resolve(cache, :latency, v1.version, describe)
+      refute_received {:described, _}
+      assert Cache.fetch(cache, :latency, v1.version) == {:ok, v1}
+    end
+
+    @tag verifies: "schema-cache"
+    test "the same version of another feed is another entry", %{v1: v1} do
+      cache = Cache.new([{:latency, v1}])
+      assert Cache.fetch(cache, :other, v1.version) == :error
+    end
+
+    @tag verifies: "schema-cache"
+    test "describe answering another version is reported and its answer cached",
+         %{v1: v1, v2: v2} do
+      assert {:error, {:schema_version, :latency, v1_version, v2_version}, cache} =
+               Cache.resolve(Cache.new(), :latency, v1.version, counting({:ok, v2}))
+
+      assert {v1_version, v2_version} == {v1.version, v2.version}
+      assert Cache.fetch(cache, :latency, v2.version) == {:ok, v2}
+    end
+
+    @tag verifies: "schema-cache"
+    test "describe failing, and no describe at all", %{v1: v1} do
+      cache = Cache.new()
+
+      assert Cache.resolve(cache, :latency, v1.version, fn _ -> {:error, :down} end) ==
+               {:error, {:describe, :latency, :down}, cache}
+
+      assert Cache.resolve(cache, :latency, v1.version, nil) ==
+               {:error, {:unknown_schema, :latency, v1.version}, cache}
+    end
+
+    @tag verifies: "schema-cache"
+    test "put/3 keys a schema by its own version", %{v1: v1, v2: v2} do
+      cache = Cache.new() |> Cache.put(:f, v1) |> Cache.put(:f, v2)
+      assert Cache.fetch(cache, :f, v1.version) == {:ok, v1}
+      assert Cache.fetch(cache, :f, v2.version) == {:ok, v2}
+    end
+  end
+
+  describe "the point type and the window field" do
+    @tag verifies: "schema-point"
+    test "a :point field is a position: label, continuity and window, nothing numeric or categorical" do
+      assert {:ok, schema} = Schema.new(%{where: %{type: :point, label: "Where", continuity: 5}})
+      assert Schema.fetch(schema, :where, :type) == {:ok, :point}
+
+      assert faults(%{p: %{type: :point, unit: "m", order: ["a"], identity: true}}) == [
+               {[:p, :identity], {:invalid_for, :point}},
+               {[:p, :order], {:invalid_for, :point}},
+               {[:p, :unit], {:invalid_for, :point}}
+             ]
+    end
+
+    @tag verifies: "schema-window-field"
+    test "the window field: the marked one, else the only time field, else none" do
+      field = &Schema.window_field(Schema.new!(&1))
+
+      assert field.(%{t: %{type: :time}, v: %{type: :number}}) == :t
+      assert field.(%{t: %{type: :time}, tick: %{type: :number, window: true}}) == :tick
+      assert field.(%{a: %{type: :time}, b: %{type: :time}}) == nil
+      assert field.(%{a: %{type: :time}, b: %{type: :time, window: true}}) == :b
+      assert field.(%{t: %{type: :time, window: false}}) == nil
+      assert field.(%{v: %{type: :number}}) == nil
+      assert field.(%{p: %{type: :point, window: true}}) == :p
+
+      assert faults(%{a: %{type: :time, window: true}, b: %{type: :point, window: true}}) ==
+               [{[:b, :window], {:duplicate_window, :a}}]
+    end
+
+    @tag verifies: "schema-window-field"
+    test "the window that applies: a range over time or number, a box over a point" do
+      kind = &Schema.window_kind(Schema.new!(&1))
+      assert kind.(%{t: %{type: :time}}) == :range
+      assert kind.(%{n: %{type: :number, window: true}}) == :range
+      assert kind.(%{p: %{type: :point, window: true}}) == :box
+      assert kind.(%{v: %{type: :number}}) == nil
+    end
+  end
+
+  describe "data colors" do
+    @tag verifies: "schema-colors-literal"
+    test "a data color is a literal: hex in four lengths or a CSS name; never a role or a typed color" do
+      for c <- ~w(#fff #ffff #2e7d32 #2e7d32cc orange Orange rebeccapurple transparent),
+          do: assert(Schema.color?(c), c)
+
+      for c <- [
+            "#ff",
+            "#12345",
+            "#ggg",
+            "good",
+            "",
+            {:color, :good},
+            {:ramp, :status, 0.5},
+            :orange,
+            3
+          ],
+          do: refute(Schema.color?(c), inspect(c))
+
+      assert faults(%{s: %{type: :category, values: [%{value: "a", color: {:color, :good}}]}}) ==
+               [{[:s, :values, 0, :color], {:type, :color}}]
+
+      assert Schema.format_error({[:s, :values, 0, :color], {:type, :color}}) =~ "CSS color name"
+    end
+  end
+
+  describe "the JSON form" do
+    @tag verifies: "schema-json-form"
+    test "the map form is sorted pairs, every name, state, role and word by its spelling" do
+      schema =
+        Schema.new!(%{
+          "where" => %{type: :point, window: true},
+          state: %{
+            type: :category,
+            order: [:ok, "warn"],
+            status: %{:ok => :good, "warn" => :warning},
+            values: [%{value: :ok, name: "OK", color: "#2e7d32"}, "warn"]
+          },
+          latency: %{
+            type: :number,
+            unit: "s",
+            quantity: :duration,
+            bounds: [0, nil],
+            identity: false
+          }
+        })
+
+      assert Schema.to_map(schema) == [
+               [
+                 "latency",
+                 %{
+                   "type" => "number",
+                   "unit" => "s",
+                   "quantity" => "duration",
+                   "bounds" => [0, nil]
+                 }
+               ],
+               [
+                 "state",
+                 %{
+                   "type" => "category",
+                   "order" => ["ok", "warn"],
+                   "status" => [["ok", "good"], ["warn", "warning"]],
+                   "values" => [%{"value" => "ok", "name" => "OK", "color" => "#2e7d32"}, "warn"]
+                 }
+               ],
+               ["where", %{"type" => "point", "window" => true}]
+             ]
+
+      assert JSON.decode!(Schema.to_json(schema)) == Schema.to_map(schema)
+    end
+
+    @tag verifies: "schema-json-read"
+    test "from_json/2 reads words through their vocabularies, names and states as strings, and refuses by new/1" do
+      json =
+        ~s([["v",{"type":"number","quantity":"duration","polarity":"lower_is_better","metric_kind":"gauge"}],["s",{"type":"category","order":["ok"],"status":[["ok","good"]]}]])
+
+      {:ok, schema} = Schema.from_json(json)
+
+      assert Schema.fetch(schema, "v") ==
+               {:ok,
+                %{
+                  type: :number,
+                  quantity: :duration,
+                  polarity: :lower_is_better,
+                  metric_kind: :gauge
+                }}
+
+      assert Schema.fetch(schema, "s") ==
+               {:ok, %{type: :category, order: ["ok"], status: %{"ok" => "good"}}}
+
+      # A word outside its vocabulary stays a string, and new/1 refuses it by name.
+      assert Schema.from_json(~s([["v",{"type":"float","scale":2}]])) ==
+               {:error,
+                [
+                  {["v", :type], {:enum, [:time, :number, :category, :text, :color, :point]}},
+                  {["v", "scale"], :unknown_key}
+                ]}
+
+      assert Schema.from_json(~s({"v":1})) == {:error, [{[], {:type, :schema}}]}
+      assert Schema.from_json("[") |> elem(0) == :error
+
+      assert Schema.from_json(~s([["v",{"type":"number"}]]), limits: [bytes: 5]) ==
+               {:error, [{[], {:limit, :bytes, 5, 25}}]}
+
+      assert {:error, [{_, {:limit, :depth, 2, 3}}]} =
+               Schema.from_json(~s([["v",{"type":"number"}]]), limits: [depth: 2])
+    end
+
+    @tag verifies: "schema-json-round-trip"
+    property "a schema read back from its JSON form has its version and its JSON" do
+      check all(fields <- schema_fields()) do
+        schema = Schema.new!(fields)
+        assert {:ok, back} = Schema.from_json(Schema.to_json(schema))
+        assert Schema.version(back) == Schema.version(schema)
+        assert Schema.to_json(back) == Schema.to_json(schema)
+        # Spelled with strings, as JSON spells it, the schema is read back exactly.
+        assert Schema.from_json(Schema.to_json(back)) == {:ok, back}
+      end
+    end
+  end
+
+  # Generated valid schemas: names, types and the keys each type takes.
+  defp schema_fields do
+    name = map(string(:alphanumeric, min_length: 1, max_length: 6), &("f" <> &1))
+
+    state =
+      one_of([
+        string(:alphanumeric, min_length: 1, max_length: 4),
+        member_of([:a, :b, :c]),
+        integer(0..9)
+      ])
+
+    description =
+      one_of([
+        fixed_map(%{type: constant(:time)}),
+        map(
+          {member_of(["s", "ms", "By", "%", nil]),
+           member_of([:higher_is_better, :lower_is_better, :neutral]), float()},
+          fn {unit, polarity, target} ->
+            %{type: :number, polarity: polarity, target: target}
+            |> then(&if(unit, do: Map.put(&1, :unit, unit), else: &1))
+          end
+        ),
+        map(
+          uniq_list_of(state, min_length: 1, max_length: 4, uniq_fun: &to_string/1),
+          fn states ->
+            %{type: :category, order: states, values: states, label: "States"}
+          end
+        ),
+        fixed_map(%{type: constant(:text), identity: boolean()}),
+        fixed_map(%{type: constant(:point), continuity: float(min: 0.1, max: 100.0)})
+      ])
+
+    map_of(name, description, max_length: 5)
+  end
+end

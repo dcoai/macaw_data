@@ -20,6 +20,11 @@ stages:
   variables:
     MIX_ENV: test
   before_script:
+    # macaw_layers is a git dependency, fetched over HTTPS with this job's token: the image
+    # has no git, and the SSH URL in mix.exs needs a key CI lacks. macaw_layers allowlists
+    # this project's job token.
+    - apt-get update -qq && apt-get install -y -qq --no-install-recommends git ca-certificates > /dev/null
+    - git config --global url."https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.conet.yarina.org/".insteadOf "git@gitlab.conet.yarina.org:"
     - mix local.hex --force
     - mix local.rebar --force
     # Compiled dependencies come from the group's depdep store (scripts/depdep.exs,
