@@ -474,15 +474,37 @@ a delivery names the schema's version, never the schema; its origin is the sourc
 
 ## 4. Push {#sources-push}
 
-<!-- surfex: deferred #111: push is built in its own work item -->
+Push is optional and declared (`:push` in `supports`). A pushing source implements `subscribe(source, pid)`, answering `{:ok, ref}`, and `unsubscribe(source, ref)` (§2); `Macaw.Data.Source.subscribe/2` answers `{:error, :no_push}` for a source that doesn't. It sends the subscriber two messages, both tagged with that reference (`Macaw.Data.Source.Push.schema_message/2`, `delivery_message/2`):
 
-Push is optional and declared:
-- the subscribe handshake sends the schema first;
-- a pushed delivery is an increment, merged by the window field;
-- pushes between two pulses are coalesced;
-- an unknown schema version falls back to `describe`.
+```
+{:macaw_source, ref, {:schema, schema}}      first, and again whenever the schema changes
+{:macaw_source, ref, {:delivery, delivery}}  an increment: the rows new since the last
+```
 
-(visualize.md C1; metresis.md C1.)
+The subscriber holds a `Macaw.Data.Source.Push`, a value, not a process: `receive/2` takes each message, `:ignore` for one not under its reference; `drain/2` merges what is buffered; `held/1` is the delivery as it stands.
+
+- **The handshake sends the schema first,** so an increment naming its version resolves from the cache without asking the source.
+- **A pushed delivery is an increment, merged by the window field.** Its rows after what is held are appended; its late rows, at or before that, are kept unless the very row is held already; the rows stay ordered by the window field, and the served window grows to cover them. A schema with no window field keeps the newest `limit` rows (100 000), marking the delivery `capped` when it drops any.
+- **Pushes between two pulses are coalesced:** they buffer, and one `drain/2` merges them all in the order received, whatever the push rate.
+- **An unknown schema version falls back to `describe`,** asked once through `Macaw.Data.Schema.Cache.resolve/4` and cached. An increment whose version can't be resolved is dropped and its reason kept in `errors`.
+
+(visualize.md C1; metresis.md C1. The merge is visualize's `Visualize.Feed.Monitor`'s, whose message tag was `:visualize_feed`.)
+
+```test:push-handshake
+a subscription's schema message arrives first and is cached, so its increments drain without describe; a message under another reference, or of another shape, is ignored
+```
+
+```test:push-unknown-version
+an increment naming an uncached version asks describe once and caches it; a version describe cannot answer drops the increment and keeps the reason
+```
+
+```test:push-merge
+increments merge by the window field, newer appended, late placed, a held row not added twice, the served window grown; with no window field the newest rows to the limit, capped; for any split and any repeat, each row once in time order
+```
+
+```test:push-coalesce
+fifty pushes buffer without a merge, and one drain merges them all in order
+```
 
 ## 5. Change notification {#sources-change}
 
