@@ -288,41 +288,117 @@ a cached version costs nothing, an unknown one calls describe once and is cached
 
 ## 2. The contract {#sources-contract}
 
-<!-- surfex: deferred #58: the source contract, order-of-work step 4 -->
+**`Macaw.Data.Source` is the behavior** every source implements: a struct whose module answers
 
 ```elixir
-@callback describe(source, context) ::
-  {:ok, %Description{
-     schema:   Data.Schema.t(),
-     params:   %{String.t() => parameter},   # parameters, as macaw_compose spec 05 §1.1 defines them
-     supports: [:window | :box | :latest | :budget | :push | :as_of],
-     reveals:  Disclosure.t(),
-     viewer_independent: boolean()          # default false; see §6
-   }} | {:error, reason}
-
-@callback fetch(source, %Request{
-     params:  %{String.t() => term},   # validated against the description's params before the call
-     window:  nil | window | box,      # meaningful only when the schema has a window field
-     budget:  nil | pos_integer,       # rows
-     as_of:   nil | DateTime.t(),      # only if supports :as_of
-     viewer:  Viewer.t(),              # never stored
-     now:     DateTime.t()             # given by the surface; a source never reads a clock
-   }) ::
-  {:ok, %Delivery{table, schema, served, origin}} | {:error, reason}
-
-@optional_callbacks subscribe: 2, unsubscribe: 2
+@callback describe(source, context) :: {:ok, %Source.Description{}} | {:error, reason}
+@callback fetch(source, %Source.Request{}) :: {:ok, %Delivery{}} | {:error, reason}
+@callback subscribe(source, pid) :: {:ok, reference} | {:error, reason}   # optional, §4
+@callback unsubscribe(source, reference) :: :ok                            # optional, §4
 ```
 
-- **`describe/2`** takes the host's configuration for the source as its `context`, **never a viewer**: what a source is doesn't depend on who asks. So it is answered at boot and cached until the source's schema version changes, and validation reads it without I/O ([macaw_compose 07](https://gitlab.conet.yarina.org/dco-tek/macaw_compose/-/blob/main/spec/07-documents.md#documents-validation-time)).
-- **`params`** are **parameters** ([macaw_compose 05](https://gitlab.conet.yarina.org/dco-tek/macaw_compose/-/blob/main/spec/05-components.md#components-parameters)), the one shape for every typed option, with the same type vocabulary as `Data.Schema` and **legal values**. For example, metresis's aggregation is a category whose values are `legal(metric)`, so no consumer can ask for an aggregation the type forbids. (metresis.md C1.)
-- **`supports`:** every capability is optional. Macaw finishes a window, box, latest or budget that the source did not honor, and reports it. (visualize.md C1, D-140.)
-- **Window-less sources are allowed** (thresholds, projects, fragments). (metresis.md C1; dcotek_web.md C1.)
-- **The budget never widens the window.** A source may refuse to split a bucket's keys, delivering nothing rather than a partial distribution. (metresis.md C1.)
-- **`reveals`** declares what a result tells about the data or the viewer. Hosts generate disclosure from it, and from nothing else. (dcotek_web.md C12.)
-- **`viewer_independent`** declares that the source answers every viewer the same. It only allows pooling across viewers (§6), which fetches with the anonymous viewer, so a wrong declaration shows everyone the anonymous answer and never one person's rows to another.
-- **The viewer is an argument, not a setting.** A source may refuse, filter or tease by it. Macaw never writes a viewer to a document, delivery or record. (dcotek_web.md C11; visualize.md C11.)
-- **Preferences are state, not part of the viewer.** A viewer's display preferences (`theme`, `zone`, `units`) are state sources ([macaw_compose 03](https://gitlab.conet.yarina.org/dco-tek/macaw_compose/-/blob/main/spec/03-state.md#state-sources)), persisted like any other state and passed to components in their context. The viewer argument carries identity and access only.
+- **`describe/2`** takes the host's configuration for the source as its `context`, **never a viewer**: what a source is doesn't depend on who asks. So it is answered at boot and cached until the source's schema version changes (§1.12), and validation reads it without I/O ([macaw_compose 07](https://gitlab.conet.yarina.org/dco-tek/macaw_compose/-/blob/main/spec/07-documents.md#documents-validation-time)).
+- **The dispatch functions** (`Source.describe/2`, `fetch/3`, `subscribe/2`, `unsubscribe/2`) call a source's module. An answer of the wrong shape is a value too: `{:error, {:bad_describe, answer}}` or `{:error, {:bad_fetch, answer}}`.
+- **`fetch/3` checks the request against the description first** (§2.2): a request with an unknown, missing or illegal parameter is `{:error, {:params, faults}}`, and the source is never called. The source receives every parameter, defaults filled in.
+- **`subscribe/2` on a source that does not push** is `{:error, :no_push}`, and `unsubscribe/2` on one is `:ok`.
+- **`describer/1`** turns a map of named sources, each with its context, into the describe function `Schema.Cache.resolve/4` takes; a name not in the map is `{:error, :no_source}`.
 - **Errors are values.** A source never raises. (visualize.md C1; metresis.md C1.)
+- **The viewer is an argument, not a setting.** A source may refuse, filter or tease by it. Macaw never writes a viewer to a document, delivery or record. (dcotek_web.md C11; visualize.md C11.)
+- **Preferences are state, not part of the viewer.** A viewer's display preferences (`theme`, `zone`, `units`) are state sources ([macaw_compose 03](https://gitlab.conet.yarina.org/dco-tek/macaw_compose/-/blob/main/spec/03-state.md#state-sources)), persisted like any other state and passed to components in their context. The viewer carries identity and access only.
+
+It is a strict superset of visualize's `Visualize.Feed`: an existing feed is a source with no parameters. visualize's `describe/1` answered `{version, schema, supports}` and `fetch/3` took a window and a budget; adapting a feed is visualize's (#112).
+
+```test:contract-describe
+describe/2 answers a description from the host's context, a malformed answer is the bad_describe value, and the capabilities are the seven in order
+```
+
+```test:contract-fetch
+fetch/3 refuses bad parameters without calling the source, fills defaults for the source, honors the reference source's window and parameter, and a malformed answer is the bad_fetch value
+```
+
+```test:contract-push-dispatch
+subscribe/2 reaches a pushing source and is no_push for one that does not; unsubscribe/2 is :ok for both
+```
+
+```test:contract-describer
+describer/1 answers a named source's schema, no_source for an unknown name, and serves Schema.Cache.resolve/4
+```
+
+### 2.1 The description {#sources-description}
+
+`%Macaw.Data.Source.Description{schema, params, supports, viewer_independent}`, built by `new/1`, which reports every fault at once by path:
+- **`schema`**, required, a `Macaw.Data.Schema` (§1.2).
+- **`params`**: the parameters the source takes, by name, each a parameter (§2.2); `%{}` by default. A name is a non-empty string.
+- **`supports`**: the capabilities it honors, distinct, among `:window`, `:box`, `:region`, `:latest`, `:budget`, `:push` and `:as_of`; `[]` by default. **Every capability is optional:** Macaw finishes a window, box, region, latest or budget the source did not honor, and reports it (§2.4). (visualize.md C1, D-140.)
+- **`viewer_independent`**: `true` declares that the source answers every viewer the same. It only allows pooling across viewers (§6), which fetches with the anonymous viewer, so a wrong declaration shows everyone the anonymous answer and never one person's rows to another. The conformance kit checks it by asking two viewers. `false` by default.
+
+There is no other key: the earlier `reveals`, a declaration of what a result tells about the viewer for a page's privacy note, was removed (the owner's decision, 2026-10-27): a page notice of what it shows had no use case, and viewer dependence is what `viewer_independent` and the kit already check.
+
+- **Window-less sources are allowed** (thresholds, projects, fragments). (metresis.md C1; dcotek_web.md C1.)
+
+```test:contract-description
+a description defaults its parameters, capabilities and independence, and refuses a bad name, a bad parameter, a non-list of capabilities, a non-boolean independence, an unknown key such as reveals, and a missing schema
+```
+
+### 2.2 Parameters {#sources-parameters}
+
+**A parameter is the one shape for every typed option,** a source's or a component's: `Macaw.Data.Parameter`. macaw_data owns it (the owner's decision, 2026-10-27), since sources take parameters before any component exists; macaw_compose's components use the same shape ([macaw_compose 05 §1.1](https://gitlab.conet.yarina.org/dco-tek/macaw_compose/-/blob/main/spec/05-components.md#components-parameters)).
+
+```elixir
+%{type: type,                           # required
+  default: value,                       # absent: the parameter is required
+  values: [value] | nil,                # a closed list of legal values
+  legal_for: {slot, field, fact} | nil, # legal values follow from a bound slot's schema
+  bindable: false,                      # may it be bound to state? closed by default
+  doc: "…"}
+```
+
+- **Types:** a data-model type (`:time`, `:number`, `:category`, `:text`, `:color`, `:point`), `{:document, type}` for a nested document of a document type, or `:term`, a value its owner validates, only for options migrated from untyped forms. `conforms?/2` says whether a value is of a type: a `DateTime`, a number, a string or non-boolean atom or number, a string, a data color (§1.7), a `{longitude, latitude}` in range, a map, or anything for `:term`; `nil` is a value only of `:term`.
+- **`check/1`** reports every fault of a declaration, by path: the type required and known; the default and each of the values of the type; the default among the values when both are given; `legal_for` a `{slot, field, fact}`; `bindable` a boolean; `doc` a string; no other key. `keys/0` is the six keys.
+- **`validate/2`** checks given values against a map of parameters by name, every fault at once: a name no parameter has is `:unknown_param`, a missing parameter with no default `:required`, a value not of its type `{:type, type}`, one outside its values `{:enum, values}`. It answers the values with every missing parameter's default filled in.
+- **Legal values may come from the type.** metresis's aggregation is a category whose values are `legal(metric)`, so no consumer can ask for an aggregation the type forbids; `legal_for` names where such values come from, which the runtime that binds slots resolves. (metresis.md C1.)
+
+```test:params-shape
+a declaration of every type, and one with every key, passes; every fault of a bad one is reported at once by path; no type, an unknown type, a non-map and empty values are refused
+```
+
+```test:params-types
+values conform to their types and to nothing else: times, numbers, categories, text, data colors, points in range, documents and terms; nil only to a term
+```
+
+```test:params-validate
+given values are checked by name, every fault at once, defaults filled in; a value in the closed values is accepted and any other refused by name, for generated values
+```
+
+### 2.3 The request {#sources-request}
+
+`%Macaw.Data.Source.Request{}`, built by `new/1`, `now` required, every fault at once by field:
+
+| Field | Value | Default |
+|---|---|---|
+| `params` | the parameters by name, checked before the call (§2.2) | `%{}` |
+| `window` | `[from, to]` over a `:time` or `:number` window field, either bound `nil` for open (§1.5) | `nil` |
+| `box` | `%{west, south, east, north}` over a `:point` window field, in degrees, latitudes −90 to 90 with `south` at most `north`, longitudes −180 to 180, `west` east of `east` crossing the antimeridian (`box?/1`) | `nil` |
+| `region` | ranges over named `:time` or `:number` fields, `%{field => [from, to]}` | `nil` |
+| `latest` | `true` asks for each identity's latest row (§1.4) | `false` |
+| `budget` | the most rows the reader wants, a positive integer | `nil` |
+| `as_of` | the `DateTime` the answer is as of, for a source supporting `:as_of` | `nil` |
+| `viewer` | the host's viewer, **opaque** here: passed to the source, never stored or inspected; `nil` is the anonymous viewer | `nil` |
+| `now` | the instant, given by the surface: a source never reads a clock (§6) | required |
+
+`region` keeps visualize's region (ranges over several fields at once) beside the geographic `box`, so a region-supporting `Visualize.Feed` has an equivalent, and `latest` asks for what `supports: [:latest]` honors; both are the owner's decisions of 2026-10-27.
+
+- **The budget never widens the window.** A source may refuse to split a bucket's keys, delivering nothing rather than a partial distribution. (metresis.md C1.)
+
+```test:contract-request
+a request carries every axis with its defaults; every fault of a bad window, box, region range, latest, budget, as_of, now and an unknown key is reported at once; an empty region is refused
+```
+
+### 2.4 Finishing {#sources-finishing}
+
+<!-- surfex: deferred #110: finishing is built in its own work item -->
+
+Macaw finishes a window, box, region, latest or budget that the source did not honor, and reports it in the delivery's `served` (§3), `reduced_by: :runtime` for a budget it reduced.
 
 ## 3. Deliveries {#sources-delivery}
 

@@ -36,6 +36,7 @@ defmodule Macaw.Data.Delivery do
 
   """
 
+  alias Macaw.Data.Source.Request
   alias Macaw.Data.Table
 
   @enforce_keys [:table, :served]
@@ -127,11 +128,12 @@ defmodule Macaw.Data.Delivery do
   defp check(:window, nil), do: :ok
   defp check(:window, [_from, _to]), do: :ok
 
-  defp check(:window, %{west: w, south: s, east: e, north: n} = box)
-       when map_size(box) == 4 and is_number(w) and is_number(s) and is_number(e) and
-              is_number(n) and s <= n and s >= -90 and n <= 90 and w >= -180 and w <= 180 and
-              e >= -180 and e <= 180,
-       do: :ok
+  defp check(:window, %{} = box) do
+    if Request.box?(box), do: :ok, else: check(:bad_window, box)
+  end
+
+  defp check(:bad_window, box),
+    do: raise(ArgumentError, "not a delivery's served window: #{inspect(box)} (spec/01 §3)")
 
   defp check(:resolution, _any), do: :ok
   defp check(:capped, capped) when is_boolean(capped), do: :ok
