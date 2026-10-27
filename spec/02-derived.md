@@ -457,8 +457,6 @@ the atom gate passes this library; it fails on an atom made from a string or an 
 
 ## 7. Host functions: `defsource` {#derived-functions}
 
-<!-- surfex: deferred #116: host functions -->
-
 A host writes a derived source's function as Elixir in its own module, tested with ExUnit:
 
 ```elixir
@@ -482,11 +480,11 @@ end
 - **Registered explicitly, default closed.** `Macaw.Data.Derived.Functions.registry(modules)` is the given modules' functions, `%{name => {module, arity}}`, keyed by the name's string; a module without `__derived__/0`, or a name two modules define, is an `ArgumentError`. **No application environment is read:** a function is callable only when its module is passed to the engine (`functions:`, §8.4). A source names its function by its string and finds it by spelling; one naming a function the registry does not hold is `{:undeclared, :function, name}` in context (§1.1).
 - **Versioning is git's** (visualize#643's review). A document names a host function; the code that runs is the host's current code, and its history is the host's repository's. A stored function travels with its document.
 
-```planned-test:derived-defsource
+```test:derived-defsource
 defsource defines a public function of one or two arguments, listed by __derived__ with its arity and its source text in definition order, a multi-clause function once; two arities of one name do not compile
 ```
 
-```planned-test:derived-registry
+```test:derived-registry
 the registry maps each function's name string to its module and arity from the modules given, and nothing else; a module without __derived__ and a name defined twice are refused
 ```
 
