@@ -16,7 +16,8 @@
   spec_classes: [
     {"orientation", "describes what macaw_data holds and its order of work; asserts nothing a test checks",
      files: ["spec/00-overview.md", "spec/README.md"]},
-    {"component-rule", "an obligation on the components that emit events; their own conformance kits verify it, not this library's tests"}
+    {"component-rule", "an obligation on the components that emit events; their own conformance kits verify it, not this library's tests"},
+    {"source-rule", "an obligation on a source's author about where a derivation belongs; nothing this library runs can check it"}
   ],
   # Units not built yet are deferred to their macaw_compose proposal (`<!-- surfex: deferred #N -->`);
   # `mix surfex.status --issues` asks macaw_compose whether it is still open.
