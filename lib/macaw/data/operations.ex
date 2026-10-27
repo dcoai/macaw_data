@@ -24,7 +24,7 @@ defmodule Macaw.Data.Operations do
       {:error, [{[0, "op"], {:unknown, :transform, "doubel"}}]}
   """
 
-  alias Macaw.Data.Operations.{Aggregates, Option, Registry}
+  alias Macaw.Data.Operations.{Aggregates, Option, Registry, Transforms}
   alias Macaw.Data.Table
 
   # The keys of the steps that name an aggregate, which an aggregate may not declare as
@@ -36,7 +36,7 @@ defmodule Macaw.Data.Operations do
 
   @doc "The modules of `macaw_data`'s package: its table operations and statistics."
   @spec __members__() :: [module()]
-  def __members__, do: Aggregates.all()
+  def __members__, do: Transforms.all() ++ Aggregates.all()
 
   @doc "The keys of the steps that name an aggregate, which an aggregate may not declare."
   @spec step_keys() :: [String.t()]
@@ -294,6 +294,26 @@ defmodule Macaw.Data.Operations do
       for {name, type} <- columns, do: {name, type, Enum.map(rows, &Table.get(&1, name))}
     )
   end
+
+  @doc """
+  Whether two readings are one value: equal, or an atom and a string spelling it, so a
+  category is one value whichever spelling a row or a node gives it (spec/04 §4.1).
+
+      iex> Macaw.Data.Operations.same?(:ok, "ok")
+      true
+      iex> Macaw.Data.Operations.same?(1, 1.0)
+      true
+      iex> Macaw.Data.Operations.same?(nil, "nil")
+      false
+  """
+  @spec same?(term(), term()) :: boolean()
+  def same?(a, b) when is_atom(a) and is_binary(b) and a not in [nil, true, false],
+    do: Atom.to_string(a) == b
+
+  def same?(a, b) when is_binary(a) and is_atom(b) and b not in [nil, true, false],
+    do: a == Atom.to_string(b)
+
+  def same?(a, b), do: a == b
 
   # -- words ------------------------------------------------------------------------------
 

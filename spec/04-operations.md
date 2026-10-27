@@ -165,9 +165,7 @@ a transform needing a frame runs with one and is refused without one; plot resol
 
 ## 4. Table operations {#operations-table}
 
-<!-- surfex: deferred #121: table operations I -->
-
-Each is a module of `macaw_data`'s package implementing §1.1, ported from visualize's `Chart.Transform.Data` (spec/14 §5.4.1) with its behavior and faults; every visualize test of the step is ported with it. **Rows are read with `Macaw.Data.Table.get/2`**, so a column is found by either spelling, and a column the rows lack reads `nil`, which the step treats as its section says. **A step that derives a row from a datum keeps the datum's columns** and adds its own. Each step's **outputs** are named in its section.
+Each is a module of `macaw_data`'s package implementing §1.1, ported from visualize's `Chart.Transform.Data` (spec/14 §5.4.1) with its behavior and faults; every visualize test of the step is ported with it. **Rows are read with `Macaw.Data.Table.get/2`**, so a column is found by either spelling, and a column the rows lack reads `nil`, which the step treats as its section says. **A step that derives a row from a datum keeps the datum's columns** and adds its own. Each step's **outputs** are named in its section. **Rows pass through a table:** `Table.from/2` reads them at the edge, so a row lacking a column another row has reads `nil` there, and a `Date`, a `NaiveDateTime` or an ISO 8601 string in a time column is a `DateTime` from then on, as everywhere a delivery carries one (01 §1.1). `Macaw.Data.Operations.Transforms.all/0` lists the operations, and the package also registers them.
 
 | Op | Options (`*` required) | Section |
 |---|---|---|
@@ -183,9 +181,11 @@ Each is a module of `macaw_data`'s package implementing §1.1, ported from visua
 | `aggregate`, `sum` | `field*`, `fn*` (`aggregate` only), `by`, `as` | §4.10 |
 | `spectrum` | `field*`, `time`, `every`, `samples`, `window`, `detrend`, `as` | §4.11 |
 
-### 4.1 filter {#operations-filter}
+```test:operations-table-package
+the table operations are macaw_data's transforms, in the table's order, each needing nothing and registered under its name; each one's outputs name the columns its run answers
+```
 
-<!-- surfex: deferred #121: table operations I -->
+### 4.1 filter {#operations-filter}
 
 `field` (`:field`, required); `test` (`{:enum, [:eq, :ne, :lt, :lte, :gt, :gte, :present, :absent]}`, `:present`); `value` (`:term`, `nil`). The rows, in order, whose reading of `field` passes the test against `value`:
 - `present` keeps a reading that is not `nil`, and `absent` one that is;
@@ -194,23 +194,19 @@ Each is a module of `macaw_data`'s package implementing §1.1, ported from visua
 
 The test is `test`, not `op`, because `op` names the step. A column the rows lack reads `nil`, so `filter(field: "height", test: :eq, value: 0)` after a hierarchy keeps its leaves. **Outputs:** the input's columns.
 
-```planned-test:operations-filter-tests
+```test:operations-filter-tests
 each test keeps exactly its rows in order: present and absent by nil, eq and ne by value with an atom equal to its string, the orderings by term order with nil never passing; a missing column reads nil
 ```
 
 ### 4.2 take {#operations-take}
 
-<!-- surfex: deferred #121: table operations I -->
-
 `n` (`{:integer, 0}`, required); `side` (`{:enum, [:end, :start]}`, `:end`). The last, or the first, `n` rows in order. An `n` at or above the row count is every row, and `n` of zero is none; a negative `n` is `{:type, {:integer, 0}}`. A design that shows the newest reading beside its history reads `take(n: 1)`. **Outputs:** the input's columns.
 
-```planned-test:operations-take-ends
+```test:operations-take-ends
 take keeps the last n rows by default and the first with side start; n at or above the count is every row, zero is none, and a negative n is refused
 ```
 
 ### 4.3 window {#operations-window}
-
-<!-- surfex: deferred #121: table operations I -->
 
 `field` (`:field`, required: a time column); `from` and `to` (`:duration`, `nil`), each a duration **ago** as `[n, unit]`, a unit the seconds it names: a `second` is 1, a `minute` 60, an `hour` 3,600, a `day` 86,400, a `week` 604,800 and a `year` 365 days, 31,536,000. A window is an extent of time, not a calendar walk. `latest` (`:boolean`, `false`).
 
@@ -227,17 +223,15 @@ So four windows of decreasing span partition a column exactly.
 
 **Outputs:** the input's columns.
 
-```planned-test:operations-window-spans
+```test:operations-window-spans
 a window selects [now - from, now - to): a given to is exclusive, an absent to closes at now inclusively, an absent from is open, so adjacent windows partition the rows; now is the context's or the newest reading; every reading form is read in seconds and any other raises; a bad unit is refused
 ```
 
-```planned-test:operations-window-latest
+```test:operations-window-latest
 latest keeps each declared identity's newest row in the window, the later on a tie, in order, dropping a nil identity; without a schema, or with one declaring no identity, it raises naming the step
 ```
 
 ### 4.4 lttb {#operations-lttb}
-
-<!-- surfex: deferred #121: table operations I -->
 
 `fields` (`{:pair, :field}`, required: `[x, y]`, the two columns a line reads); `n` (`{:integer, 3}`, frame-bound, required). **Shape-preserving downsampling** by Largest-Triangle-Three-Buckets (Steinarsson 2013), `Macaw.Data.Reduce.lttb/3` over the rows with the accessor reading `{x, y}`:
 - the first row, the last, and `n − 2` rows between that keep the line's visual area;
@@ -248,35 +242,29 @@ latest keeps each declared identity's newest row in the window, the later on a t
 
 **Outputs:** the input's columns. **Reducer:** `{"n", 1}`.
 
-```planned-test:operations-lttb-shape
+```test:operations-lttb-shape
 lttb keeps the ends and n - 2 rows between, whole, chosen as the reference algorithm chooses; n or fewer rows come back unchanged; gaps pass through with each run of gaps kept as its first row; time readings are seconds and a non-number y raises; n below 3 is refused
 ```
 
 ### 4.5 m4 {#operations-m4}
 
-<!-- surfex: deferred #121: table operations I -->
-
 `fields` (`{:pair, :field}`, required); `width` (`{:integer, 1}`, frame-bound, required). Per pixel column the **first, last, minimum and maximum** rows, `Macaw.Data.Reduce.m4/3` over the rows as `lttb` reads them, deduplicated and in input order. The columns split the extent of the defined `x` readings. When that is the drawn `x` domain, the reduced line **draws the same pixels as the unreduced one**: every column it crosses, with the same top, bottom, entry and exit, so a peak is never lost. It is the right choice where one must not be lost: an alert threshold, a heart-rate maximum. `width: "plot"` is what a design means nearly always; an integer is for one reduced for a size it knows. Gaps, readings, faults, whole rows and the cost are `lttb`'s.
 
 **Outputs:** the input's columns. **Reducer:** `{"width", 4}`.
 
-```planned-test:operations-m4-columns
+```test:operations-m4-columns
 m4 keeps each column's first, last, minimum and maximum rows, deduplicated in order, so every extreme survives; gaps, readings and faults are lttb's; width below 1 is refused
 ```
 
 ### 4.6 sort {#operations-sort}
 
-<!-- surfex: deferred #121: table operations I -->
-
 `field` (`:field`, required); `order` (`{:enum, [:ascending, :descending]}`, `:ascending`). The rows **stably** sorted by the reading of `field` under `Enum.sort_by/3`'s term ordering, in that direction. **Outputs:** the input's columns.
 
-```planned-test:operations-sort-stable
+```test:operations-sort-stable
 sort orders rows by the field ascending or descending under term order, keeping equal readings in their input order
 ```
 
 ### 4.7 fold {#operations-fold}
-
-<!-- surfex: deferred #121: table operations I -->
 
 `fields` (`{:list, :field}`, required); `as` (`{:pair, :name}`, `["key", "value"]`). Wide columns to long rows: **one output row per input row per listed column the row has**:
 - a listed column the rows lack is skipped, never a fault. That is how a design says "these, if they exist";
@@ -287,7 +275,7 @@ sort orders rows by the field ascending or descending under term order, keeping 
 
 **Outputs:** the input's columns without the folded ones, then `as`'s two: the key a `:category`, the value the folded columns' type when they share one, else `:term`.
 
-```planned-test:operations-fold-long
+```test:operations-fold-long
 fold makes one row per input row per listed column it has, in row then field order, carrying the other columns, skipping a missing column and a nil reading, under the as names
 ```
 
@@ -340,8 +328,6 @@ bin splits the extent into n equal bins or at the given thresholds, each reading
 
 ### 4.10 aggregate and sum {#operations-group}
 
-<!-- surfex: deferred #121: table operations I -->
-
 `aggregate`: `field` (`{:one_of, [:field, {:pair, :field}]}`, required); `fn` (`:aggregate`, required) and the named aggregate's options; `by` (`{:one_of, [:field, {:list, :field}]}`, `nil`); `as` (`:name`, the aggregate's name).
 - **Groups:** one row per distinct value of `by` (a list of fields groups by every one), in order of first appearance, a `nil` value a group of its own. The row holds `by`'s columns and, under `as`, the aggregate of the group's readings of `field`, `nil`s dropped. Without `by`, one row holds `as` alone.
 - **A pair field** `[x, y]` reads each row as the point `[x, y]` for an aggregate that reads points (`slope`, §5), `x` in seconds when it is a time. A row whose `x` or `y` is `nil` is dropped.
@@ -350,7 +336,7 @@ bin splits the extent into n equal bins or at the given thresholds, each reading
 
 **Outputs:** `by`'s columns with their input types, then `as` of the aggregate's output type.
 
-```planned-test:operations-group-rows
+```test:operations-group-rows
 aggregate makes one row per distinct by value in order of first appearance, or one row without by, holding the named aggregate of the group's non-nil readings; a pair field reads points; sum equals aggregate with fn sum
 ```
 
