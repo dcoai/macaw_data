@@ -9,7 +9,8 @@ defmodule Macaw.Data.EventTest do
   defp valid(extra \\ %{}),
     do: Map.merge(%{name: "pick", instance: "cell-1", initiator: :visitor, time: @now}, extra)
 
-  test "the fields are spec 02 §8's, in its order" do
+  @tag verifies: "event-fields"
+  test "the fields are the ten the spec lists, in its order" do
     assert Event.fields() ==
              [
                :name,
@@ -28,6 +29,64 @@ defmodule Macaw.Data.EventTest do
              Enum.sort(Event.fields())
   end
 
+  @tag verifies: "sources-event"
+  test "one struct for every component: built, shaped as the section shows, and recorded without data" do
+    {:ok, event} =
+      Event.new(
+        name: "pick",
+        instance: "cell-1",
+        initiator: :visitor,
+        time: @now,
+        element: %{item: "bar-3", path: ["bar-3"]},
+        identity: %{"service" => "api"},
+        value: :chosen,
+        point: {12, 34},
+        modifiers: [:shift],
+        row: %{"latency" => 12}
+      )
+
+    assert %Event{} = event
+    assert event |> Map.from_struct() |> Map.keys() |> Enum.sort() == Enum.sort(Event.fields())
+
+    assert Event.recordable(event) == %{
+             name: "pick",
+             instance: "cell-1",
+             element: %{frame: nil, item: "bar-3", path: ["bar-3"]},
+             identity: %{"service" => "api"},
+             value: :chosen,
+             initiator: :visitor,
+             time: @now,
+             modifiers: [:shift]
+           }
+  end
+
+  @tag verifies: "event-struct"
+  test "the four required fields are enforced and the rest default as the spec lists" do
+    assert_raise ArgumentError, ~r/the following keys must also be given/, fn ->
+      struct!(Event, %{name: "pick"})
+    end
+
+    event = struct!(Event, %{name: "pick", instance: "i", initiator: :visitor, time: @now})
+
+    assert Map.take(Map.from_struct(event), [
+             :element,
+             :modifiers,
+             :identity,
+             :value,
+             :point,
+             :row
+           ]) ==
+             %{
+               element: %{frame: nil, item: nil, path: []},
+               modifiers: [],
+               identity: nil,
+               value: nil,
+               point: nil,
+               row: nil
+             }
+  end
+
+  @tag verifies: "event-new-defaults"
   test "new/1 builds a full event, defaulting element, modifiers and the optional fields" do
     assert {:ok, %Event{} = e} =
              Event.new(valid(%{identity: %{"service" => "api"}, row: %{"latency" => 12}}))
@@ -48,6 +107,7 @@ defmodule Macaw.Data.EventTest do
     assert e.element == %{frame: nil, item: "bar-3", path: ["bar-3", "frame"]}
   end
 
+  @tag verifies: "event-new-faults"
   test "new/1 names every bad field at once, unknown fields included" do
     assert {:error, faults} =
              Event.new(%{
@@ -79,6 +139,7 @@ defmodule Macaw.Data.EventTest do
     assert faults[:initiator] == "must be :visitor or :system"
   end
 
+  @tag verifies: "event-recordable"
   test "the recorded form drops the row and the point, and keeps the rest" do
     {:ok, e} =
       Event.new(
@@ -93,6 +154,7 @@ defmodule Macaw.Data.EventTest do
     assert Map.keys(r) |> Enum.sort() == Enum.sort(Event.fields() -- [:row, :point])
   end
 
+  @tag verifies: "event-recordable-no-row"
   property "no row value or point ever survives into the recorded form" do
     check all(
             row <- map_of(string(:alphanumeric, min_length: 1), string(:printable, min_length: 8)),
@@ -108,6 +170,7 @@ defmodule Macaw.Data.EventTest do
     end
   end
 
+  @tag verifies: "event-new-valid"
   property "every well-formed event is accepted" do
     check all(
             name <- string(:alphanumeric, min_length: 1),

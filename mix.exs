@@ -19,5 +19,11 @@ defmodule Macaw.Data.MixProject do
 
   def application, do: [extra_applications: [:logger]]
 
-  defp deps, do: [{:stream_data, "~> 1.1", only: :test}]
+  defp deps do
+    [
+      {:stream_data, "~> 1.1", only: :test},
+      # Spec, tests and code kept aligned (macaw_compose spec/00 §4.1); dev/test only.
+      {:surfex, "~> 0.10.0", only: [:dev, :test], runtime: false}
+    ]
+  end
 end

@@ -1,8 +1,12 @@
 # 02 — Derived sources {#derived}
 
+<!-- surfex: deferred #82: derived sources, order-of-work step 5 -->
+
 A **derived source** (visualize's *virtual source*) is computed from other sources by a function. Macaw adopts visualize's design whole; it is the most developed part of the three projects (visualize.md C2).
 
 ## 1. The model {#derived-model}
+
+<!-- surfex: deferred #82: derived sources, order-of-work step 5 -->
 
 - **A derived source is data:** `%{id, from: [{name, window}], schema, body, per}`. It contains no function value, and has map and JSON forms.
   - `from` names its inputs, each with the window it reads them at;
@@ -32,6 +36,8 @@ A **derived source** (visualize's *virtual source*) is computed from other sourc
 
 ### Gates that ship with the sandbox {#derived-gates}
 
+<!-- surfex: deferred #82: the sandbox and its gates, step 5 -->
+
 The sandbox is the one place in the family that runs untrusted code, so it never loses a check in transit. When it moves from visualize to `macaw_data` (macaw_compose#28), it brings, and its CI runs:
 - **the checker's allowlist tests:** every refused construct above, refused by name and line;
 - **the reductions budget and the separate liveness bound,** each tested by a function that exceeds it (visualize#856, #857);
@@ -42,15 +48,21 @@ Until `macaw_data` passes all of them, adopters keep their own sandbox.
 
 ## 2. Inputs {#derived-inputs}
 
+<!-- surfex: deferred #82: derived sources, order-of-work step 5 -->
+
 Inputs are **sources, by name**: anything that satisfies the source contract ([01](01-sources.md#sources-contract)). That covers feeds and other derived sources, and, on a Macaw page, state sources and exports, which `macaw_compose` makes satisfy the contract ([macaw_compose 03](https://gitlab.conet.yarina.org/dco-tek/macaw_compose/-/blob/main/spec/03-state.md#state-sources)). `macaw_data` knows nothing of pages; it sees named sources.
 
 The function may take all of a scope's inputs together. metresis's series naming is computed once over every metric's feed. (metresis.md C2.)
 
 ## 3. Scoping {#derived-scoping}
 
+<!-- surfex: deferred #82: derived sources, order-of-work step 5 -->
+
 A derived source is defined at a scope: the page, a surface, a container or a cell. Names resolve from the inside out, so an inner definition shadows an outer one. Cycles are refused with the cycle named ([macaw_compose 03](https://gitlab.conet.yarina.org/dco-tek/macaw_compose/-/blob/main/spec/03-state.md#state-dag)).
 
 ## 4. What stays in the source {#derived-database}
+
+<!-- surfex: deferred #82: derived sources, order-of-work step 5 -->
 
 Derivations that need raw rows or the store stay **inside the source**, never in a derived source:
 - counter-reset-aware deltas;
@@ -61,6 +73,8 @@ Derivations that need raw rows or the store stay **inside the source**, never in
 (metresis.md C2.)
 
 ## 5. Transforms and aggregates {#derived-operations}
+
+<!-- surfex: deferred #83: transforms and aggregates, step 6 -->
 
 The operations a visualize design applies to its data and the operations a derived source may call are **the same code**, in `macaw_data` beside derived sources (macaw_compose#22, decision 11):
 - **the transform behavior,** with the table operations: filter, sort, take, fold, sum, bin, stack, window, lttb, m4 and spectrum;

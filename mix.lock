@@ -1,3 +1,4 @@
 %{
   "stream_data": {:hex, :stream_data, "1.4.0", "026f929db613aabea6208012ae9b8970d3fd5f88b3bdf26831bc536f98c42036", [:mix], [], "hexpm", "2b0ee3a340dcce1c8cf6302a763ee757d1e01c54d6e16d9069062509d68b1dc9"},
+  "surfex": {:hex, :surfex, "0.10.0", "2e7305af9cfe8f705436e64ae813dbec8097ab75b0023f2ac8a2e0e5663bc4bc", [:mix], [], "hexpm", "52cdb3f228e0af54cf4a59553e5a27947c7cb8760a2fe57bee0373d267dc5739"},
 }
