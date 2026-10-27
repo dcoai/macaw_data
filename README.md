@@ -1,6 +1,6 @@
 # macaw_data
 
-Macaw's data layer (spec/00 §4): the interaction event, the data model and the source contract with its conformance kit; derived sources as the order of work reaches them (spec/00 §5, dco-tek/macaw_compose#55–#58).
+Macaw's data layer (spec/00 §4): the interaction event, the data model, the source contract with its conformance kit, and derived sources; transforms and aggregates as the order of work reaches them (spec/00 §5, dco-tek/macaw_compose#55–#58, #82).
 
 | Module | What it is |
 |---|---|
@@ -11,6 +11,9 @@ Macaw's data layer (spec/00 §4): the interaction event, the data model and the 
 | `Macaw.Data.Source.Finish`, `Macaw.Data.Window`, `Macaw.Data.Reduce` | finishing what a source did not honor: window, box, region, latest and budget (LTTB, M4), only ever removing rows; the host ceiling and pooled budgets ([spec/01 §2.4, §6.1](spec/01-sources.md#sources-finishing)) |
 | `Macaw.Data.Source.Push` | one push subscription as a value: the schema first, increments merged by the window field, pushes coalesced per pulse ([spec/01 §4](spec/01-sources.md#sources-push)) |
 | `Macaw.Data.Source.Conformance`, `Macaw.Data.Bounded` | the conformance kit every source runs: eight checks as findings or as ExUnit tests, each callback isolated and judged by reductions ([spec/01 §9](spec/01-sources.md#sources-conformance)) |
+| `Macaw.Data.Derived`, `Macaw.Data.Derived.Context`, `Macaw.Data.Derived.Join` | derived sources: computed from other sources by a stored or host function, as data, with their forms, conformance, per-identity batches, joined fields and scoping ([spec/02 §1–§3](spec/02-derived.md#derived-model)) |
+| `Macaw.Data.Derived.Sandbox` | the checker, allowlist, compile-once cache and bounded runner every derived source's function runs in, with its gates, the atom gate among them ([spec/02 §6](spec/02-derived.md#derived-sandbox)) |
+| `Macaw.Data.Derived.Functions`, `Macaw.Data.Derived.Engine`, `Macaw.Data.Derived.Output` | host functions (`defsource`, an explicit registry), the engine that pulses derived sources, and a derived source read as a source ([spec/02 §7–§8](spec/02-derived.md#derived-functions)) |
 | `Macaw.Data.Table` | columnar typed data: packed number and time columns off the heap, gaps kept; every source shape read at the edge ([spec/01 §1.1](spec/01-sources.md#sources-table)) |
 | `Macaw.Data.Unit` | units named by their UCUM codes, with aliases, the ISO 4217 currency extension, display symbols and exact conversion ([spec/03 §1–§7](spec/03-units.md#units-codes)) |
 | `Macaw.Data.Quantity` | the fixed list of quantities and their facts: kind, bounds, additivity, families, conventions and unit systems; the measure; the label rule ([spec/03 §8–§14](spec/03-units.md#quantities)) |
@@ -18,7 +21,7 @@ Macaw's data layer (spec/00 §4): the interaction event, the data model and the 
 Depends on `macaw_layers` (the document kernel); `table` and `nx` are optional, for reading their sources into a table. Released by git tag:
 
 ```elixir
-{:macaw_data, git: "git@gitlab.conet.yarina.org:dco-tek/macaw_data.git", tag: "v0.3.0"}
+{:macaw_data, git: "git@gitlab.conet.yarina.org:dco-tek/macaw_data.git", tag: "v0.4.0"}
 ```
 
 Part of [Macaw](https://gitlab.conet.yarina.org/dco-tek/macaw_compose).

@@ -190,7 +190,11 @@ defmodule Macaw.Data.Derived.Sandbox do
     end
   end
 
-  defp tightened!(opts) do
+  @doc false
+  # Every bound given at most its default, else `ArgumentError` (spec/02 §6.4); the
+  # engine checks its options with it when it is defined.
+  @spec tightened!(keyword()) :: keyword()
+  def tightened!(opts) do
     for {key, ceiling} <- @bounds, Keyword.has_key?(opts, key) do
       case Keyword.fetch!(opts, key) do
         n when is_integer(n) and n > 0 and n <= ceiling ->

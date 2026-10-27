@@ -19,8 +19,6 @@ The function is Elixir, never a language of this library's own: either a `defsou
 | `Macaw.Data.Derived.Functions` | a host's functions, `defsource` and the registry (§7) |
 | `Macaw.Data.Derived.Engine`, `.Output` | where derived sources run, and a derived source's answer as a source (§8) |
 
-Each section's tests are written as **`planned-test:` blocks** until its work item is built (macaw_compose#114–#117). A planned test is a test hint whose code doesn't exist yet: surfex judges every `test:` hint and can't defer one, so each becomes a `test:` hint, unchanged, in the change that implements it.
-
 ## 1. The model {#derived-model}
 
 A derived source is **data**: a struct with no function in it, its function a name or a source text, so a document holds it and its forms write it (§1.5).
@@ -490,13 +488,9 @@ the registry maps each function's name string to its module and arity from the m
 
 ## 8. The engine {#derived-engine}
 
-<!-- surfex: deferred #117: the engine -->
-
 A derived source runs **where its inputs are fetched**, once, and its result is shared by every reader: a trend over twenty values is computed once, not in five places (visualize#643). `Macaw.Data.Derived.Engine` is the engine, a **value** its owner holds and calls from its own callbacks, as a `Macaw.Data.Source.Push` is held ([01 §4](01-sources.md#sources-push)): one owner, and no second process between the owner and its sources' rows. On a Macaw page the owner is `macaw_compose`'s runtime.
 
 ### 8.1 Defining: references, cycles, ranks {#derived-engine-define}
-
-<!-- surfex: deferred #117: the engine -->
 
 `Engine.new(sources, opts)` takes the derived sources by path (§3) and defines them in three steps, each over all of them. A set that fails any step is not defined: `{:error, faults}`, each `{path, at, reason}`.
 
@@ -506,13 +500,11 @@ A derived source runs **where its inputs are fetched**, once, and its result is 
 
 Each stored function is compiled once into the engine's cache (§6.3) when it is defined.
 
-```planned-test:derived-engine-defines
+```test:derived-engine-defines
 a set of derived sources is defined with every input resolved and ranks assigned; an unknown input, an undeclared function and a cycle (named) each refuse the whole set at their path
 ```
 
 ### 8.2 Pulses {#derived-engine-pulse}
-
-<!-- surfex: deferred #117: the engine -->
 
 **A pulse is the unit of recompute** (visualize#643, settled questions 4 and 11). `Engine.push(engine, deliveries, schemas, now)` shows the engine its sources' latest deliveries and schemas, by name. A source whose delivery is not the one the engine last saw has **changed**, and every derived source that reads it is marked. The first mark after a pulse makes the next pulse **due** `debounce:` milliseconds after `now` (`0`: due at once), so changes within it, from any number of pushes and sources, are one pulse. `now` is the owner's monotonic milliseconds: the engine never reads a clock. `Engine.run(engine, now)` runs a due pulse:
 
@@ -524,23 +516,19 @@ a set of derived sources is defined with every input resolved and ranks assigned
 
 The engine is unchanged when no pulse is due. A test sets `debounce: 0`, so a pulse is in the same `run/2` as the change, and nothing waits on a clock.
 
-```planned-test:derived-engine-pulses
+```test:derived-engine-pulses
 a changed input marks its readers and a pulse is due after the debounce; a pulse runs marked sources in rank order, each once, a downstream source only when its input's answer changed; a source whose input has no delivery stays loading; nothing runs when no pulse is due
 ```
 
 ### 8.3 Faults {#derived-engine-faults}
 
-<!-- surfex: deferred #117: the engine -->
-
 A source's call is one bounded call (§6.4), with the engine's bounds. **When it fails, the source keeps its last good output, and the pulse does not propagate past it**: the sources that read it are not marked by it (visualize#643, settled question 4). Its state is `{:down, {:derived, id, kind}}`, `kind` one of §6.4's six. Its readers draw its last output as `stale`, worded with the kind ([macaw_compose 05](https://gitlab.conet.yarina.org/dco-tek/macaw_compose/-/blob/main/spec/05-components.md#components-states)). The fault's **detail** (the checker's faults, the limit, the exception's module, the index and field of a nonconforming answer) never holds a value of the rows nor of a context. The next pulse that marks the source runs it again; a good answer clears the fault.
 
-```planned-test:derived-engine-fault-kept
+```test:derived-engine-fault-kept
 a failing source keeps its last good output, is down with its kind, and does not mark its readers; its detail holds no value; the next good answer clears it
 ```
 
 ### 8.4 The options and the functions {#derived-engine-api}
-
-<!-- surfex: deferred #117: the engine -->
 
 | Option of `new/2` | Default | Meaning |
 |---|---|---|
@@ -564,13 +552,11 @@ a failing source keeps its last good output, is down with its kind, and does not
 | `Engine.faults/1` | every failing source's fault by path, `%{kind: kind, detail: detail}` |
 | `Engine.runs/1` | how many times each source has run, by path |
 
-```planned-test:derived-engine-run
+```test:derived-engine-run
 an engine run end to end answers each source's output as a delivery naming its schema's version, its schema, its state, its fault and its run count by path; resolve names a derived source or a source from a scope; sources_read lists the sources read
 ```
 
 ### 8.5 A derived source as a source {#derived-as-source}
-
-<!-- surfex: deferred #117: the engine -->
 
 A derived source's answer is read as any source's: `Engine.source(engine, path)` is a `%Macaw.Data.Derived.Output{}`, a struct implementing `Macaw.Data.Source` ([01 §2](01-sources.md#sources-contract)) over the engine's last good output at that path:
 
@@ -580,6 +566,6 @@ A derived source's answer is read as any source's: `Engine.source(engine, path)`
 
 So a derived source is another derived source's input and a slot's source alike, and the conformance kit holds it as it holds any source.
 
-```planned-test:derived-output-kit
+```test:derived-output-kit
 a derived source's output passes the source conformance kit, describes its output schema, and fetches its last good output, or loading before the first
 ```
