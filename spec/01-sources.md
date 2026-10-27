@@ -1,6 +1,6 @@
 # 01 — Sources {#sources}
 
-<!-- surfex: deferred #58: the source contract this file introduces is order-of-work step 4 -->
+<!-- surfex: deferred #112: the source contract this file introduces is complete with its conformance kit -->
 
 A **source** is anything a component's slot reads. One contract serves feeds, queries, derived sources, state sources and exports. It is a strict superset of visualize's `Visualize.Feed`: an existing feed is a source with no parameters.
 
@@ -396,9 +396,43 @@ a request carries every axis with its defaults; every fault of a bad window, box
 
 ### 2.4 Finishing {#sources-finishing}
 
-<!-- surfex: deferred #110: finishing is built in its own work item -->
+**Macaw finishes what a source did not honor** (`Macaw.Data.Source.Finish.finish/3`). Every capability is optional; where the description's `supports` lacks one the request asks, finishing does it to the delivery, in this order, and reports it in `served` (§3):
 
-Macaw finishes a window, box, region, latest or budget that the source did not honor, and reports it in the delivery's `served` (§3), `reduced_by: :runtime` for a budget it reduced.
+1. **`:window`**: the rows trimmed to the window field's range, both bounds inclusive, an open bound open; the served window intersected with the asked one. A schema with no window field is not trimmed.
+2. **`:box`**: the rows trimmed to the positions in the box over the `:point` window field, across the antimeridian when `west` is east of `east`; the served window is the box.
+3. **`:region`**: the rows trimmed to each ranged field's range.
+4. **`:latest`**: each identity's latest row by the window field, the later in order on a tie; a row whose identity or time is `nil` names nothing and is dropped.
+5. **`:budget`**: the rows reduced to the budget, `reduced_by: :runtime`. Each series (the rows sharing every `:category` field's value) is reduced field by field against the window field, or the row's place without one, by Largest-Triangle-Three-Buckets or, with `reduce: :m4`, by M4 (`Macaw.Data.Reduce`), and the union of the kept rows returned whole, in their order. When many series leave the union over the budget, an even stride over it keeps the first and the last: **never more than the budget**. A delivery within the budget, and a schema with no `:number` field to reduce by, come back as they are.
+
+A step the source honored is not done again. **Finishing only removes rows,** so it never widens the window and never adds a row. A request the schema cannot answer (`Macaw.Data.Window.check/2`) raises `ArgumentError`: a window not of the window field's type or with no window field, a box with no `:point` window field, a region field not described, not `:time` or `:number`, mixed or inverted, or `latest` with no window field or no declared identity; the request is the caller's. `Macaw.Data.Window` holds the comparisons, trims and positions it uses, ported from visualize's `Visualize.Feed.Window`.
+
+```test:finish-window
+a window the source did not honor is trimmed, an open bound open, the served window intersected; an honored window, and no window, leave the delivery as it is; a time window trims by DateTime, and a number window on a time field is the caller's error
+```
+
+```test:finish-box
+a box keeps the positions in it, across the antimeridian too, a missing position dropped; the served window is the box; an honored box is not redone; a box with no point window field is the caller's error
+```
+
+```test:finish-region
+a region trims each ranged field, the window field among them; an honored region is not redone; an unknown, a categorical and an inverted range are each named
+```
+
+```test:finish-latest
+latest keeps each identity's latest row by the window field, dropping a row with no identity; an honored latest is not redone; it needs a declared identity and a window field
+```
+
+```test:finish-budget
+a budget the source did not honor is reduced, the ends kept, recorded runtime; an honored or unneeded budget is not; series share it; m4 reduces too
+```
+
+```test:finish-only-removes
+for generated rows, windows and budgets, finishing keeps only rows of the input, all within the window, and at most the budget
+```
+
+```test:window-arithmetic
+times compare by kind; intersections, positions, the newer seam, applies and the instant and time predicates; nothing but a position is in a box
+```
 
 ## 3. Deliveries {#sources-delivery}
 
@@ -440,7 +474,7 @@ a delivery names the schema's version, never the schema; its origin is the sourc
 
 ## 4. Push {#sources-push}
 
-<!-- surfex: deferred #58: push is part of the source contract, step 4 -->
+<!-- surfex: deferred #111: push is built in its own work item -->
 
 Push is optional and declared:
 - the subscribe handshake sends the schema first;
@@ -452,23 +486,33 @@ Push is optional and declared:
 
 ## 5. Change notification {#sources-change}
 
-<!-- surfex: deferred #58: change notification is part of the source contract, step 4 -->
+<!-- surfex: deferred #108: change notification needs the page runtime -->
 
 **"This source's data changed; re-read it."** Any writer (an editing component after a commit, a host after an import) announces a change to a source by name, or the source pushes. Every reader on the page, and on other pages through the notification behavior ([macaw_compose 00](https://gitlab.conet.yarina.org/dco-tek/macaw_compose/-/blob/main/spec/00-overview.md#overview-goals) goal 3), re-fetches. Components never need to know who else reads the same data. (macaw_compose#9.)
 
 ## 6. Running sources {#sources-running}
 
-<!-- surfex: deferred #58: running sources is part of the source contract, step 4 -->
+### 6.1 Budgets: the ceiling and pooling {#sources-budgets}
 
-- **Pooling:** sources are named and pooled by the page. Several readers of the same source and request cost one fetch, at the largest budget among them, and each reader is reduced to its own budget (`reduced_by: :runtime`). (visualize.md C1.)
+- **The host ceiling** clamps every slot's budget ([macaw_compose 05](https://gitlab.conet.yarina.org/dco-tek/macaw_compose/-/blob/main/spec/05-components.md#components-budget)). A host sets it once; a page may lower it, never raise it. `Finish.ceiling/2` is the rule: `{budget, clamped?}`, a `nil` budget reading at the ceiling.
+- **Pooling:** several readers of one source and request cost one fetch, at the largest budget among them (`Finish.pooled/1`, `nil` when any reader wants every row), and each reader is reduced to its own budget (`Finish.reduce/4`, `reduced_by: :runtime`). (visualize.md C1.)
+
+```test:finish-ceiling-pool
+the ceiling clamps a budget, reads a nil one at the ceiling and takes a page's lower one, never a higher; a pooled fetch asks the largest, nil when any reader wants every row; each reader is reduced to its own
+```
+
+### 6.2 On pages {#sources-running-pages}
+
+<!-- surfex: deferred #108: running sources on pages needs the page and surface runtime -->
+
+- **Sources are named and pooled by the page.**
 - **Pooling across pages** is required in v1 (macaw_compose#22, decision 9). A request to a source that declares itself `viewer_independent` is fetched **once, with the anonymous viewer**, for every page making it, and delivered to each through the notification behavior. Fetching as the anonymous viewer makes the result independent of the viewer by construction, whatever the source does with the viewer. A surface whose state is `:shared`, watched by many viewers, then costs one fetch per pulse, as a visualize board does today. A source that doesn't declare it is never pooled across viewers.
-- **The host ceiling** clamps every slot's budget ([macaw_compose 05](https://gitlab.conet.yarina.org/dco-tek/macaw_compose/-/blob/main/spec/05-components.md#components-budget)). A host sets it once; a page may lower it, never raise it.
 - **Fetching never blocks the caller.** It runs out of process, with a liveness bound. The first render waits for a bounded time and then draws the loading state. (visualize.md C13 gap; dcotek_web.md C13.)
 - **`now` comes from the surface.** One instant per pulse keeps windows, freshness and ages consistent. (visualize.md C1.)
 
 ## 7. Credentials {#sources-credentials}
 
-<!-- surfex: deferred #58: credentials are part of the source contract, step 4 -->
+<!-- surfex: deferred #108: the host maps a source name to its configuration in the page runtime -->
 
 Credentials and source configuration never appear in documents. A page names a source; the host maps the name to a configured source (its **source configuration**). For metresis, that is a per-domain token, ideally scoped (metresis#555). (visualize.md C1, D-141; metresis.md C11.)
 
