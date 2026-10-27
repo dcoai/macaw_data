@@ -15,7 +15,7 @@ Each section's tests are written as **`planned-test:` blocks** until its work it
 | `Macaw.Data.Aggregate` | the aggregate behavior (§1.2) |
 | `Macaw.Data.Operations` | `macaw_data`'s own package, the registry, and running nodes and aggregates (§2, §3) |
 | `Macaw.Data.Operations.Option` | option declarations, their types and their checks (§1.3) |
-| `Macaw.Data.Operations.*` | one module per table operation (§4) and per statistic (§5) |
+| `Macaw.Data.Operations.Transforms.*`, `Macaw.Data.Operations.Aggregates.*` | one module per table operation (§4) and per statistic (§5); `Aggregates.all/0` lists the statistics |
 | `Macaw.Data.Stack`, `Macaw.Data.FFT` | the engines of `stack` and `spectrum`, ported from `Visualize.Shape.Stack` and `Visualize.Data.FFT` (§4.8, §4.11) |
 | `Macaw.Data.Ops` | what a stored function calls (§6) |
 
@@ -377,9 +377,7 @@ a sine's spectrum peaks at its frequency with its amplitude under every window; 
 
 ## 5. Statistics {#operations-statistics}
 
-<!-- surfex: deferred #120: the statistics -->
-
-Each is an aggregate of `macaw_data`'s package implementing §1.2, ported from `Visualize.Data` and matching visualize's function on its fixtures. The readings come with `nil`s dropped (§1.2). A **number** is an integer or a float; a **time** a `DateTime`, `NaiveDateTime` or `Date`, compared as instants (`Macaw.Data.Window.compare/2`). A numeric column of a table is read from its packed binary without building a row list.
+Each is an aggregate of `macaw_data`'s package implementing §1.2 (`Macaw.Data.Operations.Aggregates.*`), ported from `Visualize.Data` and matching visualize's function on its fixtures. The readings come with `nil`s dropped (§1.2). A **number** is an integer or a float; a **time** a `DateTime`, `NaiveDateTime` or `Date`, compared as instants (`Macaw.Data.Window.compare/2`). A numeric column of a table is read from its packed binary without building a row list.
 
 | Name | Options | Value | Of no readings | Output type | Unit |
 |---|---|---|---|---|---|
@@ -394,19 +392,19 @@ Each is an aggregate of `macaw_data`'s package implementing §1.2, ported from `
 | `quantile` | `p` (`{:number, 0, 1}`, required) | linear interpolation between the sorted readings: at `i = (n − 1) · p`, `v[⌊i⌋] + (v[⌊i⌋+1] − v[⌊i⌋]) · (i − ⌊i⌋)`, the last index clamped | `nil` | `:number` | kept |
 | `variance` | | the sample variance, `Σ(v − mean)² / (n − 1)` | `nil`, and `nil` of one | `:number` | dropped |
 | `deviation` | | the square root of `variance` | `nil`, and `nil` of one | `:number` | kept |
-| `slope` | | the least-squares slope of the points: a number `v` at place `i` is the point `[i, v]`, a reading `[x, y]` the point itself | `nil`, and `nil` of one point or when every `x` is equal | `:number` | dropped |
+| `slope` | | the least-squares slope of the points: a number `v` at place `i` is the point `[i, v]`, a reading `[x, y]` (or `{x, y}`) the point itself | `nil`, and `nil` of one point or when every `x` is equal | `:number` | dropped |
 | `delta` | | the last reading minus the first | `nil` (`0` of one) | `:number` | kept |
 
 - **A unit carries** where the value is of the reading's own kind: a min, a mean or a deviation of milliseconds is milliseconds. Where it is not, it is dropped: a count, the square of a unit, a rate per sample. A host drawing a sum still holds it to the quantity's additivity ([03 §10](03-units.md#quantities-additivity)): a sum of a quantity that does not add across or over time is the host's to refuse, not the statistic's.
 - **A reading of the wrong kind raises `ArgumentError`** naming the aggregate and the reading: `sum` of a string, `mean` of a time.
-- **The streaming form** (§1.2) is given by `count`, `distinct`, `min`, `max`, `extent`, `sum`, `mean`, `variance`, `deviation`, `slope` and `delta`. `median` and `quantile` need every reading, so they give none.
+- **The streaming form** (§1.2) is given by `count`, `distinct`, `min`, `max`, `extent`, `sum`, `mean`, `variance`, `deviation`, `slope` and `delta`. `median` and `quantile` need every reading, so they give none. A streaming statistic's `reduce/2` **is** its streaming form folded over the readings, so the two agree exactly: the mean is a running sum over a count, and the variance, the deviation and the slope are Welford's one-pass updates, numerically stable and equal to visualize's two-pass values to within floating-point rounding.
 - **spec/02 §4 still holds.** A statistic of a delivery's rows is the statistic of those rows: a quantile of a reduced or rolled-up delivery is not the quantile of the raw readings ("a p95 of p95s is not a p95"), so a percentile from raw rows stays in the source.
 
-```planned-test:operations-statistics-values
+```test:operations-statistics-values
 each statistic answers visualize's value on its fixtures, its empty value for no readings, and its output type; the unit carries exactly for the keeping statistics; a reading of the wrong kind raises naming the aggregate
 ```
 
-```planned-test:operations-statistics-stream
+```test:operations-statistics-stream
 the streaming form of every statistic that has one equals its reduce over every fixture, however the readings are chunked
 ```
 

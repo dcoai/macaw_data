@@ -24,10 +24,8 @@ defmodule Macaw.Data.Operations do
       {:error, [{[0, "op"], {:unknown, :transform, "doubel"}}]}
   """
 
-  alias Macaw.Data.Operations.{Option, Registry}
+  alias Macaw.Data.Operations.{Aggregates, Option, Registry}
   alias Macaw.Data.Table
-
-  @members []
 
   # The keys of the steps that name an aggregate, which an aggregate may not declare as
   # its own (spec/04 §1.2).
@@ -38,7 +36,7 @@ defmodule Macaw.Data.Operations do
 
   @doc "The modules of `macaw_data`'s package: its table operations and statistics."
   @spec __members__() :: [module()]
-  def __members__, do: @members
+  def __members__, do: Aggregates.all()
 
   @doc "The keys of the steps that name an aggregate, which an aggregate may not declare."
   @spec step_keys() :: [String.t()]
