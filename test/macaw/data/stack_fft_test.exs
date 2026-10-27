@@ -165,6 +165,31 @@ defmodule Macaw.Data.StackFFTTest do
     end
   end
 
+  describe "Stack's cost (#126)" do
+    # Counted in reductions, as the FFT's is: an offset indexing each column of each series
+    # was quadratic, sixteen times the work for four times the rows.
+    @tag verifies: "operations-stack-linear"
+    test "four times the rows is under five times the work, for every offset and order" do
+      data = fn n ->
+        for i <- 0..(n - 1), do: %{a: rem(i * 7, 11) - 3, b: rem(i * 5, 13), c: rem(i, 4)}
+      end
+
+      for offset <- [:none, :expand, :silhouette, :wiggle, :diverging],
+          order <- [:none, :insideout] do
+        stack =
+          Stack.new() |> Stack.keys([:a, :b, :c]) |> Stack.order(order) |> Stack.offset(offset)
+
+        {small, _} = Work.reductions(fn -> Stack.generate(stack, data.(2_000)) end)
+        {large, series} = Work.reductions(fn -> Stack.generate(stack, data.(8_000)) end)
+
+        assert length(hd(series).points) == 8_000
+
+        assert large < small * 5,
+               "#{offset}/#{order}: 8000 rows cost #{Float.round(large / small, 2)}x 2000's reductions"
+      end
+    end
+  end
+
   describe "FFT.fft/1" do
     @tag verifies: "operations-spectrum-lines"
     property "a pure sine of k cycles over N samples peaks at bin k, and Parseval holds" do

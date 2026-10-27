@@ -71,6 +71,19 @@ defmodule Macaw.Data.Operations.SandboxOpsLoadTest do
     assert saturated == idle
   end
 
+  @tag verifies: "operations-stack-linear"
+  test "every stack offset over twenty thousand rows answers within the default bounds" do
+    rows = for i <- 0..19_999, do: %{a: rem(i * 7, 11) - 3, b: rem(i * 5, 13)}
+
+    for offset <- ~w(none expand silhouette wiggle diverging) do
+      source =
+        ~s'fn rows -> rows |> Macaw.Data.Ops.transform("stack", %{fields: ["a", "b"], offset: "#{offset}"}) |> Enum.count() end'
+
+      {:ok, compiled} = Sandbox.compile(source)
+      assert Sandbox.run(compiled, [rows]) == {:ok, 40_000}, offset
+    end
+  end
+
   @tag verifies: "operations-sandbox-load"
   test "every statistic of the package gives one verdict idle and saturated, within the default bounds" do
     compiled =

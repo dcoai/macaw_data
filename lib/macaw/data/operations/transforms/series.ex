@@ -151,9 +151,12 @@ defmodule Macaw.Data.Operations.Transforms.Stack do
   def run(%{"fields" => fields, "order" => order, "offset" => offset} = node, table, _context) do
     rows = Table.rows(table)
 
-    for row <- rows, field <- fields, (reading = Table.get(row, field)) != nil do
-      Transforms.number!(reading, field, name())
-    end
+    Enum.each(rows, fn row ->
+      Enum.each(fields, fn field ->
+        reading = Table.get(row, field)
+        if reading != nil, do: Transforms.number!(reading, field, name())
+      end)
+    end)
 
     {keys, order} = order(order, fields, rows)
 

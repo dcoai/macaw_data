@@ -300,6 +300,12 @@ Every order but `keys` is computed from the rows the step is given, so over a st
 - `wiggle`: Byron and Wattenberg's streamgraph baseline, which minimizes the weighted change in slope;
 - `diverging`: positives stack up from zero and negatives down, each apart, and a zero sits at zero.
 
+**The cost is linear in the rows** for every order and offset (#126): the offsets that read a column across the series (`expand`, `silhouette`, `diverging`) take the points column by column once, never by index, and `expand` normalizes as it stacks, so the points are copied once.
+
+```test:operations-stack-linear
+every offset's work is linear in the rows, four times the rows under five times the work; every offset over twenty thousand rows answers in a stored function within the runner's default bounds
+```
+
 **Rows:** one per series in `fields` order, per datum in data order: the datum's columns plus `key` (the series' key), `series` (its stacking position, 0 the bottom), `value`, `y0` and `y1`, the names visualize's marks read. **Outputs:** the input's columns, then `key` (`:category`), `series`, `value`, `y0` and `y1` (`:number`).
 
 ```test:operations-stack-orders

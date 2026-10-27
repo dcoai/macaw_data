@@ -240,16 +240,14 @@ defmodule Macaw.Data.Stack do
   # series keeps whatever `y0` the offset set (0 unless an offset moved the baseline).
   defp apply_offset(series, order_ix, :none, _n), do: stack_none(series, order_ix)
 
+  # Each column normalized to sum to 1 as it is stacked, so the points are copied once.
   defp apply_offset(series, order_ix, :expand, n) do
     totals = column_totals(series, n)
 
-    series
-    |> map_points(fn %{index: j, value: v} = p ->
+    stack_values(series, order_ix, fn %{index: j, value: v} ->
       total = elem(totals, j)
-      v = if total == 0, do: 0, else: v / total
-      %{p | value: v, y0: 0, y1: v}
+      if total == 0, do: 0, else: v / total
     end)
-    |> stack_none(order_ix)
   end
 
   defp apply_offset(series, order_ix, :silhouette, n) do
@@ -262,25 +260,20 @@ defmodule Macaw.Data.Stack do
   end
 
   # d3's `stackOffsetDiverging`: positives accumulate upward from zero, negatives downward,
-  # each independently of the other; a zero value sits at the origin.
-  defp apply_offset(series, order_ix, :diverging, n) do
-    Enum.reduce(0..(n - 1)//1, series, fn j, series ->
-      {series, _yp, _yn} =
-        Enum.reduce(order_ix, {series, 0, 0}, fn i, {series, yp, yn} ->
-          s = elem(series, i)
-          p = Enum.at(s.points, j)
+  # each independently of the other; a zero value sits at the origin. The points are taken
+  # column by column in stacking order, once, and put back by series: linear in the rows
+  # (#126; indexing each column of each series was quadratic).
+  defp apply_offset(series, order_ix, :diverging, _n) do
+    restacked =
+      order_ix
+      |> Enum.map(&elem(series, &1).points)
+      |> Enum.zip_with(&diverge/1)
+      |> Enum.zip_with(& &1)
 
-          {p, yp, yn} =
-            cond do
-              p.value > 0 -> {%{p | y0: yp, y1: yp + p.value}, yp + p.value, yn}
-              p.value < 0 -> {%{p | y1: yn, y0: yn + p.value}, yp, yn + p.value}
-              true -> {%{p | y0: 0, y1: 0}, yp, yn}
-            end
-
-          {put_elem(series, i, %{s | points: List.replace_at(s.points, j, p)}), yp, yn}
-        end)
-
-      series
+    order_ix
+    |> Enum.zip(restacked)
+    |> Enum.reduce(series, fn {i, points}, series ->
+      put_elem(series, i, %{elem(series, i) | points: points})
     end)
   end
 
@@ -322,6 +315,20 @@ defmodule Macaw.Data.Stack do
     |> stack_none(order_ix)
   end
 
+  # One column's points, bottom first, stacked up from zero if positive and down if negative.
+  defp diverge(column) do
+    {points, _yp, _yn} =
+      Enum.reduce(column, {[], 0, 0}, fn p, {points, yp, yn} ->
+        cond do
+          p.value > 0 -> {[%{p | y0: yp, y1: yp + p.value} | points], yp + p.value, yn}
+          p.value < 0 -> {[%{p | y1: yn, y0: yn + p.value} | points], yp, yn + p.value}
+          true -> {[%{p | y0: 0, y1: 0} | points], yp, yn}
+        end
+      end)
+
+    Enum.reverse(points)
+  end
+
   # Sets the bottom series' y0/y1 to the given per-column baselines.
   defp with_baselines(series, bottom_ix, baselines) do
     s = elem(series, bottom_ix)
@@ -350,19 +357,42 @@ defmodule Macaw.Data.Stack do
     series
   end
 
-  defp column_totals(series, n) do
-    Enum.map(0..(n - 1)//1, fn j ->
-      series
-      |> Tuple.to_list()
-      |> Enum.reduce(0, fn s, acc -> acc + Enum.at(s.points, j).value end)
-    end)
-    |> List.to_tuple()
+  # d3's `stackOffsetNone` over values `value` reads from each point, the bottom series
+  # from zero: one pass, one copy of the points.
+  defp stack_values(series, [first | rest], value) do
+    bottom = elem(series, first)
+
+    points =
+      Enum.map(bottom.points, fn p ->
+        v = value.(p)
+        %{p | value: v, y0: 0, y1: v}
+      end)
+
+    {series, _} =
+      Enum.reduce(rest, {put_elem(series, first, %{bottom | points: points}), first}, fn i,
+                                                                                         {series,
+                                                                                          prev_ix} ->
+        prev = elem(series, prev_ix)
+        s = elem(series, i)
+
+        points =
+          Enum.zip_with(s.points, prev.points, fn p, %{y1: base} ->
+            v = value.(p)
+            %{p | value: v, y0: base, y1: base + v}
+          end)
+
+        {put_elem(series, i, %{s | points: points}), i}
+      end)
+
+    series
   end
 
-  defp map_points(series, fun) do
+  # Each column's sum over the series, in one pass over the points (#126).
+  defp column_totals(series, _n) do
     series
     |> Tuple.to_list()
-    |> Enum.map(fn s -> %{s | points: Enum.map(s.points, fun)} end)
+    |> Enum.map(fn s -> Enum.map(s.points, & &1.value) end)
+    |> Enum.zip_with(&Enum.sum/1)
     |> List.to_tuple()
   end
 end
