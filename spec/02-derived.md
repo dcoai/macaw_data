@@ -255,16 +255,9 @@ Derivations that need raw rows or the store stay **inside the source**, never in
 
 ## 5. Transforms and aggregates {#derived-operations}
 
-<!-- surfex: deferred #83: transforms and aggregates, step 6 -->
+<!-- surfex: class orientation -->
 
-The operations a visualize design applies to its data and the operations a derived source may call are **the same code**, in `macaw_data` beside derived sources (macaw_compose#22, decision 11):
-- **the transform behavior,** with the table operations: filter, sort, take, fold, sum, bin, stack, window, lttb, m4 and spectrum;
-- **the aggregate behavior,** with its statistics.
-
-A computation can therefore move between a design and a derived source unchanged, and a metresis feed and a visualize chart reduce data the same way.
-
-- **Transforms that need geometry** (they declare `needs: [:frame]` or `needs: [:projection]`: layouts, geographic operations) stay in the package that draws, and register through the registry like any other member ([macaw_compose 12](https://gitlab.conet.yarina.org/dco-tek/macaw_compose/-/blob/main/spec/12-registry.md)). A derived source has no frame, so they are never on its allowlist.
-- **The sandbox allowlist is generated** from the registered members of enabled packages, never written by hand, so enabling a package is the only way to widen it. Until step 6 (macaw_compose#83) lands, the allowlist is §6.2's.
+The operations a design applies to its data and the operations a derived source may call are **the same code**, specified in [04 — Operations](04-operations.md): the transform and aggregate behaviors, the registry of enabled packages, the twelve table operations and the thirteen statistics. A stored function reaches them through `Macaw.Data.Ops` by literal name, and the sandbox's allowlist for them is generated from the registry, never written by hand ([04 §6](04-operations.md#operations-sandbox)). Transforms that need geometry are never on it, since a derived source has no frame.
 
 ## 6. The sandbox {#derived-sandbox}
 
