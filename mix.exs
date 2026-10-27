@@ -26,6 +26,11 @@ defmodule Macaw.Data.MixProject do
 
   defp deps do
     [
+      # Optional readers at the table's edge (spec/01 §1.1): a host that has either gets
+      # its tensors or `Table.Reader` sources read into a table; one that has neither never
+      # fetches them.
+      {:table, "~> 0.1.2", optional: true},
+      {:nx, "~> 1.0", optional: true},
       {:stream_data, "~> 1.1", only: :test},
       # Spec, tests and code kept aligned (macaw_compose spec/00 §4.1); dev/test only.
       {:surfex, "~> 0.10.0", only: [:dev, :test], runtime: false}

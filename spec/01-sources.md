@@ -8,13 +8,79 @@ A **source** is anything a component's slot reads. One contract serves feeds, qu
 
 <!-- surfex: deferred #57: the data model, order-of-work step 3 -->
 
-- **`Data.Table`:** columnar typed data, the currency of deliveries, derived sources and components. Row lists are accepted at the edge. (visualize.md C1.)
+- **`Data.Table`:** columnar typed data, the currency of deliveries, derived sources and components. Row lists are accepted at the edge ([§1.1](#sources-table)). (visualize.md C1.)
 - **`Data.Schema`:** each field's **meaning**: `type` (`:time | :number | :category | :text | :color | :point`, a `:point` being a geographic position), and where known `unit` (UCUM), `quantity`, `label`, `order`, `status`, `polarity`, `continuity`, `bounds`, `identity`, `window`, and declared `values` with names and colors. (visualize.md C1.)
 - **The window field** is the field a request's window applies to: the one marked `window: true`, else the schema's first `:time` field. A `box` window applies to a `:point` window field. A schema with neither has no window field, and requests to it carry none.
 - **A schema gives data colors, never drawing colors.** A `:color` field, or a color on a declared value (a team's color), is content; how it may be shown is a theme rule ([macaw_layers 04](https://gitlab.conet.yarina.org/dco-tek/macaw_layers/-/blob/main/spec/04-themes.md#themes-rules)).
 - **A schema's version is the SHA-256 of a canonical encoding.** A delivery names the version, and a push sends the schema before rows made under it. (visualize.md C1; metresis.md C1.)
 - **Identity is declared** (`identity: true`, composite allowed), never guessed. Selection, `latest` and per-identity derivations read it. (visualize.md C1.)
 - **Units and quantities** come from one vocabulary, specified in [03](03-units.md): UCUM codes with an ISO 4217 currency extension, and a fixed list of quantities. Nothing translates between two vocabularies. (metresis.md C1.)
+
+### 1.1 The table {#sources-table}
+
+**`Macaw.Data.Table` is columnar typed data,** the currency of deliveries, derived sources and components. A table is named columns of declared types, every column the same length. Its design is visualize#916's (closed when this step absorbed it): rows as lists of maps cost a garbage collection that copies every row, and packed columns don't.
+
+| Type | Holds | Stored as |
+|---|---|---|
+| `:number` | integers and floats | one packed binary: signed 64-bit integers when every value is an integer that fits, else 64-bit floats |
+| `:time` | `DateTime`s | one packed binary of signed 64-bit microseconds since the Unix epoch, UTC |
+| `:category`, `:text`, `:color`, `:point`, `:term` | any value; a point is `{longitude, latitude}` | a list |
+
+- **A missing value is `nil`,** in every type. A packed column keeps a validity bitmap beside its binary, so a gap stays a gap and reads back as `nil`, never as 0 (§3).
+- **`new/1`** builds a table from `{name, type, values}` columns and reports every fault at once: a type not in the list (`{:enum, types}`), a value its type does not hold (`{[name, i], {:type, type}}`), a column of another length than the first (`{:length, n}`), a name given twice (`:duplicate`). `new!/1` raises naming them.
+- **Reading back:** `column/2` is a column's values in order. A number column of integers reads back integers; of floats, or of both, floats, and an integer too large for 64 bits makes its column floats. A time column reads back `DateTime`s in UTC at microsecond precision. `rows/1` is the row view: one map per row keyed by every column name. `row/2` is one row, `nil` past the end; `names/1`, `size/1` and `column_type/2` describe the table.
+- **`slice/3`** is a run of rows as a table of the same columns; a packed column's binary is sliced, not copied.
+- **The packed columns live off the process heap:** a binary over 64 bytes is reference-counted, so a collection never copies it, and a table's cost to its process does not grow with its rows.
+
+```test:table-new
+new/1 builds named typed columns and refuses an unknown type, a value of the wrong type, a column of another length and a duplicate name, all at once, ordered by path
+```
+
+```test:table-packed
+number and time columns are packed binaries with a validity bitmap; integers read back integers, mixed columns floats, a too-large integer makes floats, times read back in UTC to the microsecond, and a gap reads back nil
+```
+
+```test:table-off-heap
+a table of a million numbers costs its process the same number of words as one of a hundred thousand, its column a reference-counted binary
+```
+
+```test:table-round-trip
+for generated rows of numbers, floats, strings and times with gaps, rows to a table and back are the rows, and every column is the table's length
+```
+
+```test:table-slice
+slice/3 is the rows from start, count of them, for generated tables and bounds; row/2 is one row or nil; a slice shares its parent's binary
+```
+
+**Row lists are accepted at the edge.** `from/2` reads every shape data arrives in into a table:
+- a list of row maps, a map or keyword list of equal-length columns, an `Nx.Tensor`, or anything implementing `Table.Reader` (Explorer's frames among them), through `rows/1`;
+- columns are named by every key of every row, in term order, a row without the key missing there;
+- each column's type is the one `types:` gives, else the one `column_types/1` infers, else `:term`;
+- a time column's values become `DateTime`s at the edge: a `Date` at midnight UTC, a `NaiveDateTime` as UTC, an ISO 8601 string parsed.
+
+The `table` package and Nx are optional dependencies: without them lists and column maps still work, and a struct source or a tensor raises `UndefinedFunctionError` where it is read.
+
+```test:table-edge
+from/2 reads rows, columns and a Table.Reader source, infers or takes the types, turns ISO strings, dates and naive times into DateTimes in a time column, makes a mixed column a term column, passes a table through, and refuses a value its given type does not hold
+```
+
+**The row helpers read any source,** as visualize's `Visualize.Data.Table` does (this is its port):
+- `rows/1` of a list of rows is the list itself, uncopied; of a map or keyword list of equal-length columns, one map per row; of a rank-2 tensor, one tuple per row, of a rank-1 tensor its values; of a `Table.Reader` source, its rows keyed as the reader names its columns. A map whose values are not equal-length lists, a tensor of another rank, and a struct with no reader are the caller's errors;
+- `named/2` names a tensor's columns, or tuple rows' elements, in order, or says why it can't (`{:width, n, size}`, `{:rank, rank}`), and passes any other source through;
+- `get/2` reads a column from a row by either spelling of its name, and `key/2` is the key that spells it; no atom is made. `accessor/1` is the function of a name, a function passed through;
+- `column_types/1` suggests each column's type from its whole: all temporal is `:time`, all numbers `:number`, all strings `:text`, all atoms or booleans `:category`, a mixed or empty column left out; `time_columns/1` names the temporal ones; `temporal?/1` is whether a value is a `DateTime`, `Date`, `NaiveDateTime` or an ISO 8601 string one of those parses. These are suggestions for a tool; a table's declared types are `column_type/2`'s.
+
+```test:table-sources
+rows/1 passes a list of rows through uncopied and tuple rows unchanged, reads column maps, keyword columns, tensors and rank-1 tensor columns, refuses unequal columns, other ranks and a struct with no reader; named/2 names tensor columns and tuple rows or says why not
+```
+
+```test:table-row-helpers
+get/2 reads a key by either spelling, the exact key first, a nil value being a value; accessor/1 wraps a name and passes a function; a tuple row has no names
+```
+
+```test:table-inference
+column_types/1 types a column by its whole and leaves a mixed or empty one out; time_columns/1 reads the whole column, nil a gap, names the union of every row's keys; temporal?/1 accepts the three structs and ISO 8601 strings only
+```
 
 ## 2. The contract {#sources-contract}
 
