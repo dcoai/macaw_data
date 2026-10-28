@@ -16,7 +16,13 @@ defmodule Macaw.Data.MixProject do
         "Macaw's data layer: the interaction event, the data model, the source contract, derived sources, and the transforms and aggregates they share with designs.",
       source_url: @source_url,
       package: package(),
-      docs: [main: "readme", extras: ["README.md", "CHANGELOG.md"], source_ref: "v#{@version}"]
+      docs: [
+        main: "readme",
+        extras: ["README.md", "CHANGELOG.md"],
+        source_ref: "v#{@version}",
+        logo: "brand/logo/macaw_scarlet.svg",
+        assets: %{"brand/logo" => "brand/logo"}
+      ]
     ]
   end
 
