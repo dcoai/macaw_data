@@ -26,7 +26,7 @@ defmodule Macaw.Data.MixProject do
   defp elixirc_paths(:test), do: ["lib", "test/support"]
   defp elixirc_paths(_), do: ["lib"]
 
-  # Published on Hex from its public home, mirrored from GitLab (dco-tek/macaw_compose#155).
+  # Published on Hex from its public home, mirrored from GitLab (dco-tek/macaw/macaw#155).
   defp package do
     [
       licenses: ["MIT"],
@@ -42,7 +42,8 @@ defmodule Macaw.Data.MixProject do
     [
       # The document kernel (macaw_compose spec/00 §4): names, vocabularies, the scan and
       # limits a schema's JSON is read through, and the digest that is its version.
-      {:macaw_layers, git: "git@gitlab.conet.yarina.org:dco-tek/macaw_layers.git", tag: "v0.2.0"},
+      {:macaw_layers,
+       git: "git@gitlab.conet.yarina.org:dco-tek/macaw/macaw_layers.git", tag: "v0.2.0"},
       # Optional readers at the table's edge (spec/01 §1.1): a host that has either gets
       # its tensors or `Table.Reader` sources read into a table; one that has neither never
       # fetches them.
