@@ -15,12 +15,18 @@
 # a client declares, class (b), and one derived from such names, class (c), is a string,
 # so an entry of either fails. Ported from visualize's `mix vis.atoms`; its test loads
 # this file with `:ci_no_main` set, so nothing runs on load.
+#
+# It also fails on a line under `test/` that reads the node's atom count
+# (`:erlang.system_info(:atom_count)`, `:erlang.memory(:atom)`): every process on the node
+# moves it, so it measures no one test, and no test can hold the atom table to itself
+# (macaw_data#1). A test checks its input's own names instead (`Macaw.Data.Test.Atoms`).
 
 defmodule AtomGate do
   @scanned "lib"
   @allowlist "ci/atoms_allowlist.exs"
   @classes [:a, :"a-host", :d]
   @pattern ~r/String\.to_atom|binary_to_atom|List\.to_atom|list_to_atom|:"[^"]*#\{|:'[^']*#\{/
+  @counted ~r/system_info\(:atom_count\)|memory\(:atom(_used)?\)/
 
   @doc "Every problem under `root`, one line each; `[]` when there is none."
   def run(root) do
@@ -31,7 +37,18 @@ defmodule AtomGate do
   @doc "The check against a given allowlist."
   def run(root, entries) do
     sites = sites(root)
-    malformed(entries) ++ unallowed(sites, entries) ++ stale(sites, entries)
+    malformed(entries) ++ unallowed(sites, entries) ++ stale(sites, entries) ++ counted(root)
+  end
+
+  # Every line under `test/` that reads the node's atom count.
+  defp counted(root) do
+    for path <- root |> Path.join("test/**/*.{ex,exs}") |> Path.wildcard() |> Enum.sort(),
+        {text, n} <- path |> File.read!() |> String.split("\n") |> Enum.with_index(1),
+        not String.starts_with?(String.trim_leading(text), "#"),
+        Regex.match?(@counted, text),
+        do:
+          "#{Path.relative_to(path, root)}:#{n}: reads the node's atom count, which every " <>
+            "process moves; check the input's own names (Macaw.Data.Test.Atoms)"
   end
 
   # Every `{file, line_number, text}` that makes an atom from a string.
@@ -93,7 +110,7 @@ defmodule AtomGate do
   def main do
     case run(File.cwd!()) do
       [] ->
-        IO.puts("atoms OK: no atom from a string outside the allowlist")
+        IO.puts("atoms OK: no atom from a string outside the allowlist, no atom count in a test")
 
       problems ->
         Enum.each(problems, &IO.puts/1)

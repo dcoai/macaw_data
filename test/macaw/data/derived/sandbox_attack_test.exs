@@ -3,13 +3,11 @@ defmodule Macaw.Data.Derived.SandboxAttackTest do
   # modeled on the attacks Dune's test suite defends against: each attack is a stored
   # function, and each test names the fault the checker
   # answers, or the kind the runner reports — never only that something failed.
-  #
-  # Not async: the atom test counts the node's atoms, which another test making atoms at
-  # the same moment would move.
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
   alias Macaw.Data.Derived.Sandbox
   alias Macaw.Data.Derived.Sandbox.Allowlist
+  alias Macaw.Data.Test.Atoms
 
   @moduletag :capture_log
 
@@ -265,6 +263,9 @@ defmodule Macaw.Data.Derived.SandboxAttackTest do
   end
 
   @tag verifies: ["derived-checker-names", "derived-attacks", "operations-sandbox-attacks"]
+  # Checked on the attacks' own names, never the node's atom count (macaw_data#1): every
+  # word an attack spells, and every alias chain as the module atom it would name, that
+  # was no atom before the attacks ran is none after.
   test "the node makes no atom from any attack" do
     sources =
       Enum.map(
@@ -272,19 +273,21 @@ defmodule Macaw.Data.Derived.SandboxAttackTest do
         &elem(&1, 0)
       ) ++ @strings
 
-    run = fn ->
-      for source <- sources, do: Sandbox.check(source)
-      for source <- sources, match?({:ok, _}, Sandbox.check(source)), do: Sandbox.compile(source)
-      call("fn m -> m.halt end", [%{halt: 1}])
-    end
+    spelled =
+      Enum.flat_map(sources, fn source ->
+        words = Regex.scan(~r/[A-Za-z_][A-Za-z0-9_]*[?!]?/, source)
+        chains = Regex.scan(~r/\b[A-Z][A-Za-z0-9_]*(?:\.[A-Z][A-Za-z0-9_]*)*/, source)
+        List.flatten(words) ++ Enum.map(List.flatten(chains), &("Elixir." <> &1))
+      end)
 
-    # A first run loads every module it reaches, which adds their atoms; a raise is not
-    # run here, since the VM's report of it is formatted, and makes atoms, in the logger's
-    # own time. What a raise can reach is the attacks above.
-    run.()
-    Logger.flush()
-    before = :erlang.system_info(:atom_count)
-    run.()
-    assert :erlang.system_info(:atom_count) == before
+    unseen = spelled |> Enum.uniq() |> Enum.reject(&Atoms.atom?/1)
+    assert "never_made_before_by_any_attack" in unseen
+    assert "never_made_key_q9" in unseen
+
+    for source <- sources, do: Sandbox.check(source)
+    for source <- sources, match?({:ok, _}, Sandbox.check(source)), do: Sandbox.compile(source)
+    call("fn m -> m.halt end", [%{halt: 1}])
+
+    assert Atoms.made(unseen) == []
   end
 end

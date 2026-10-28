@@ -10,6 +10,7 @@ defmodule Macaw.Data.DerivedTest do
 
   alias Macaw.Data.{Delivery, Derived, Schema}
   alias Macaw.Data.Derived.{Context, Join, Sandbox}
+  alias Macaw.Data.Test.Atoms
 
   doctest Derived
   doctest Context
@@ -420,16 +421,32 @@ defmodule Macaw.Data.DerivedTest do
     rows = [%{host: "a", cpu: 3}, %{host: "b", cpu: 9}]
     outputs = [{"health", health, [%{"host" => "a", "state" => "ok"}]}]
 
-    atoms = :erlang.system_info(:atom_count)
-
     assert [%{"health.state" => "ok"}, %{"health.state" => nil}] =
              Join.join(rows, @hosts, outputs)
 
     joined = Join.schema(@hosts, outputs)
     assert {:ok, %{type: :category, values: ["ok"]}} = Schema.fetch(joined, "health.state")
     assert Schema.fetch(joined, "health.host") == :error
-    assert :erlang.system_info(:atom_count) == atoms
     assert Join.join(rows, @hosts, []) == rows
+  end
+
+  # Checked on the output's own names, never the node's atom count (macaw_data#1).
+  @tag verifies: "derived-join-fields"
+  test "joining makes no atom of an output's id, its fields or the joined names" do
+    [id, field] = names = [Atoms.fresh(), Atoms.fresh()]
+
+    output =
+      Schema.new!(%{
+        "host" => %{type: :category, identity: true},
+        field => %{type: :category, values: ["ok"]}
+      })
+
+    outputs = [{id, output, [%{"host" => "a", field => "ok"}]}]
+    joined = "#{id}.#{field}"
+
+    assert [%{^joined => "ok"}] = Join.join([%{host: "a"}], @hosts, outputs)
+    assert {:ok, _} = Schema.fetch(Join.schema(@hosts, outputs), joined)
+    assert Atoms.made([joined, "#{id}.host" | names]) == []
   end
 
   @tag verifies: "derived-forms-inverse"

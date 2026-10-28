@@ -47,6 +47,25 @@ defmodule AtomGateTest do
     assert [_unallowed, _stale] = AtomGate.run(dir, [entry("style_", 1)])
   end
 
+  # The calls are spelled in pieces here, so this file holds none of them.
+  @tag verifies: "derived-atom-gate"
+  test "a test that reads the node's atom count fails at its line", %{tmp_dir: dir} do
+    lib(dir, "")
+    File.mkdir_p!(Path.join(dir, "test/x"))
+
+    File.write!(Path.join(dir, "test/x/a_test.exs"), """
+    # :erlang.system_info(:atom#{"_count"}) in a comment is passed over
+    before = :erlang.system_info(:atom#{"_count"})
+    """)
+
+    File.write!(Path.join(dir, "test/b.ex"), "m = :erlang.memory(:atom#{"_used"})\n")
+
+    assert [
+             "test/b.ex:1: reads the node's atom count" <> _,
+             "test/x/a_test.exs:2: reads the node's atom count" <> _
+           ] = AtomGate.run(dir, [])
+  end
+
   @tag verifies: "derived-atom-gate"
   test "an entry needs a class and a reason", %{tmp_dir: dir} do
     lib(dir, "a = :\"series_\#{k}\"\n")
