@@ -26,10 +26,10 @@ Macaw's data layer (spec/00 §4): the interaction event, the data model, the sou
 | `Macaw.Data.Unit` | units named by their UCUM codes, with aliases, the ISO 4217 currency extension, display symbols and exact conversion ([spec/03 §1–§7](https://github.com/dcoai/macaw_data/blob/main/spec/03-units.md#units-codes)) |
 | `Macaw.Data.Quantity` | the fixed list of quantities and their facts: kind, bounds, additivity, families, conventions and unit systems; the measure; the label rule ([spec/03 §8–§14](https://github.com/dcoai/macaw_data/blob/main/spec/03-units.md#quantities)) |
 
-Depends on `macaw_layers` (the document kernel); `table` and `nx` are optional, for reading their sources into a table. Released by git tag:
+Depends on `macaw_layers` (the document kernel); `table` and `nx` are optional, for reading their sources into a table. From Hex:
 
 ```elixir
-{:macaw_data, git: "git@gitlab.conet.yarina.org:dco-tek/macaw_data.git", tag: "v0.5.0"}
+{:macaw_data, "~> 0.5.3"}
 ```
 
 Part of [Macaw](https://github.com/dcoai/macaw).

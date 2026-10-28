@@ -2,7 +2,7 @@ defmodule Macaw.Data.MixProject do
   use Mix.Project
 
   @source_url "https://github.com/dcoai/macaw_data"
-  @version "0.5.2"
+  @version "0.5.3"
 
   def project do
     [
@@ -42,8 +42,7 @@ defmodule Macaw.Data.MixProject do
     [
       # The document kernel (macaw_compose spec/00 §4): names, vocabularies, the scan and
       # limits a schema's JSON is read through, and the digest that is its version.
-      {:macaw_layers,
-       git: "git@gitlab.conet.yarina.org:dco-tek/macaw/macaw_layers.git", tag: "v0.2.0"},
+      {:macaw_layers, "~> 0.2.2"},
       # Optional readers at the table's edge (spec/01 §1.1): a host that has either gets
       # its tensors or `Table.Reader` sources read into a table; one that has neither never
       # fetches them.

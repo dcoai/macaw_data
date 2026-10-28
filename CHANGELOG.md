@@ -1,7 +1,8 @@
 # Changelog
 
-## Unreleased
+## v0.5.3 (2026-10-28)
 
+- On Hex: depends on `macaw_layers ~> 0.2.2` from Hex instead of its git tag, and the README installs from Hex (macaw#155).
 - The README opens with the early-release notice (macaw#174).
 
 ## v0.5.2 (2026-10-28)
