@@ -1,5 +1,7 @@
 # macaw_data
 
+> **This software is a very early release, and not ready for general use.**
+
 Public home: [github.com/dcoai/macaw_data](https://github.com/dcoai/macaw_data) · Docs: [hexdocs.pm](https://hexdocs.pm/macaw_data)
 
 Macaw's data layer (spec/00 §4): the interaction event, the data model, the source contract with its conformance kit, derived sources, and the operations designs and derived sources share: transforms, table operations and aggregates (spec/00 §5, dco-tek/macaw_compose#83; #55–#58, #82).
