@@ -1,8 +1,9 @@
 # Changelog
 
-## Unreleased
+## v0.5.4 (2026-10-28)
 
 - The macaw logo in the docs and the README (macaw#175).
+- Tests check "makes no atom" on the input's own names, never the node's atom count, and the atom gate forbids the count in `test/` (#1).
 
 ## v0.5.3 (2026-10-28)
 
