@@ -1,6 +1,6 @@
 # macaw_data specification
 
-`macaw_data` is Macaw's data layer: the interaction event every component emits, the data model, the source contract, and derived sources. Each Macaw component has its own spec in its own repository (dco-tek/macaw_compose#61); this is `macaw_data`'s. The family's overview, vocabulary and open questions, and the specs of components without a repository of their own yet, are in [macaw_compose's spec](https://gitlab.conet.yarina.org/dco-tek/macaw_compose/-/blob/main/spec/README.md).
+`macaw_data` is Macaw's data layer: the interaction event every component emits, the data model, the source contract, and derived sources. Each Macaw component has its own spec in its own repository (dco-tek/macaw_compose#61); this is `macaw_data`'s. The family's overview, vocabulary and open questions, and the specs of components without a repository of their own yet, are in [macaw_compose's spec](https://github.com/dcoai/macaw/blob/main/spec/README.md).
 
 | File | Covers | Status |
 |---|---|---|

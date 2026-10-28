@@ -7,7 +7,7 @@ A **source** is anything a component's slot reads. One contract serves feeds, qu
 - **`Data.Table`:** columnar typed data, the currency of deliveries, derived sources and components. Row lists are accepted at the edge ([§1.1](#sources-table)). (visualize.md C1.)
 - **`Data.Schema`:** each field's **meaning**: `type` (`:time | :number | :category | :text | :color | :point`, a `:point` being a geographic position), and where known `unit` (UCUM), `quantity`, `label`, `order`, `status`, `polarity`, `continuity`, `bounds`, `identity`, `window`, and declared `values` with names and colors ([§1.2](#sources-schema)). (visualize.md C1.)
 - **The window field** is the field a request's window applies to: the one marked `window: true`, else the schema's only `:time` field. A `box` window applies to a `:point` window field. A schema with neither, or with several `:time` fields and none marked, has no window field, and requests to it carry none ([§1.5](#sources-schema-window)).
-- **A schema gives data colors, never drawing colors.** A `:color` field, or a color on a declared value (a team's color), is content; how it may be shown is a theme rule ([macaw_layers 04](https://gitlab.conet.yarina.org/dco-tek/macaw_layers/-/blob/main/spec/04-themes.md#themes-rules)).
+- **A schema gives data colors, never drawing colors.** A `:color` field, or a color on a declared value (a team's color), is content; how it may be shown is a theme rule ([macaw_layers 04](https://github.com/dcoai/macaw_layers/blob/main/spec/04-themes.md#themes-rules)).
 - **A schema's version is the SHA-256 of a canonical encoding,** the kernel's digest of its JSON form ([§1.10](#sources-schema-version)). A delivery names the version, and a push sends the schema before rows made under it. (visualize.md C1; metresis.md C1.)
 - **Identity is declared** (`identity: true`, composite allowed), never guessed. Selection, `latest` and per-identity derivations read it. (visualize.md C1.)
 - **Units and quantities** come from one vocabulary, specified in [03](03-units.md): UCUM codes with an ISO 4217 currency extension, and a fixed list of quantities. Nothing translates between two vocabularies. (metresis.md C1.)
@@ -172,7 +172,7 @@ a misspelled unit, a symbol a person types, an unknown quantity and a unit that 
 
 ### 1.7 Colors: data, never drawing {#sources-schema-colors}
 
-A schema describes meaning, and color is the theme's to choose from it ([macaw_layers 04](https://gitlab.conet.yarina.org/dco-tek/macaw_layers/-/blob/main/spec/04-themes.md#themes-rules)):
+A schema describes meaning, and color is the theme's to choose from it ([macaw_layers 04](https://github.com/dcoai/macaw_layers/blob/main/spec/04-themes.md#themes-rules)):
 - **No color on a field.** A key `color`, `colour`, `colors`, `colours`, `palette`, `fill` or `stroke` in a description is `{:color_key, key}`, whose line names the keys that carry the meaning instead (`status`, `order`, `polarity`, `quantity`). <!-- spelling: allow -->
 - **A status role is a word, never a color:** a role that is a data color by its spelling is `{:type, :status}`.
 - **A data color is a literal** (`color?/1`): `#rgb`, `#rgba`, `#rrggbb` or `#rrggbbaa` in hexadecimal, or a CSS named color (CSS Color 4's, and `transparent`), any case. A value entry's `color` and a `:color` field's row values are data colors. A theme role or a typed color (visualize's `{:color, :good}`, `{:ramp, …}`) is a drawing color, which a schema never holds: `{:type, :color}`. A `:color` field takes only `label` and `continuity`; any other key is `{:invalid_for, :color}`.
@@ -233,7 +233,7 @@ names compare as strings and labels, facts and extra fields are not compared; ev
 
 ### 1.10 The version {#sources-schema-version}
 
-A schema's version is **the kernel's digest of its map form** (`Macaw.Layers.Document.digest/1` over `%{"fields" => to_map(schema)}`, [macaw_layers 01 §7](https://gitlab.conet.yarina.org/dco-tek/macaw_layers/-/blob/main/spec/01-kernel.md#kernel-digest)): 64 lowercase hex characters, the SHA-256 of a canonical JSON encoding. So an unchanged schema has the same version on every node and under every release, and any change of content, a renamed state or a new label, is a new version. `version/1` returns it, computed once by `new/1`.
+A schema's version is **the kernel's digest of its map form** (`Macaw.Layers.Document.digest/1` over `%{"fields" => to_map(schema)}`, [macaw_layers 01 §7](https://github.com/dcoai/macaw_layers/blob/main/spec/01-kernel.md#kernel-digest)): 64 lowercase hex characters, the SHA-256 of a canonical JSON encoding. So an unchanged schema has the same version on every node and under every release, and any change of content, a renamed state or a new label, is a new version. `version/1` returns it, computed once by `new/1`.
 
 - **Names, states and roles count by their spelling.** `:latency` and `"latency"` are one field, and `:ok` and `"ok"` one state, so a schema and its trip through JSON, which spells every one as a string, have one version. A delivery read on another node then names a version its reader can resolve (§1.12). This differs from visualize's own hash, which keeps an atom state apart from its string; reconciling the two is visualize's, at adoption.
 - **Nothing depends on map order:** the canonical encoding sorts keys, and the fields are pairs sorted by name.
@@ -248,7 +248,7 @@ the version is pinned for two schemas, is the kernel's digest of the map form, i
 **`to_json/1` and `from_json/2` are public,** so no adopter reads a hidden function (visualize#879). The map form, `to_map/1`, is a list of `[name, description]` pairs sorted by name: every description key by its string, every name, state and role by its spelling, every word of the vocabulary (`type`, `quantity`, `polarity`, `metric_kind`) as its string, `status` as sorted `[state, role]` pairs, `bounds`, `values` and booleans as they are. `to_json/1` is it encoded.
 
 **Reading** (`from_map/1`, `from_json/2`):
-- `from_json/2` reads through the kernel's gates first, the byte limit and the scan that stops at a depth or items limit ([macaw_layers 01 §5](https://gitlab.conet.yarina.org/dco-tek/macaw_layers/-/blob/main/spec/01-kernel.md#kernel-gates)), `limits:` tightening them, and then decodes;
+- `from_json/2` reads through the kernel's gates first, the byte limit and the scan that stops at a depth or items limit ([macaw_layers 01 §5](https://github.com/dcoai/macaw_layers/blob/main/spec/01-kernel.md#kernel-gates)), `limits:` tightening them, and then decodes;
 - each word is read through its own closed vocabulary, and every name, state and role is a string: **no atom is made from a document**;
 - a key no description or entry has stays its string, and a word outside its vocabulary stays its string, for `new/1` to refuse by name;
 - anything but a list of `[string, map]` pairs is `{[], {:type, :schema}}`.
@@ -295,14 +295,14 @@ a cached version costs nothing, an unknown one calls describe once and is cached
 @callback unsubscribe(source, reference) :: :ok                            # optional, §4
 ```
 
-- **`describe/2`** takes the host's configuration for the source as its `context`, **never a viewer**: what a source is doesn't depend on who asks. So it is answered at boot and cached until the source's schema version changes (§1.12), and validation reads it without I/O ([macaw_compose 07](https://gitlab.conet.yarina.org/dco-tek/macaw_compose/-/blob/main/spec/07-documents.md#documents-validation-time)).
+- **`describe/2`** takes the host's configuration for the source as its `context`, **never a viewer**: what a source is doesn't depend on who asks. So it is answered at boot and cached until the source's schema version changes (§1.12), and validation reads it without I/O ([macaw_compose 07](https://github.com/dcoai/macaw/blob/main/spec/07-documents.md#documents-validation-time)).
 - **The dispatch functions** (`Source.describe/2`, `fetch/3`, `subscribe/2`, `unsubscribe/2`) call a source's module. An answer of the wrong shape is a value too: `{:error, {:bad_describe, answer}}` or `{:error, {:bad_fetch, answer}}`.
 - **`fetch/3` checks the request against the description first** (§2.2): a request with an unknown, missing or illegal parameter is `{:error, {:params, faults}}`, and the source is never called. The source receives every parameter, defaults filled in.
 - **`subscribe/2` on a source that does not push** is `{:error, :no_push}`, and `unsubscribe/2` on one is `:ok`.
 - **`describer/1`** turns a map of named sources, each with its context, into the describe function `Schema.Cache.resolve/4` takes; a name not in the map is `{:error, :no_source}`.
 - **Errors are values.** A source never raises. (visualize.md C1; metresis.md C1.)
 - **The viewer is an argument, not a setting.** A source may refuse, filter or tease by it. Macaw never writes a viewer to a document, delivery or record. (dcotek_web.md C11; visualize.md C11.)
-- **Preferences are state, not part of the viewer.** A viewer's display preferences (`theme`, `zone`, `units`) are state sources ([macaw_compose 03](https://gitlab.conet.yarina.org/dco-tek/macaw_compose/-/blob/main/spec/03-state.md#state-sources)), persisted like any other state and passed to components in their context. The viewer carries identity and access only.
+- **Preferences are state, not part of the viewer.** A viewer's display preferences (`theme`, `zone`, `units`) are state sources ([macaw_compose 03](https://github.com/dcoai/macaw/blob/main/spec/03-state.md#state-sources)), persisted like any other state and passed to components in their context. The viewer carries identity and access only.
 
 It is a strict superset of visualize's `Visualize.Feed`: an existing feed is a source with no parameters. visualize's `describe/1` answered `{version, schema, supports}` and `fetch/3` took a window and a budget; adapting a feed is visualize's (#112).
 
@@ -340,7 +340,7 @@ a description defaults its parameters, capabilities and independence, and refuse
 
 ### 2.2 Parameters {#sources-parameters}
 
-**A parameter is the one shape for every typed option,** a source's or a component's: `Macaw.Data.Parameter`. macaw_data owns it (the owner's decision, 2026-10-27), since sources take parameters before any component exists; macaw_compose's components use the same shape ([macaw_compose 05 §1.1](https://gitlab.conet.yarina.org/dco-tek/macaw_compose/-/blob/main/spec/05-components.md#components-parameters)).
+**A parameter is the one shape for every typed option,** a source's or a component's: `Macaw.Data.Parameter`. macaw_data owns it (the owner's decision, 2026-10-27), since sources take parameters before any component exists; macaw_compose's components use the same shape ([macaw_compose 05 §1.1](https://github.com/dcoai/macaw/blob/main/spec/05-components.md#components-parameters)).
 
 ```elixir
 %{type: type,                           # required
@@ -441,7 +441,7 @@ times compare by kind; intersections, positions, the newer seam, applies and the
   - `window`: a range `[from, to]` over a `:time` or `:number` window field; a **box** `%{west: w, south: s, east: e, north: n}` over a `:point` one, in degrees, latitudes from −90 to 90 with `south` at most `north`, longitudes from −180 to 180 (`west` east of `east` crosses the antimeridian); or `nil`;
   - `resolution`: the spacing of the rows as served (seconds, or a name such as `:minute`), or `nil`;
   - `capped`: whether the source stopped short of the window it was asked for, `false` by default;
-  - `reduced_by`: who brought the rows within budget: **`:source`** (the source honored the budget) or **`:runtime`** (Macaw reduced a pooled delivery to this reader's budget, finished a budget the source didn't honor, or clamped a budget to the host ceiling); `nil` when nobody had to. A component that draws fewer rows than it was handed says so in its own drawn state ([macaw_compose 05](https://gitlab.conet.yarina.org/dco-tek/macaw_compose/-/blob/main/spec/05-components.md#components-states)), not in the delivery;
+  - `reduced_by`: who brought the rows within budget: **`:source`** (the source honored the budget) or **`:runtime`** (Macaw reduced a pooled delivery to this reader's budget, finished a budget the source didn't honor, or clamped a budget to the host ceiling); `nil` when nobody had to. A component that draws fewer rows than it was handed says so in its own drawn state ([macaw_compose 05](https://github.com/dcoai/macaw/blob/main/spec/05-components.md#components-states)), not in the delivery;
   - `params`: the parameters it was answered for, a map, `%{}` by default;
   - `note`: a line for a person (`"coarsened from raw"`), or `nil`.
 - **`origin`**: `%{source: name, request: digest, as_of: time}`, the source, a digest of the request (`Macaw.Layers.Document.digest/1` of it), and the `DateTime` it is as of when used, else `nil`; or `nil`.
@@ -508,13 +508,13 @@ fifty pushes buffer without a merge, and one drain merges them all in order
 
 <!-- surfex: deferred #108: change notification needs the page runtime -->
 
-**"This source's data changed; re-read it."** Any writer (an editing component after a commit, a host after an import) announces a change to a source by name, or the source pushes. Every reader on the page, and on other pages through the notification behavior ([macaw_compose 00](https://gitlab.conet.yarina.org/dco-tek/macaw_compose/-/blob/main/spec/00-overview.md#overview-goals) goal 3), re-fetches. Components never need to know who else reads the same data. (macaw_compose#9.)
+**"This source's data changed; re-read it."** Any writer (an editing component after a commit, a host after an import) announces a change to a source by name, or the source pushes. Every reader on the page, and on other pages through the notification behavior ([macaw_compose 00](https://github.com/dcoai/macaw/blob/main/spec/00-overview.md#overview-goals) goal 3), re-fetches. Components never need to know who else reads the same data. (macaw_compose#9.)
 
 ## 6. Running sources {#sources-running}
 
 ### 6.1 Budgets: the ceiling and pooling {#sources-budgets}
 
-- **The host ceiling** clamps every slot's budget ([macaw_compose 05](https://gitlab.conet.yarina.org/dco-tek/macaw_compose/-/blob/main/spec/05-components.md#components-budget)). A host sets it once; a page may lower it, never raise it. `Finish.ceiling/2` is the rule: `{budget, clamped?}`, a `nil` budget reading at the ceiling.
+- **The host ceiling** clamps every slot's budget ([macaw_compose 05](https://github.com/dcoai/macaw/blob/main/spec/05-components.md#components-budget)). A host sets it once; a page may lower it, never raise it. `Finish.ceiling/2` is the rule: `{budget, clamped?}`, a `nil` budget reading at the ceiling.
 - **Pooling:** several readers of one source and request cost one fetch, at the largest budget among them (`Finish.pooled/1`, `nil` when any reader wants every row), and each reader is reduced to its own budget (`Finish.reduce/4`, `reduced_by: :runtime`). (visualize.md C1.)
 
 ```test:finish-ceiling-pool
@@ -561,7 +561,7 @@ Every component emits interaction in **one struct**, `Macaw.Data.Event`, defined
 the struct can't be built without name, instance, initiator and time, and its defaults are the ones this section lists
 ```
 
-- **The recorded form,** `Macaw.Data.Event.recordable/1`, drops `row` and `point`. Records, observation and state snapshots only ever see the recorded form, so **row values never reach them**. The `identity` and the event's own `value` do, and they can be personal; whether they are recorded is decided per state source by capture level ([macaw_compose 08](https://gitlab.conet.yarina.org/dco-tek/macaw_compose/-/blob/main/spec/08-records.md#records-stores)).
+- **The recorded form,** `Macaw.Data.Event.recordable/1`, drops `row` and `point`. Records, observation and state snapshots only ever see the recorded form, so **row values never reach them**. The `identity` and the event's own `value` do, and they can be personal; whether they are recorded is decided per state source by capture level ([macaw_compose 08](https://github.com/dcoai/macaw/blob/main/spec/08-records.md#records-stores)).
 - **Building one:** `Macaw.Data.Event.new/1` builds an event from a keyword list or a map, checking every field: `name` and `instance` non-empty strings, `initiator` `:visitor` or `:system`, `time` a `DateTime`, `element` a map of `frame`, `item` and `path` with `path` a list (missing keys default to `nil`, `nil` and `[]`), `identity` and `row` a map or `nil`, `point` a pair of numbers or `nil`, `modifiers` a list of `:shift`, `:alt`, `:ctrl` and `:meta`. It returns `{:ok, event}` or `{:error, faults}`, a fault per bad field, **every one at once**, and a field the struct doesn't have is a fault too (`"is not an event field"`), never silently dropped. `Macaw.Data.Event.fields/0` lists the fields in this section's order, which an adopter's interim definition is checked against (macaw_compose spec 00 §5).
 
 ```test:event-fields
@@ -594,8 +594,8 @@ no value of the row ever appears in the recorded form (property over rows carryi
 
 These bind the component that draws, not this library's code; each emitting library's conformance kit checks them (macaw_compose spec 12).
 
-- **`element`** locates what was acted on: the component fills it. `item` is the element's stable id ([macaw_compose 05](https://gitlab.conet.yarina.org/dco-tek/macaw_compose/-/blob/main/spec/05-components.md#components-declares)); `path` lists **the item and its enclosing elements, innermost first** (a visual's mark is `[item]`; a prose component's element, its sections around it), aligned with visualize's established meaning (macaw_compose#65); `frame` is set only by components with an inner coordinate tree (a visual's frame), and is `nil` otherwise.
-- **`initiator`**, which the component sets, separates the steps of a view path (a visitor did something) from its markers (the system did something) ([macaw_compose 08](https://gitlab.conet.yarina.org/dco-tek/macaw_compose/-/blob/main/spec/08-records.md#records-paths)). A paused animation is a system event.
+- **`element`** locates what was acted on: the component fills it. `item` is the element's stable id ([macaw_compose 05](https://github.com/dcoai/macaw/blob/main/spec/05-components.md#components-declares)); `path` lists **the item and its enclosing elements, innermost first** (a visual's mark is `[item]`; a prose component's element, its sections around it), aligned with visualize's established meaning (macaw_compose#65); `frame` is set only by components with an inner coordinate tree (a visual's frame), and is `nil` otherwise.
+- **`initiator`**, which the component sets, separates the steps of a view path (a visitor did something) from its markers (the system did something) ([macaw_compose 08](https://github.com/dcoai/macaw/blob/main/spec/08-records.md#records-paths)). A paused animation is a system event.
 - **`time`** is the holder's now, passed to the component; a component's event code never reads a clock for it. A Macaw surface always supplies its own clock, which tests and replays control, so a recorded path replays with its times. A **standalone holder** (a visualize chart outside any surface, whose host is its holder) may default its now to the host's wall clock, if the default stays injectable and is checked to answer a `DateTime` (macaw_compose#73, #91; visualize#955).
 - **The drawn-token rule:** an event on an element that maps to data resolves against the drawing it landed on. Each drawing carries a token; an event whose token is not the current drawing's is dropped, never resolved against newer data. (visualize D-170.)
 - **Identity is the declared identity** of the item (§1). Inference from other fields is allowed only for a visitor's one-off pick, never for tracking or recording. (visualize D-167.)

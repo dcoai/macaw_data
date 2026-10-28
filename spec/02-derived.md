@@ -147,7 +147,7 @@ to_map and new are exact inverses for valid sources, every name a string, every 
 
 ## 2. Inputs {#derived-inputs}
 
-Inputs are **sources, by name**: anything that satisfies the source contract ([01](01-sources.md#sources-contract)). That covers feeds and other derived sources, and, on a Macaw page, state sources and exports, which `macaw_compose` makes satisfy the contract ([macaw_compose 03](https://gitlab.conet.yarina.org/dco-tek/macaw_compose/-/blob/main/spec/03-state.md#state-sources)). `macaw_data` knows nothing of pages; it sees named sources.
+Inputs are **sources, by name**: anything that satisfies the source contract ([01](01-sources.md#sources-contract)). That covers feeds and other derived sources, and, on a Macaw page, state sources and exports, which `macaw_compose` makes satisfy the contract ([macaw_compose 03](https://github.com/dcoai/macaw/blob/main/spec/03-state.md#state-sources)). `macaw_data` knows nothing of pages; it sees named sources.
 
 The function may take all of a scope's inputs together. metresis's series naming is computed once over every metric's feed. (metresis.md C2.)
 
@@ -224,7 +224,7 @@ the context holds each input's schema as string-keyed data and its delivery's wi
 
 ## 3. Scoping {#derived-scoping}
 
-A derived source is defined at a scope: on a Macaw page, the page, a surface, a container or a cell ([macaw_compose 03](https://gitlab.conet.yarina.org/dco-tek/macaw_compose/-/blob/main/spec/03-state.md#state-dag)). `macaw_data` knows scopes only as **paths**: a source's path is its scopes' names from the outside in, then its id, a **list of strings** (visualize#643, settled question 1), so a name that holds a dot cannot break it. It is shown **dotted**, `ops.health` (`Macaw.Data.Derived.dotted/1`).
+A derived source is defined at a scope: on a Macaw page, the page, a surface, a container or a cell ([macaw_compose 03](https://github.com/dcoai/macaw/blob/main/spec/03-state.md#state-dag)). `macaw_data` knows scopes only as **paths**: a source's path is its scopes' names from the outside in, then its id, a **list of strings** (visualize#643, settled question 1), so a name that holds a dot cannot break it. It is shown **dotted**, `ops.health` (`Macaw.Data.Derived.dotted/1`).
 
 **One resolver, from the inside out** (visualize#643, settled question 2). `Macaw.Data.Derived.resolve(paths, scope, ref)` finds what a reference names, given the paths of every definition (a list, or a map keyed by path) and the scope it is read from (a scope's path): `{:ok, path}` or `:error`.
 
@@ -519,7 +519,7 @@ a changed input marks its readers and a pulse is due after the debounce; a pulse
 
 ### 8.3 Faults {#derived-engine-faults}
 
-A source's call is one bounded call (§6.4), with the engine's bounds. **When it fails, the source keeps its last good output, and the pulse does not propagate past it**: the sources that read it are not marked by it (visualize#643, settled question 4). Its state is `{:down, {:derived, id, kind}}`, `kind` one of §6.4's six. Its readers draw its last output as `stale`, worded with the kind ([macaw_compose 05](https://gitlab.conet.yarina.org/dco-tek/macaw_compose/-/blob/main/spec/05-components.md#components-states)). The fault's **detail** (the checker's faults, the limit, the exception's module, the index and field of a nonconforming answer) never holds a value of the rows nor of a context. The next pulse that marks the source runs it again; a good answer clears the fault.
+A source's call is one bounded call (§6.4), with the engine's bounds. **When it fails, the source keeps its last good output, and the pulse does not propagate past it**: the sources that read it are not marked by it (visualize#643, settled question 4). Its state is `{:down, {:derived, id, kind}}`, `kind` one of §6.4's six. Its readers draw its last output as `stale`, worded with the kind ([macaw_compose 05](https://github.com/dcoai/macaw/blob/main/spec/05-components.md#components-states)). The fault's **detail** (the checker's faults, the limit, the exception's module, the index and field of a nonconforming answer) never holds a value of the rows nor of a context. The next pulse that marks the source runs it again; a good answer clears the fault.
 
 ```test:derived-engine-fault-kept
 a failing source keeps its last good output, is down with its kind, and does not mark its readers; its detail holds no value; the next good answer clears it

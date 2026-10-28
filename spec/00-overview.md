@@ -2,7 +2,7 @@
 
 ## 1. What macaw_data holds {#data-holds}
 
-`macaw_data` is the smallest Macaw package, and the one every other depends on for data ([macaw_compose 00 §4](https://gitlab.conet.yarina.org/dco-tek/macaw_compose/-/blob/main/spec/00-overview.md#overview-packaging)):
+`macaw_data` is the smallest Macaw package, and the one every other depends on for data ([macaw_compose 00 §4](https://github.com/dcoai/macaw/blob/main/spec/00-overview.md#overview-packaging)):
 - **the interaction event** and its recorded form ([01 §8](01-sources.md#sources-event));
 - **the data model:** Table, Schema, Delivery, units, quantities and facts ([01 §1](01-sources.md#sources-data), [03](03-units.md));
 - **the source contract,** push, change notification and the source conformance kit ([01 §2–§7](01-sources.md#sources-contract), [§9](01-sources.md#sources-conformance));
