@@ -297,4 +297,34 @@ defmodule Macaw.Data.FinishTest do
     assert %Table{} = kept.rows
     assert Table.column(kept.rows, "v") == [5.0, 6.0, 7.0]
   end
+
+  # What a source steps its window by (macaw#185), ported from visualize's feed window.
+  @tag verifies: "window-feed-steps"
+  test "before/4, region/2, range/2 and check/2 over the axes alone" do
+    rows = for t <- [1, 5, 9, nil], do: %{"t" => t}
+    assert Window.before(rows, "t", nil, 5) == [%{"t" => 1}]
+    assert Window.before(rows, :t, 5, nil) == [%{"t" => 5}, %{"t" => 9}]
+    assert Window.before(rows, "t", 1, 9) == [%{"t" => 1}, %{"t" => 5}]
+
+    at = ~U[2026-10-29 00:00:00Z]
+    times = Schema.new!(%{"t" => %{type: :time, window: true}, "v" => %{type: :number}})
+    assert Window.region([at, nil], times) == %{"t" => [at, nil]}
+    assert Window.region([0, 10], times) == nil
+    assert Window.region([0, 10], Schema.new!(%{"v" => %{type: :number}})) == nil
+    assert Window.region(nil, times) == nil
+    assert Window.region(%{"v" => [0, 1]}, times) == %{"v" => [0, 1]}
+
+    assert Window.range(%{"t" => [1, 5]}, :t) == [1, 5]
+    assert Window.range(%{t: [1, 5]}, "t") == [1, 5]
+    assert Window.range([1, 5], "t") == [1, 5]
+    assert Window.range(%{"v" => [0, 1]}, "t") == nil
+    assert Window.range(:everything, "t") == :everything
+
+    assert Window.check(%{}, times) == :ok
+    assert Window.check(%{region: %{"t" => [at, nil]}}, times) == :ok
+    assert {:error, [{[:latest], {:window, :no_identity}}]} = Window.check(%{latest: true}, times)
+
+    assert Window.check(%{region: %{"v" => [9, 1]}, at: 1}, times) ==
+             {:error, [{[:at], :unknown_key}, {[:region, "v"], {:window, :inverted}}]}
+  end
 end

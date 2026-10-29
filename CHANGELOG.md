@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- What a source steps its window by: `Window.before/4`, `region/2` (visualize's `box/2`: a window as the region it asks of a schema), `range/2`, and `check/2` of the axes alone as well as of a request (dco-tek/macaw/macaw#185, #5).
 - Packing a table and reading it back do about half the work: types inferred only where not given, values checked in one pass, column names merged once, rows built a column step at a time, and time columns converted by the date's fields, a fifth of `DateTime`'s own conversion (dco-tek/macaw/macaw#185, #4).
 - **Breaking:** a delivery keeps the rows its source gave (dco-tek/macaw/macaw#185). `%Delivery{rows, names, types, served, schema, origin}`: nothing is packed or rewritten when it is made; `Delivery.rows/1` and `Table.rows/1` of a delivery read the rows as they are (a row list uncopied, tuple rows unchanged); `Delivery.table/2` and `table!/2` pack them for a reader that wants columns; `named_rows/1` names tuple rows and tensors by `names:`; `empty?/1`. The `table` field is gone: read `Delivery.table!/1`. Finishing and push keep the rows' form. `Table.unnamed?/1` (#3).
 

@@ -27,6 +27,9 @@ defmodule Macaw.Data.Window do
   alias Macaw.Data.{Schema, Table}
   alias Macaw.Data.Source.Request
 
+  # The request's fields a window check reads.
+  @axes [:window, :box, :region, :latest]
+
   @type time :: number() | DateTime.t() | NaiveDateTime.t() | Date.t()
   @type t :: [time() | nil] | nil
 
@@ -95,6 +98,85 @@ defmodule Macaw.Data.Window do
       value != nil and compare(value, time) == :gt
     end)
   end
+
+  @doc """
+  The rows whose `field` lies in `[from, upper)`: `from` inclusive and open when `nil`,
+  `upper` exclusive and open when `nil`; a row with no time lies in none. The seam of a
+  combination, where one source's rows stop and the next's begin (macaw#185, ported from
+  visualize's `Visualize.Feed.Window.before/4`).
+
+      iex> Macaw.Data.Window.before([%{t: 1}, %{t: 5}, %{t: 9}], :t, nil, 5)
+      [%{t: 1}]
+      iex> Macaw.Data.Window.before([%{t: 1}, %{t: 5}, %{t: 9}], :t, 5, nil)
+      [%{t: 5}, %{t: 9}]
+  """
+  @spec before([map()], Table.name(), time() | nil, time() | nil) :: [map()]
+  def before(rows, field, from, upper) do
+    Enum.filter(rows, fn row ->
+      time = Table.get(row, field)
+      time != nil and after_from?(time, from) and (upper == nil or compare(time, upper) == :lt)
+    end)
+  end
+
+  @doc """
+  The region a window asks of a schema (macaw#185): a range `[from, to]` is the window
+  field's region, `%{field => [from, to]}`, where it applies to the window field's type,
+  and `nil` (the source's own span) where it does not or the schema has no `:time` or
+  `:number` window field; a region passes as it is; `nil` is `nil`.
+
+  visualize's box (D-168), `%{ranges: ranges, latest: latest}`, is a request's `region`
+  and `latest` here: `region(ranges, schema)` and `latest:` beside it.
+
+      iex> alias Macaw.Data.Schema
+      iex> schema = Schema.new!(%{t: %{type: :number, window: true}, v: %{type: :number}})
+      iex> Macaw.Data.Window.region([0, 10], schema)
+      %{t: [0, 10]}
+      iex> Macaw.Data.Window.region([~U[2026-10-14 00:00:00Z], nil], schema)
+      nil
+      iex> Macaw.Data.Window.region(%{v: [0, 1]}, schema)
+      %{v: [0, 1]}
+  """
+  @spec region(t() | %{Table.name() => t()}, Schema.t()) :: %{Table.name() => t()} | nil
+  def region(nil, %Schema{}), do: nil
+
+  def region([_from, _to] = window, %Schema{} = schema) do
+    field = Schema.window_field(schema)
+
+    with field when field != nil <- field,
+         {:ok, type} when type in [:time, :number] <- Schema.fetch(schema, field, :type),
+         true <- applies?(window, type) do
+      %{field => window}
+    else
+      _ -> nil
+    end
+  end
+
+  def region(%{} = region, %Schema{}) when not is_struct(region), do: region
+
+  @doc """
+  A field's range of a window or a region (macaw#185, visualize's `range/2`): a region's
+  entry for the field, by either spelling of its name; a range `[from, to]` itself, which
+  is the window field's; `nil` when there is none. Anything else is returned as it is,
+  so a source that reads its window field's range this way still refuses what it can't.
+
+      iex> Macaw.Data.Window.range(%{"t" => [1, 5], x: [0, 9]}, :t)
+      [1, 5]
+      iex> Macaw.Data.Window.range([1, 5], :t)
+      [1, 5]
+      iex> Macaw.Data.Window.range(%{x: [0, 9]}, :t)
+      nil
+  """
+  @spec range(term(), Table.name()) :: term()
+  def range(%{} = region, field) when not is_struct(region) do
+    Enum.find_value(region, fn {name, range} -> if same?(name, field), do: range end)
+  end
+
+  def range(window, _field), do: window
+
+  defp same?(a, b) when (is_atom(a) or is_binary(a)) and (is_atom(b) or is_binary(b)),
+    do: to_string(a) == to_string(b)
+
+  defp same?(_a, _b), do: false
 
   @doc "The intersection of two windows, either `nil` for everything."
   @spec intersect(t(), t()) :: t()
@@ -194,6 +276,18 @@ defmodule Macaw.Data.Window do
   `latest` needs a `:time` or `:number` window field and a declared identity. A request asking none of them is
   `:ok`.
 
+  It takes a `%Request{}`, or the axes alone as a map of its fields (`window`, `box`,
+  `region`, `latest`, each defaulting as a request's does), so a source stepping its
+  window checks one without a whole request (macaw#185); any other key is
+  `{[key], :unknown_key}`.
+
+      iex> alias Macaw.Data.Schema
+      iex> schema = Schema.new!(%{t: %{type: :number, window: true}, v: %{type: :number}})
+      iex> Macaw.Data.Window.check(%{region: %{t: [0, 5]}}, schema)
+      :ok
+      iex> Macaw.Data.Window.check(%{window: [9, 1], at: 3}, schema)
+      {:error, [{[:at], :unknown_key}]}
+
       iex> alias Macaw.Data.{Schema, Source.Request}
       iex> schema = Schema.new!(%{t: %{type: :number, window: true}, s: %{type: :category}})
       iex> Macaw.Data.Window.check(Request.new!(now: ~U[2026-10-27 00:00:00Z], region: %{t: [9, 1], s: ["a", "b"]}, latest: true), schema)
@@ -204,7 +298,24 @@ defmodule Macaw.Data.Window do
          {[:region, :t], {:window, :inverted}}
        ]}
   """
-  @spec check(Request.t(), Schema.t()) :: :ok | {:error, [{list(), term()}, ...]}
+  @spec check(Request.t() | map(), Schema.t()) :: :ok | {:error, [{list(), term()}, ...]}
+  def check(request_or_axes, schema)
+
+  # The axes alone, as a map of the request's fields (macaw#185): a source steps its
+  # window, or visualize checks its box, without a whole request.
+  def check(%{} = axes, %Schema{} = schema) when not is_struct(axes) do
+    unknown = for key <- Map.keys(axes), key not in @axes, do: {[key], :unknown_key}
+
+    request =
+      struct(Request, Map.merge(%{window: nil, box: nil, region: nil, latest: false}, axes))
+
+    case {unknown, check(request, schema)} do
+      {[], result} -> result
+      {unknown, :ok} -> {:error, Enum.sort_by(unknown, &elem(&1, 0))}
+      {unknown, {:error, faults}} -> {:error, Enum.sort_by(unknown ++ faults, &elem(&1, 0))}
+    end
+  end
+
   def check(%Request{} = request, %Schema{} = schema) do
     field = Schema.window_field(schema)
     type = field && Schema.fetch(schema, field, :type) |> elem(1)
