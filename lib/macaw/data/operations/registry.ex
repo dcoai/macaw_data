@@ -8,6 +8,7 @@ defmodule Macaw.Data.Operations.Registry do
   """
 
   alias Macaw.Data.{Aggregate, Transform}
+  alias Macaw.Layers.Document
 
   @enforce_keys [:packages, :transforms, :aggregates, :digest]
   defstruct [:packages, :transforms, :aggregates, :digest]
@@ -109,10 +110,12 @@ defmodule Macaw.Data.Operations.Registry do
     end)
   end
 
-  defp digest(transforms, aggregates) do
-    term = {Enum.sort(transforms), Enum.sort(aggregates)}
-    :crypto.hash(:sha256, :erlang.term_to_binary(term)) |> Base.encode16(case: :lower)
-  end
+  # The kernel's term digest of every name and its module (spec/04 §2): a canonical
+  # encoding of the term, where `term_to_binary/1` is a representation that need not agree
+  # across OTP releases. Maps are canonical in it, so the order members were registered in
+  # never moves it.
+  defp digest(transforms, aggregates),
+    do: Document.digest(%{"transforms" => transforms, "aggregates" => aggregates})
 
   @doc "The transform module named `name`, by spelling, or `:error`."
   @spec transform(t(), String.t() | atom()) :: {:ok, module()} | :error

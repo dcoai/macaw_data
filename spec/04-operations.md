@@ -95,11 +95,16 @@ every option type holds the values it names and refuses the rest with a reason n
 
 - **Default closed.** `macaw_data`'s own package is always in, since it is the library's own pure code, as `Enum` is the allowlist's (02 §6.2). Anything else is what the list names and nothing more: a module that is merely loaded is not reachable, and no application environment is read.
 - **Duplicates fail at build.** Two members of one behavior with one name raise `ArgumentError` naming the name, both modules and their packages; a package listed twice is listed once. So does an aggregate declaring a step's key as its own option (§1.2), and a module `__members__/0` lists that implements none of the behaviors.
-- **Names are strings, matched by spelling,** and the registry maps each to its module: `transform(registry, name)` and `aggregate(registry, name)` answer `{:ok, module}` or `:error`; `transforms/1` and `aggregates/1` every name, sorted; `packages/1` the packages, `Macaw.Data.Operations` first; `digest/1` a digest of every member's name and module, which a compile cache keys by (§6.2).
+- **Names are strings, matched by spelling,** and the registry maps each to its module: `transform(registry, name)` and `aggregate(registry, name)` answer `{:ok, module}` or `:error`; `transforms/1` and `aggregates/1` every name, sorted; `packages/1` the packages, `Macaw.Data.Operations` first; `digest/1` the kernel's term digest of every member's name and module (`Macaw.Layers.Document.digest/1`, never `term_to_binary`, which need not agree across OTP releases), which a compile cache keys by (§6.2); it does not depend on the order members were registered in.
+- **A checked step has a canonical identity,** `step_digest(registry, node)`: the kernel's term digest of the transform module its name resolves to and the node `validate/3` checked, options by their strings with defaults filled in. Two nodes that mean the same step have one identity whatever the order their options were written in; the same name resolved to another module has another. A node naming no transform raises `ArgumentError`. It is what a cache of a step's results keys by (macaw_data#9's step keys build on it).
 - macaw_compose's registry (step 8) builds on this one for its other behaviors and does not replace it. It knows the packages a host lists but has not enabled, so it is what names the providing package in an unknown name's fault (`transform "sankey" is not available: enable visualize_layouts`); here an unknown name is a fault without one (§3.1).
 
 ```test:operations-registry-build
 the registry holds macaw_data's own package and exactly the packages listed; a duplicate name, an aggregate declaring a step's key and a member implementing no behavior each raise naming what collides; names resolve by spelling to their module and the digest changes with the members
+```
+
+```test:operations-step-digest
+the registry's digest is the kernel's term digest of its names and modules; a checked step's identity is the same for the same step written with its options in any order, differs with an option's value and with the module its name resolves to, and a node naming no transform raises
 ```
 
 ## 3. Running {#operations-run}

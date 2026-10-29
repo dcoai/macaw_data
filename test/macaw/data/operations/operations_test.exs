@@ -214,6 +214,54 @@ defmodule Macaw.Data.OperationsTest do
       assert_raise ArgumentError, ~r/Enum is not a package/, fn -> Operations.registry([Enum]) end
     end
 
+    @tag verifies: "operations-step-digest"
+    test "the digest is the kernel's term digest of every name and its module" do
+      %Registry{transforms: transforms, aggregates: aggregates} = registry = registry()
+
+      assert Operations.digest(registry) ==
+               Macaw.Layers.Document.digest(%{
+                 "transforms" => transforms,
+                 "aggregates" => aggregates
+               })
+    end
+
+    @tag verifies: "operations-step-digest"
+    test "a checked step's identity: the same step in any option order, another for another value or module" do
+      registry = registry()
+
+      {:ok, [a]} =
+        Operations.validate(
+          registry,
+          [%{"op" => "filter", "field" => "x", "test" => "gt", "value" => 1}],
+          %{}
+        )
+
+      {:ok, [b]} =
+        Operations.validate(
+          registry,
+          [%{"value" => 1, "test" => "gt", "field" => "x", "op" => "filter"}],
+          %{}
+        )
+
+      {:ok, [c]} =
+        Operations.validate(
+          registry,
+          [%{"op" => "filter", "field" => "x", "test" => "gt", "value" => 2}],
+          %{}
+        )
+
+      assert Operations.step_digest(registry, a) == Operations.step_digest(registry, b)
+      assert Operations.step_digest(registry, a) != Operations.step_digest(registry, c)
+
+      # The same name and options under another module are another step.
+      assert Operations.step_digest(registry, a) !=
+               Macaw.Layers.Document.digest(%{"module" => Macaw.Data.Test.Ops.Twin, "node" => a})
+
+      assert_raise ArgumentError, ~r/"nope" names no transform/, fn ->
+        Operations.step_digest(registry, %{"op" => "nope"})
+      end
+    end
+
     @tag verifies: "operations-registry-build"
     test "the digest changes with the members" do
       assert Operations.digest(Operations.registry()) != Operations.digest(registry())

@@ -77,6 +77,26 @@ defmodule Macaw.Data.Operations do
   @spec digest(Registry.t()) :: String.t()
   def digest(%Registry{digest: digest}), do: digest
 
+  @doc """
+  A checked step's canonical identity (spec/04 §2): the kernel's term digest of the
+  transform module the registry gives its name and the node `validate/3` checked, its
+  options by their strings with defaults filled in. Two nodes that mean the same step have
+  one identity whatever order their options were written in, and a step whose name another
+  registry gives to another module has another. A node naming no transform of the registry
+  raises `ArgumentError`: only a checked node has an identity.
+  """
+  @spec step_digest(Registry.t(), map()) :: String.t()
+  def step_digest(%Registry{} = registry, %{"op" => op} = node) do
+    case Registry.transform(registry, op) do
+      {:ok, module} ->
+        Macaw.Layers.Document.digest(%{"module" => module, "node" => node})
+
+      :error ->
+        raise ArgumentError,
+              "step_digest/2 takes a checked node; #{inspect(op)} names no transform"
+    end
+  end
+
   # -- validating -------------------------------------------------------------------------
 
   @doc """
