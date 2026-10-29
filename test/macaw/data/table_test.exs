@@ -314,6 +314,26 @@ defmodule Macaw.Data.TableTest do
       assert {:ok, %Table{size: 0, names: []}} = Table.new([])
     end
 
+    # A time column converts by the date's fields, not DateTime's own functions
+    # (macaw#185): over the whole range DateTime takes, before year 0 and after, it
+    # reads back what DateTime would.
+    @tag verifies: "table-packed"
+    property "a time column reads back each time as DateTime converts it, from year -9999 to 9999" do
+      min = DateTime.to_unix(~U[-9999-01-01 00:00:00.000000Z], :microsecond)
+      max = DateTime.to_unix(~U[9999-12-31 23:59:59.999999Z], :microsecond)
+      edges = [min, max, 0, -1, -62_167_219_200_000_000, -62_167_219_200_000_001]
+
+      check all(
+              us <- list_of(one_of([integer(min..max), member_of(edges)]), max_length: 40),
+              gap <- boolean()
+            ) do
+        times = Enum.map(us, &DateTime.from_unix!(&1, :microsecond))
+        values = if gap, do: [nil | times], else: times
+        {:ok, table} = Table.new([{:t, :time, values}])
+        assert Table.column(table, :t) == values
+      end
+    end
+
     @tag verifies: "table-packed"
     test "numbers and times are packed binaries with a validity bitmap; a gap stays a gap" do
       table =

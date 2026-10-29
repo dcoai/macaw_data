@@ -148,13 +148,12 @@ defmodule Macaw.Data.Table do
   def from(source, opts) do
     rows = rows(source)
     given = Keyword.get(opts, :types, %{})
-    inferred = infer(rows)
 
     rows
     |> column_names()
     |> Enum.map(fn name ->
-      type = Map.get(given, name) || Map.get(inferred, name, :term)
       values = Enum.map(rows, &Map.get(&1, name))
+      type = Map.get(given, name) || infer_column(values) || :term
       {name, type, if(type == :time, do: Enum.map(values, &to_datetime/1), else: values)}
     end)
     |> new()
@@ -196,7 +195,7 @@ defmodule Macaw.Data.Table do
   defp column(:time, values, name) do
     case faults(values, name, &match?(%DateTime{}, &1), :time) do
       [] ->
-        us = &<<DateTime.to_unix(&1, :microsecond)::signed-little-64>>
+        us = &<<to_us(&1)::signed-little-64>>
         {:ok, {:us, pack(values, us, <<0::64>>), validity(values)}}
 
       faults ->
@@ -216,7 +215,15 @@ defmodule Macaw.Data.Table do
   defp column(_type, values, _name), do: {:ok, {:list, values}}
 
   defp faults(values, name, ok?, type) do
-    for {v, i} <- Enum.with_index(values), v != nil, not ok?.(v), do: {[name, i], {:type, type}}
+    if Enum.all?(values, &(&1 == nil or ok?.(&1))),
+      do: [],
+      else:
+        for(
+          {v, i} <- Enum.with_index(values),
+          v != nil,
+          not ok?.(v),
+          do: {[name, i], {:type, type}}
+        )
   end
 
   defp pack(values, encode, zero),
@@ -262,8 +269,48 @@ defmodule Macaw.Data.Table do
   defp values({:f64, bin, valid}), do: unpack(bin, valid, fn <<f::float-little-64>> -> f end)
 
   defp values({:us, bin, valid}),
-    do:
-      unpack(bin, valid, fn <<us::signed-little-64>> -> DateTime.from_unix!(us, :microsecond) end)
+    do: unpack(bin, valid, fn <<us::signed-little-64>> -> from_us(us) end)
+
+  # A time column's microseconds since the Unix epoch, both ways, built from the date's
+  # fields rather than through `DateTime.to_unix/2` and `from_unix!/2`: a fifth of the
+  # work per value (macaw#185). `:calendar` counts days from year 0, so a time before it,
+  # and a `DateTime` not in UTC, take `DateTime`'s own way; the two agree everywhere.
+  @epoch_days :calendar.date_to_gregorian_days(1970, 1, 1)
+  @day_us 86_400_000_000
+  @year_zero_us -@epoch_days * @day_us
+
+  defp to_us(%DateTime{calendar: Calendar.ISO, utc_offset: 0, std_offset: 0, year: y} = t)
+       when y >= 0 do
+    {us, _precision} = t.microsecond
+    days = :calendar.date_to_gregorian_days(y, t.month, t.day) - @epoch_days
+    (days * 86_400 + t.hour * 3600 + t.minute * 60 + t.second) * 1_000_000 + us
+  end
+
+  defp to_us(%DateTime{} = t), do: DateTime.to_unix(t, :microsecond)
+
+  defp from_us(us) when us < @year_zero_us, do: DateTime.from_unix!(us, :microsecond)
+
+  defp from_us(us) do
+    days = Integer.floor_div(us, @day_us)
+    in_day = us - days * @day_us
+    {year, month, day} = :calendar.gregorian_days_to_date(@epoch_days + days)
+    seconds = div(in_day, 1_000_000)
+
+    %DateTime{
+      year: year,
+      month: month,
+      day: day,
+      hour: div(seconds, 3600),
+      minute: rem(div(seconds, 60), 60),
+      second: rem(seconds, 60),
+      microsecond: {rem(in_day, 1_000_000), 6},
+      std_offset: 0,
+      utc_offset: 0,
+      zone_abbr: "UTC",
+      time_zone: "Etc/UTC",
+      calendar: Calendar.ISO
+    }
+  end
 
   defp unpack(bin, valid, decode) do
     words = for <<w::binary-size(8) <- bin>>, do: w
@@ -279,9 +326,7 @@ defmodule Macaw.Data.Table do
         List.duplicate(%{}, table.size)
 
       _ ->
-        names
-        |> Enum.map(&column(table, &1))
-        |> Enum.zip_with(fn values -> names |> Enum.zip(values) |> Map.new() end)
+        transpose(names, Enum.map(names, &column(table, &1)), [])
     end
   end
 
@@ -299,6 +344,19 @@ defmodule Macaw.Data.Table do
   def rows([first | _] = list) do
     if columns?(list, first), do: column_rows(list), else: list
   end
+
+  # One row a step: the heads of every column under the names, then the tails.
+  defp transpose(_names, [[] | _], acc), do: :lists.reverse(acc)
+
+  defp transpose(names, columns, acc) do
+    {heads, tails} = heads_tails(columns, [], [])
+    transpose(names, tails, [:maps.from_list(:lists.zip(names, heads)) | acc])
+  end
+
+  defp heads_tails([[head | tail] | columns], heads, tails),
+    do: heads_tails(columns, [head | heads], [tail | tails])
+
+  defp heads_tails([], heads, tails), do: {:lists.reverse(heads), :lists.reverse(tails)}
 
   @doc "Row `i` (from 0) as a map, or `nil` past the end."
   @spec row(t(), non_neg_integer()) :: map() | nil
@@ -492,6 +550,9 @@ defmodule Macaw.Data.Table do
         do: {name, type}
   end
 
+  # One column's type from its values, gaps aside; nil when nothing suggests one.
+  defp infer_column(values), do: infer_one(Enum.reject(values, &is_nil/1))
+
   defp infer_one([]), do: nil
 
   defp infer_one(values) do
@@ -579,11 +640,11 @@ defmodule Macaw.Data.Table do
 
   defp column_names(rows) do
     rows
-    |> Enum.flat_map(fn
-      row when is_map(row) -> Map.keys(row)
-      _ -> []
+    |> Enum.reduce(%{}, fn
+      row, seen when is_map(row) -> Map.merge(seen, row)
+      _row, seen -> seen
     end)
-    |> Enum.uniq()
+    |> Map.keys()
     |> Enum.sort()
   end
 
