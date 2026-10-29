@@ -7,8 +7,11 @@ defmodule Macaw.Data.SchemaTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
+  import Macaw.Layers.Color, only: [sigil_RGB: 2]
+
   alias Macaw.Data.{Schema, Table}
   alias Macaw.Data.Schema.Cache
+  alias Macaw.Layers.Color
 
   doctest Schema
   doctest Cache
@@ -115,9 +118,9 @@ defmodule Macaw.Data.SchemaTest do
     @tag verifies: "schema-values"
     test "a declared value may be an entry with a name and a color" do
       values = [
-        %{value: "ok", name: "OK", color: "#2e7d32"},
-        %{value: "degraded", name: "Degraded", color: "orange"},
-        %{value: :down, color: "#B71C1Ccc"},
+        %{value: "ok", name: "OK", color: ~RGB"#2e7d32"},
+        %{value: "degraded", name: "Degraded", color: {:alpha, {:color, "warning"}, 0.74}},
+        %{value: :down, color: Color.parse!("#B71C1Ccc")},
         "unknown",
         3
       ]
@@ -135,16 +138,16 @@ defmodule Macaw.Data.SchemaTest do
       # The description is kept as declared, its values by their spelling; the accessors
       # read it.
       assert Schema.fetch(schema, :state, :values) ==
-               {:ok, List.replace_at(values, 2, %{value: "down", color: "#B71C1Ccc"})}
+               {:ok, List.replace_at(values, 2, %{value: "down", color: ~RGB"#B71C1Ccc"})}
 
       assert Schema.values(schema, :state) == ["ok", "degraded", "down", "unknown", 3]
       assert Schema.values(schema, "state") == Schema.values(schema, :state)
       assert Schema.value_names(schema, :state) == %{"ok" => "OK", "degraded" => "Degraded"}
 
       assert Schema.value_colors(schema, :state) == %{
-               "ok" => "#2e7d32",
-               "degraded" => "orange",
-               "down" => "#B71C1Ccc"
+               "ok" => ~RGB"#2e7d32",
+               "degraded" => {:alpha, {:color, "warning"}, 0.74},
+               "down" => ~RGB"#B71C1Ccc"
              }
     end
 
@@ -181,9 +184,9 @@ defmodule Macaw.Data.SchemaTest do
                    %{name: "No value"},
                    %{value: nil},
                    %{value: "a", name: :a},
-                   %{value: "b", color: "not-a-color"},
-                   %{value: "c", color: {:ramp, :status, 0.5}},
-                   %{value: "d", color: "#12345"},
+                   %{value: "b", color: "#2e7d32"},
+                   %{value: "c", color: {:alpha, {:color, :good}, 2}},
+                   %{value: "d", color: {:color, "Good"}},
                    %{value: "e", label: "E"},
                    "a",
                    %{value: "b", name: "B again"}
@@ -218,7 +221,7 @@ defmodule Macaw.Data.SchemaTest do
 
     @tag verifies: "schema-values"
     test "order and status are checked against the bare values" do
-      values = [%{value: :ok, name: "OK"}, %{value: :error, color: "#c62828"}]
+      values = [%{value: :ok, name: "OK"}, %{value: :error, color: ~RGB"#c62828"}]
 
       assert {:ok, _} =
                Schema.new(%{
@@ -288,16 +291,20 @@ defmodule Macaw.Data.SchemaTest do
 
     @tag verifies: "schema-color-keys"
     test "a color cannot hide in a status either: a role is a word, never a color" do
-      assert faults(%{s: %{type: :category, status: %{"fail" => {:palette, 5}}}}) ==
-               [{[:s, :status], {:type, :status}}]
-
-      for role <- ["#c00", "red", :orange],
+      for role <- [{:palette, 5}, {:color, :bad}, ~RGB"#c00", "", nil, true, 3],
           do:
             assert(
               faults(%{s: %{type: :category, status: %{"fail" => role}}}) == [
                 {[:s, :status], {:type, :status}}
-              ]
+              ],
+              inspect(role)
             )
+
+      # A string is never a color, so a role spelled like a CSS name is a role.
+      for role <- [:orange, "orange", "red"] do
+        assert {:ok, schema} = Schema.new(%{s: %{type: :category, status: %{"fail" => role}}})
+        assert Schema.fetch(schema, :s, :status) == {:ok, %{"fail" => to_string(role)}}
+      end
 
       # A role read back from JSON is its string, and still a role.
       assert {:ok, _} = Schema.new(%{s: %{type: :category, status: %{"fail" => "bad"}}})
@@ -836,16 +843,49 @@ defmodule Macaw.Data.SchemaTest do
 
     @tag verifies: "schema-version"
     test "a typed color or a color struct in a value entry never crashes new/1" do
-      # Whether such a color is a data color is spec/01 §1.7's; the version no longer goes
-      # through the JSON form, so building one answers rather than raises.
-      red = %Macaw.Layers.Color{r: 255.0, g: 0.0, b: 0.0, opacity: 1.0}
+      # The version never goes through the JSON form, so building one answers rather than
+      # raises: a color term is a data color (spec/01 §1.7), and a struct that is not a
+      # literal is refused as no color.
+      red = %Color{r: 255.0, g: 0.0, b: 0.0, opacity: 1.0}
 
       for color <- [{:color, :good}, red] do
         entry = %{s: %{type: :category, values: [%{value: "ok", color: color}]}}
-
-        assert match?({:ok, %Schema{}}, Schema.new(entry)) or
-                 match?({:error, [_ | _]}, Schema.new(entry))
+        assert {:ok, %Schema{}} = Schema.new(entry)
       end
+
+      assert faults(%{
+               s: %{type: :category, values: [%{value: "ok", color: %Color{r: 255, g: 0, b: 0}}]}
+             }) == [{[:s, :values, 0, :color], {:type, :color}}]
+    end
+
+    @tag verifies: "schema-data-colors"
+    test "a typed color's names count by their spelling: one color, one version" do
+      atoms =
+        Schema.new!(%{
+          s: %{
+            type: :category,
+            values: [
+              %{value: "ok", color: {:color, :good}},
+              %{value: "warn", color: {:alpha, {:blend, [{:color, :warning}, ~RGB"#fff"]}, 0.5}},
+              %{value: "fail", color: {:contrast, {:ramp, :status, 0.2}}}
+            ]
+          }
+        })
+
+      strings =
+        Schema.new!(%{
+          s: %{
+            type: :category,
+            values: [
+              %{value: "ok", color: Color.color("good")},
+              %{value: "warn", color: {:alpha, {:blend, [{:color, "warning"}, ~RGB"#fff"]}, 0.5}},
+              %{value: "fail", color: {:contrast, {:ramp, "status", 0.2}}}
+            ]
+          }
+        })
+
+      assert atoms == strings
+      assert atoms.version == strings.version
     end
 
     defp shuffled(list), do: StreamData.map(StreamData.integer(), fn _ -> Enum.shuffle(list) end)
@@ -963,28 +1003,84 @@ defmodule Macaw.Data.SchemaTest do
   end
 
   describe "data colors" do
-    @tag verifies: "schema-colors-literal"
-    test "a data color is a literal: hex in four lengths or a CSS name; never a role or a typed color" do
-      for c <- ~w(#fff #ffff #2e7d32 #2e7d32cc orange Orange rebeccapurple transparent),
-          do: assert(Schema.color?(c), c)
+    # Color terms that are data colors: literals, and typed colors whose literal operands are
+    # colors and whose names are a theme's.
+    @colors [
+      ~RGB"#2e7d32",
+      ~RGB"#2e7d32cc",
+      ~RGB"rebeccapurple",
+      Color.rgb(59.5, 111, 168, 0.3),
+      {:color, "good"},
+      {:color, :good},
+      {:series, 3},
+      {:ramp, "status", 0.5},
+      {:alpha, {:color, "bad"}, 0.74},
+      {:intensity, ~RGB"#c62828", 0.5},
+      {:shade, {:color, "info"}, 700},
+      {:blend, [{:intensity, {:color, "blue"}, 0.65}, ~RGB"red"]},
+      {:contrast, :under},
+      {:contrast, {:color, "bad"}}
+    ]
 
-      for c <- [
-            "#ff",
-            "#12345",
-            "#ggg",
-            "good",
-            "",
-            {:color, :good},
-            {:ramp, :status, 0.5},
-            :orange,
-            3
-          ],
-          do: refute(Schema.color?(c), inspect(c))
+    # Terms that are not: text in every CSS form, a bare role, malformed typed colors.
+    @not_colors [
+      "#fff",
+      "#2e7d32",
+      "red",
+      "Orange",
+      "rgb(1, 2, 3)",
+      "good",
+      "",
+      :good,
+      :orange,
+      3,
+      nil,
+      {:color, ""},
+      {:color, "Good"},
+      {:color, "3d"},
+      {:ramp, "Status", 0.5},
+      {:alpha, "#c62828", 0.5},
+      {:alpha, {:color, "bad"}, 1.5},
+      {:blend, []},
+      {:blend, [{:color, "a"}, "red"]},
+      %Color{r: 255, g: 0, b: 0, opacity: 1},
+      %{r: 255.0, g: 0.0, b: 0.0, opacity: 1.0}
+    ]
 
-      assert faults(%{s: %{type: :category, values: [%{value: "a", color: {:color, :good}}]}}) ==
-               [{[:s, :values, 0, :color], {:type, :color}}]
+    @tag verifies: "schema-data-colors"
+    test "a data color is a color term, a literal or a typed color; never a string" do
+      for c <- @colors, do: assert(Schema.color?(c), inspect(c))
+      for c <- @not_colors, do: refute(Schema.color?(c), inspect(c))
+    end
 
-      assert Schema.format_error({[:s, :values, 0, :color], {:type, :color}}) =~ "CSS color name"
+    @tag verifies: "schema-data-colors"
+    test "a value entry's color is a color term, and a string there is {:type, :color}" do
+      for c <- @colors do
+        assert {:ok, schema} =
+                 Schema.new(%{s: %{type: :category, values: [%{value: "a", color: c}]}})
+
+        assert Map.keys(Schema.value_colors(schema, :s)) == ["a"]
+      end
+
+      for c <- @not_colors do
+        assert faults(%{s: %{type: :category, values: [%{value: "a", color: c}]}}) ==
+                 [{[:s, :values, 0, :color], {:type, :color}}],
+               inspect(c)
+      end
+    end
+
+    @tag verifies: "schema-data-colors"
+    test "a :color parameter takes the same color terms" do
+      for c <- @colors, do: assert(Macaw.Data.Parameter.conforms?(:color, c), inspect(c))
+      for c <- @not_colors, do: refute(Macaw.Data.Parameter.conforms?(:color, c), inspect(c))
+    end
+
+    @tag verifies: "schema-data-colors"
+    test "the fault names the input edge: Color.parse!/1 and ~RGB" do
+      line = Schema.format_error({[:s, :values, 0, :color], {:type, :color}})
+      assert line =~ "Macaw.Layers.Color.parse!/1"
+      assert line =~ "~RGB"
+      assert line =~ "a string is never a color"
     end
   end
 
@@ -998,7 +1094,10 @@ defmodule Macaw.Data.SchemaTest do
             type: :category,
             order: [:ok, "warn"],
             status: %{:ok => :good, "warn" => :warning},
-            values: [%{value: :ok, name: "OK", color: "#2e7d32"}, "warn"]
+            values: [
+              %{value: :ok, name: "OK", color: ~RGB"#2e7d32"},
+              %{value: "warn", color: {:alpha, {:color, :bad}, 0.74}}
+            ]
           },
           latency: %{
             type: :number,
@@ -1025,13 +1124,56 @@ defmodule Macaw.Data.SchemaTest do
                    "type" => "category",
                    "order" => ["ok", "warn"],
                    "status" => [["ok", "good"], ["warn", "warning"]],
-                   "values" => [%{"value" => "ok", "name" => "OK", "color" => "#2e7d32"}, "warn"]
+                   "values" => [
+                     %{"value" => "ok", "name" => "OK", "color" => %{"$rgb" => "#2e7d32"}},
+                     %{"value" => "warn", "color" => %{"$alpha" => [%{"$color" => "bad"}, 0.74]}}
+                   ]
                  }
                ],
                ["where", %{"type" => "point", "window" => true}]
              ]
 
       assert JSON.decode!(Schema.to_json(schema)) == Schema.to_map(schema)
+    end
+
+    @tag verifies: "schema-json-round-trip"
+    test "a literal and a typed color in an entry round-trip, with an equal version" do
+      colors = [
+        ~RGB"#2e7d32",
+        ~RGB"#3b6fa880",
+        Color.rgb(59.5, 111, 168),
+        {:color, :good},
+        {:series, 2},
+        {:ramp, "status", 0.25},
+        {:alpha, {:blend, [{:intensity, {:color, "bad"}, 0.65}, ~RGB"#fff"]}, 0.5},
+        {:shade, {:color, "info"}, 300},
+        {:contrast, :under},
+        {:contrast, {:lighten, ~RGB"#c62828", 0.3}}
+      ]
+
+      values = for {c, i} <- Enum.with_index(colors), do: %{value: "v#{i}", color: c}
+      schema = Schema.new!(%{s: %{type: :category, values: values}})
+
+      assert {:ok, back} = Schema.from_json(Schema.to_json(schema))
+      assert back == schema
+      assert Schema.version(back) == Schema.version(schema)
+      assert Map.values(Schema.value_colors(back, :s)) |> Enum.all?(&Schema.color?/1)
+    end
+
+    @tag verifies: "schema-json-read"
+    test "a color written as text reads back refused: a string is never a color" do
+      for text <- [
+            ~s("#2e7d32"),
+            ~s("red"),
+            ~s({"$rgb":"red"}),
+            ~s({"$color":""}),
+            ~s({"$hex":"#fff"})
+          ] do
+        json = ~s([["s",{"type":"category","values":[{"value":"a","color":#{text}}]}]])
+
+        assert Schema.from_json(json) == {:error, [{["s", :values, 0, :color], {:type, :color}}]},
+               text
+      end
     end
 
     @tag verifies: "schema-json-read"
@@ -1112,10 +1254,43 @@ defmodule Macaw.Data.SchemaTest do
             %{type: :category, order: states, values: states, label: "States"}
           end
         ),
+        bind(
+          uniq_list_of(state, min_length: 1, max_length: 4, uniq_fun: &to_string/1),
+          fn states ->
+            map(list_of(data_color(), length: length(states)), fn colors ->
+              %{type: :category, values: Enum.zip_with(states, colors, &%{value: &1, color: &2})}
+            end)
+          end
+        ),
         fixed_map(%{type: constant(:text), identity: boolean()}),
         fixed_map(%{type: constant(:point), continuity: float(min: 0.1, max: 100.0)})
       ])
 
     map_of(name, description, max_length: 5)
+  end
+
+  # Generated data colors: literals, 8-bit exact or not, and typed colors by either spelling.
+  defp data_color do
+    channel = integer(0..255)
+    unit = float(min: 0.0, max: 1.0)
+    role = member_of([:good, "bad", :warning, "info"])
+
+    literal =
+      one_of([
+        map({channel, channel, channel}, fn {r, g, b} -> Color.rgb(r, g, b) end),
+        map({float(min: 0.0, max: 255.0), channel, channel, unit}, fn {r, g, b, a} ->
+          Color.rgb(r, g, b, a)
+        end)
+      ])
+
+    typed =
+      one_of([
+        map(role, &{:color, &1}),
+        map({role, unit}, fn {name, a} -> {:alpha, {:color, name}, a} end),
+        map({literal, unit}, fn {c, t} -> {:intensity, c, t} end),
+        map({role, literal}, fn {name, c} -> {:blend, [{:color, name}, c]} end)
+      ])
+
+    one_of([literal, typed])
   end
 end

@@ -219,6 +219,25 @@ defmodule Macaw.Data.TableTest do
       assert Table.column_types([{1, 2}, {3, 4}]) == %{}
       assert Table.column_types([]) == %{}
     end
+
+    @tag verifies: "table-inference"
+    test "a column of color terms is :color; a column of CSS text is :text" do
+      red = Macaw.Layers.Color.parse!("#c62828")
+
+      rows = [
+        %{c: {:color, "good"}, l: red, x: "#c62828", n: "red", m: red},
+        %{c: {:alpha, {:color, :bad}, 0.5}, l: nil, x: "#2e7d32", n: "green", m: "#fff"},
+        %{c: nil, l: red, x: nil, n: "blue", m: nil}
+      ]
+
+      assert Table.column_types(rows) == %{c: :color, l: :color, x: :text, n: :text}
+
+      # Packing infers it too, where no type is given.
+      assert {:ok, table} = Table.from(rows)
+      assert Table.column_type(table, :c) == :color
+      assert Table.column_type(table, :x) == :text
+      assert Table.column_type(table, :m) == :term
+    end
   end
 
   describe "time_columns/1 and temporal?/1" do

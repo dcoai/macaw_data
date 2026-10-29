@@ -16,4 +16,28 @@ defmodule Macaw.Data.SchemaAtomsTest do
 
     assert made(names) == []
   end
+
+  @tag verifies: "schema-json-read"
+  test "reading an entry's color makes no atom, of a color's name, a ramp's or an unknown tag" do
+    [color, ramp, tag, op] = names = for _ <- 1..4, do: fresh()
+
+    entries =
+      [
+        ~s({"value":"a","color":{"$color":"#{color}"}}),
+        ~s({"value":"b","color":{"$alpha":[{"$color":"#{color}"},0.5]}}),
+        ~s({"value":"c","color":{"$ramp":["#{ramp}",0.5]}}),
+        ~s({"value":"d","color":{"$#{tag}":"#{color}"}}),
+        ~s({"value":"e","color":{"$blend":[{"$#{op}":[{"$color":"x"},0.5]}]}})
+      ]
+      |> Enum.join(",")
+
+    # The first two are colors and read; the rest are no color, refused as one.
+    assert {:error, faults} =
+             Schema.from_json(~s([["s",{"type":"category","values":[#{entries}]}]]))
+
+    assert Enum.map(faults, &elem(&1, 0)) ==
+             for(i <- 2..4, do: ["s", :values, i, :color])
+
+    assert made(names) == []
+  end
 end

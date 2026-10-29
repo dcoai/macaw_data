@@ -10,7 +10,8 @@ defmodule Macaw.Data.Schema do
   every one. It says what the numbers *are*, whoever draws them, and never how they are
   drawn: a description has no color key, since color is the theme's to choose from the
   meaning. A declared value may be an entry, `%{value: v, name: "Display", color: c}`,
-  whose color is a data color, a literal (spec/01 §1.7).
+  whose color is a data color: a color term, a literal `%Macaw.Layers.Color{}` or a
+  theme-relative typed color, and never a string (`color?/1`, spec/01 §1.7).
 
   A `unit` is a UCUM code `Macaw.Data.Unit` reads and a `quantity` one of
   `Macaw.Data.Quantity.all/0`, and when both are given the unit measures the quantity
@@ -30,8 +31,8 @@ defmodule Macaw.Data.Schema do
   (spec/01 §1.9). `to_json/1` and `from_json/2` are its public JSON form, an adapter at the
   edge that the version never goes through (spec/01 §1.11).
 
-  Ported from visualize's `Visualize.Data.Schema`, with the `:point` type, literal data
-  colors, the window field, the kernel's digest and a public JSON form.
+  Ported from visualize's `Visualize.Data.Schema`, with the `:point` type, data colors as
+  color terms, the window field, the kernel's digest and a public JSON form.
 
   ## Examples
 
@@ -52,7 +53,7 @@ defmodule Macaw.Data.Schema do
   """
 
   alias Macaw.Data.{Quantity, Table, Unit}
-  alias Macaw.Layers.{Document, Limits, Scan, Vocabulary}
+  alias Macaw.Layers.{Color, Document, Limits, Scan, Vocabulary}
 
   @enforce_keys [:fields, :version]
   # `identity` is derived by `new/1`: the identity fields in order, read once per schema
@@ -86,12 +87,12 @@ defmodule Macaw.Data.Schema do
 
   @typedoc """
   A declared value with what a person reads of it (spec/01 §1.2, visualize D-224): its display
-  `name`, and a `color` hint, a data color: a literal (spec/01 §1.7).
+  `name`, and a `color` hint, a data color: a literal or a typed color (spec/01 §1.7).
   """
   @type value_entry :: %{
           required(:value) => value(),
           optional(:name) => String.t(),
-          optional(:color) => String.t()
+          optional(:color) => Color.value()
         }
 
   @type t :: %__MODULE__{
@@ -135,10 +136,6 @@ defmodule Macaw.Data.Schema do
   @identities [:category, :text, :number]
   # A value entry's keys (visualize D-224): the one place a schema holds a color, a host's hint.
   @entry_keys [:value, :name, :color]
-
-  # CSS Color Module Level 4's named colors, and `transparent`: a data color by name. CSS
-  # spells its greys both ways, as the standard names them. spelling: allow
-  @css_colors ~w(aliceblue antiquewhite aqua aquamarine azure beige bisque black blanchedalmond blue blueviolet brown burlywood cadetblue chartreuse chocolate coral cornflowerblue cornsilk crimson cyan darkblue darkcyan darkgoldenrod darkgray darkgreen darkgrey darkkhaki darkmagenta darkolivegreen darkorange darkorchid darkred darksalmon darkseagreen darkslateblue darkslategray darkslategrey darkturquoise darkviolet deeppink deepskyblue dimgray dimgrey dodgerblue firebrick floralwhite forestgreen fuchsia gainsboro ghostwhite gold goldenrod gray green greenyellow grey honeydew hotpink indianred indigo ivory khaki lavender lavenderblush lawngreen lemonchiffon lightblue lightcoral lightcyan lightgoldenrodyellow lightgray lightgreen lightgrey lightpink lightsalmon lightseagreen lightskyblue lightslategray lightslategrey lightsteelblue lightyellow lime limegreen linen magenta maroon mediumaquamarine mediumblue mediumorchid mediumpurple mediumseagreen mediumslateblue mediumspringgreen mediumturquoise mediumvioletred midnightblue mintcream mistyrose moccasin navajowhite navy oldlace olive olivedrab orange orangered orchid palegoldenrod palegreen paleturquoise palevioletred papayawhip peachpuff peru pink plum powderblue purple rebeccapurple red rosybrown royalblue saddlebrown salmon sandybrown seagreen seashell sienna silver skyblue slateblue slategray slategrey snow springgreen steelblue tan teal thistle tomato turquoise violet wheat white whitesmoke yellow yellowgreen transparent)
 
   @not_names [nil, true, false]
 
@@ -246,7 +243,7 @@ defmodule Macaw.Data.Schema do
   `:values` is the list as declared, entries and all.
 
       iex> schema = Macaw.Data.Schema.new!(%{state: %{type: :category, values: [
-      ...>   %{value: "ok", name: "OK", color: "#2e7d32"}, "unknown"]}})
+      ...>   %{value: "ok", name: "OK", color: {:color, "good"}}, "unknown"]}})
       iex> Macaw.Data.Schema.values(schema, :state)
       ["ok", "unknown"]
       iex> Macaw.Data.Schema.values(schema, :other)
@@ -265,7 +262,7 @@ defmodule Macaw.Data.Schema do
   when none has one, or the field declares no values.
 
       iex> schema = Macaw.Data.Schema.new!(%{state: %{type: :category, values: [
-      ...>   %{value: "ok", name: "OK"}, %{value: "down", color: "#c62828"}, "unknown"]}})
+      ...>   %{value: "ok", name: "OK"}, %{value: "down", color: {:color, "bad"}}, "unknown"]}})
       iex> Macaw.Data.Schema.value_names(schema, "state")
       %{"ok" => "OK"}
   """
@@ -273,16 +270,18 @@ defmodule Macaw.Data.Schema do
   def value_names(%__MODULE__{} = schema, field), do: entries(schema, field, :name)
 
   @doc """
-  A map from each declared value with a `color` to its color, as written, a literal
-  (spec/01 §1.3); `%{}` when none has one, or the field declares no values. A drawing
-  library may use it as a color map; a design's own colors outrank it.
+  A map from each declared value with a `color` to its color, the color term the schema
+  holds, a literal or a typed color (spec/01 §1.3, §1.7); `%{}` when none has one, or the
+  field declares no values. A drawing library may use it as a color map, under the theme's
+  data-color guard; a design's own colors outrank it.
 
+      iex> import Macaw.Layers.Color, only: [sigil_RGB: 2]
       iex> schema = Macaw.Data.Schema.new!(%{state: %{type: :category, values: [
-      ...>   %{value: "ok", color: "#2e7d32"}, %{value: "warn", color: "orange"}]}})
+      ...>   %{value: "ok", color: ~RGB"#2e7d32"}, %{value: "warn", color: {:color, :warning}}]}})
       iex> Macaw.Data.Schema.value_colors(schema, :state)
-      %{"ok" => "#2e7d32", "warn" => "orange"}
+      %{"ok" => ~RGB"#2e7d32", "warn" => {:color, "warning"}}
   """
-  @spec value_colors(t(), name()) :: %{value() => String.t()}
+  @spec value_colors(t(), name()) :: %{value() => Color.value()}
   def value_colors(%__MODULE__{} = schema, field), do: entries(schema, field, :color)
 
   defp entries(schema, field, key) do
@@ -678,8 +677,19 @@ defmodule Macaw.Data.Schema do
     end)
   end
 
-  defp spelled_value(%{value: value} = entry), do: %{entry | value: spell(value)}
+  defp spelled_value(%{value: value} = entry),
+    do: %{entry | value: spell(value)} |> Map.replace_lazy(:color, &spelled_color/1)
+
   defp spelled_value(value), do: spell(value)
+
+  # A typed color's names are a theme's, held as their strings as `Macaw.Layers.Color.color/1`
+  # writes them, so `{:color, :good}` and `{:color, "good"}` are one color of one version.
+  defp spelled_color({:color, name}), do: {:color, spell(name)}
+  defp spelled_color({:ramp, name, t}), do: {:ramp, spell(name), t}
+  defp spelled_color({:blend, colors}), do: {:blend, Enum.map(colors, &spelled_color/1)}
+  defp spelled_color({:contrast, c}), do: {:contrast, spelled_color(c)}
+  defp spelled_color({op, c, t}), do: {op, spelled_color(c), t}
+  defp spelled_color(literal_or_word), do: literal_or_word
 
   # A unit is a UCUM code `Macaw.Data.Unit` reads (spec/03 §1, visualize D-157).
   defp unit(value, path) when is_binary(value) and value != "" do
@@ -768,23 +778,33 @@ defmodule Macaw.Data.Schema do
   defp entry_key(_key, _value, path), do: [{path, :unknown_entry_key}]
 
   @doc """
-  Whether a value is a data color as a schema holds one (spec/01 §1.7): a literal, `#rgb`,
-  `#rgba`, `#rrggbb` or `#rrggbbaa` in hexadecimal, or a CSS named color. A theme role or a
-  typed color is a drawing color, which a schema never names.
+  Whether a value is a data color (spec/01 §1.7): a color term, checked as a term. It is a
+  literal `%Macaw.Layers.Color{}` (`Macaw.Layers.Color.literal?/1`), the color itself as the
+  datum, or a theme-relative typed color (`{:color, "good"}`, `{:alpha, c, 0.5}`, …) whose
+  literal operands are colors (`Macaw.Layers.Color.value?/1`) and whose names are in a
+  theme's name grammar (`Macaw.Layers.Color.name?/1`). A string is never a color: CSS text is
+  read at the input edge with `Macaw.Layers.Color.parse!/1`, or written `~RGB"#2e7d32"`.
 
+      iex> import Macaw.Layers.Color, only: [sigil_RGB: 2]
+      iex> Macaw.Data.Schema.color?(~RGB"#2e7d32")
+      true
+      iex> Macaw.Data.Schema.color?({:alpha, {:color, :bad}, 0.74})
+      true
       iex> Macaw.Data.Schema.color?("#2e7d32")
-      true
-      iex> Macaw.Data.Schema.color?("Orange")
-      true
-      iex> Macaw.Data.Schema.color?({:color, :good})
+      false
+      iex> Macaw.Data.Schema.color?(:good)
       false
   """
   @spec color?(term()) :: boolean()
-  def color?("#" <> hex) when byte_size(hex) in [3, 4, 6, 8],
-    do: String.match?(hex, ~r/\A[0-9a-fA-F]+\z/)
+  def color?(term), do: Color.value?(term) and Enum.all?(color_names(term), &Color.name?/1)
 
-  def color?(name) when is_binary(name), do: String.downcase(name) in @css_colors
-  def color?(_other), do: false
+  # The theme names a color value reads, operands included: its colors' and its ramps'.
+  defp color_names({:color, name}), do: [name]
+  defp color_names({:ramp, name, _t}), do: [name]
+  defp color_names({:blend, colors}), do: Enum.flat_map(colors, &color_names/1)
+  defp color_names({:contrast, c}), do: color_names(c)
+  defp color_names({_op, c, _t}), do: color_names(c)
+  defp color_names(_literal_or_slot), do: []
 
   # A declared value, bare: an entry's value, or the value it is.
   defp bare(%{value: value}), do: value
@@ -797,10 +817,10 @@ defmodule Macaw.Data.Schema do
 
   defp state?(v), do: is_binary(v) or is_number(v) or (is_atom(v) and v not in @not_names)
   # A role is a theme's word, either spelling, held as its string (spec/01 §1.10), and never
-  # a color: a status says what a state means, and the theme colors the meaning.
-  defp role?(v) when is_binary(v), do: v != "" and not color?(v)
-  defp role?(v) when is_atom(v) and v not in @not_names, do: not color?(Atom.to_string(v))
-  defp role?(_v), do: false
+  # a color: a status says what a state means, and the theme colors the meaning. A word is
+  # never a color term, so a role spelled like a CSS name (`:orange`) is a role.
+  defp role?(v) when is_binary(v), do: v != ""
+  defp role?(v), do: is_atom(v) and v not in @not_names
 
   # -- the version and the JSON form (spec/01 §1.10, §1.11) -----------------------------
 
@@ -811,7 +831,9 @@ defmodule Macaw.Data.Schema do
   @doc """
   The schema's map form (spec/01 §1.11): the JSON-ready list of `[name, description]`
   pairs, sorted by name, every name, state and role written by its spelling, every word
-  of the vocabulary (`type`, `quantity`, `polarity`, `metric_kind`) as its string.
+  of the vocabulary (`type`, `quantity`, `polarity`, `metric_kind`) as its string, and a
+  value entry's color in the colors' JSON form (`Macaw.Layers.Color.Form`: a literal as
+  `{"$rgb": "#2e7d32"}`, a typed color by its tags, `{"$color": "good"}`).
   """
   @spec to_map(t()) :: [[term()]]
   def to_map(%__MODULE__{fields: fields}), do: json_form(fields)
@@ -822,9 +844,10 @@ defmodule Macaw.Data.Schema do
 
   @doc """
   The schema a map form holds (spec/01 §1.11): `new/1` of what it reads. Each word is read
-  through its own closed vocabulary and every name, state and role is a string, so no atom
-  is made. A key no description or value entry has stays its string, for `new/1` to
-  refuse by name.
+  through its own closed vocabulary, every name, state and role is a string, and an entry's
+  color is read by the colors' own reader (`Macaw.Layers.Color.Form`), so no atom is made.
+  A key no description or value entry has stays its string, for `new/1` to refuse by name,
+  and a color the reader does not read stays as written, for `new/1` to refuse as no color.
   """
   @spec from_map(term()) :: {:ok, t()} | {:error, [error(), ...]}
   def from_map(pairs) when is_list(pairs) do
@@ -877,9 +900,18 @@ defmodule Macaw.Data.Schema do
   end
 
   defp write_value(%{} = entry),
-    do: Map.new(entry, fn {key, value} -> {Atom.to_string(key), value} end)
+    do: Map.new(entry, fn {key, value} -> {Atom.to_string(key), write_entry(key, value)} end)
 
   defp write_value(value), do: value
+
+  # An entry's color in the colors' JSON form (`Macaw.Layers.Color.Form`): a literal as its
+  # `$rgb`, a typed color by its tags. `new/1` admits only colors the form writes.
+  defp write_entry(:color, color) do
+    {:ok, form} = Color.Form.encode_value(color)
+    form
+  end
+
+  defp write_entry(_key, value), do: value
 
   # A name, a state, a role or a word by its spelling; anything else as it is.
   defp spell(atom) when is_atom(atom) and atom not in @not_names, do: Atom.to_string(atom)
@@ -924,6 +956,7 @@ defmodule Macaw.Data.Schema do
   defp read_value(entry) when is_map(entry) do
     Map.new(entry, fn {key, value} ->
       case Vocabulary.fetch(@entry_table, key) do
+        {:ok, :color} -> {:color, read_color(value)}
         {:ok, key} -> {key, value}
         :error -> {key, value}
       end
@@ -931,6 +964,27 @@ defmodule Macaw.Data.Schema do
   end
 
   defp read_value(value), do: value
+
+  @color_tags Color.Form.tags()
+
+  # A color's map form, read inside out by the colors' own reader (`Macaw.Layers.Color.Form`),
+  # which makes no atom: each operand's form before the tag that holds it. A form it does
+  # not read, and a bare string, stay as they are, for `new/1` to refuse as no color.
+  defp read_color(%{} = form) when map_size(form) == 1 do
+    [{tag, payload}] = Map.to_list(form)
+
+    with true <- tag in @color_tags,
+         {:ok, color} <- Color.Form.decode_value(tag, read_payload(payload)) do
+      color
+    else
+      _unread -> form
+    end
+  end
+
+  defp read_color(other), do: other
+
+  defp read_payload(list) when is_list(list), do: Enum.map(list, &read_color/1)
+  defp read_payload(payload), do: read_color(payload)
 
   # -- formatting -----------------------------------------------------------------------
 
@@ -999,8 +1053,9 @@ defmodule Macaw.Data.Schema do
 
   defp words({:type, :color}),
     do:
-      "must be a data color: #rgb, #rgba, #rrggbb or #rrggbbaa, or a CSS color name " <>
-        "(spec/01 §1.7); a theme role is a drawing color, which a schema never names"
+      "must be a data color, a color term: a literal %Macaw.Layers.Color{} or a typed " <>
+        "color such as {:color, \"good\"} (spec/01 §1.7); a string is never a color: read " <>
+        "text with Macaw.Layers.Color.parse!/1, or write ~RGB\"#2e7d32\""
 
   defp words(:unknown_entry_key),
     do: "is not a value entry's key; the keys are #{Enum.map_join(@entry_keys, ", ", &inspect/1)}"

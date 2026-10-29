@@ -39,7 +39,10 @@ defmodule Macaw.Data.Derived.EngineContextTest do
            host: %{type: :category, identity: true},
            state: %{
              type: :category,
-             values: [%{value: :ok, name: "OK", color: "#2e7d32"}, :down],
+             values: [
+               %{value: :ok, name: "OK", color: Macaw.Layers.Color.parse!("#2e7d32")},
+               :down
+             ],
              status: %{ok: :good}
            },
            cpu: %{type: :number, bounds: [0, 100], continuity: 60}
@@ -98,7 +101,11 @@ defmodule Macaw.Data.Derived.EngineContextTest do
                      "state" => %{
                        "type" => :category,
                        "values" => [
-                         %{"value" => "ok", "name" => "OK", "color" => "#2e7d32"},
+                         %{
+                           "value" => "ok",
+                           "name" => "OK",
+                           "color" => Macaw.Layers.Color.parse!("#2e7d32")
+                         },
                          "down"
                        ],
                        "status" => %{"ok" => "good"}

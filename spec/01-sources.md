@@ -7,7 +7,7 @@ A **source** is anything a component's slot reads. One contract serves feeds, qu
 - **`Data.Table`:** columnar typed data, the currency of deliveries, derived sources and components. Row lists are accepted at the edge ([§1.1](#sources-table)). (visualize.md C1.)
 - **`Data.Schema`:** each field's **meaning**: `type` (`:time | :number | :category | :text | :color | :point`, a `:point` being a geographic position), and where known `unit` (UCUM), `quantity`, `label`, `order`, `status`, `polarity`, `continuity`, `bounds`, `identity`, `window`, and declared `values` with names and colors ([§1.2](#sources-schema)). (visualize.md C1.)
 - **The window field** is the field a request's window applies to: the one marked `window: true`, else the schema's only `:time` field. A `box` window applies to a `:point` window field. A schema with neither, or with several `:time` fields and none marked, has no window field, and requests to it carry none ([§1.5](#sources-schema-window)).
-- **A schema gives data colors, never drawing colors.** A `:color` field, or a color on a declared value (a team's color), is content; how it may be shown is a theme rule ([macaw_layers 04](https://github.com/dcoai/macaw_layers/blob/main/spec/04-themes.md#themes-rules)).
+- **A description never names a color; a row or a value entry may carry a data color.** A `:color` field's values, or a color on a declared value (a team's color), are content: a color term, a literal `%Macaw.Layers.Color{}` or a theme-relative typed color, and never a string. How one may be shown is the theme's data-color guard ([macaw_layers 04 §4](https://github.com/dcoai/macaw_layers/blob/main/spec/04-themes.md#themes-profile)).
 - **A schema's version is the SHA-256 of a canonical encoding,** the kernel's digest of the schema's term, its fields with every name normalized to its string at construction; the JSON form is an adapter the version never goes through ([§1.10](#sources-schema-version)). A delivery names the version, and a push sends the schema before rows made under it. (visualize.md C1; metresis.md C1.)
 - **Identity is declared** (`identity: true`, composite allowed), never guessed. Selection, `latest` and per-identity derivations read it. (visualize.md C1.)
 - **Units and quantities** come from one vocabulary, specified in [03](03-units.md): UCUM codes with an ISO 4217 currency extension, and a fixed list of quantities. Nothing translates between two vocabularies. (metresis.md C1.)
@@ -65,7 +65,7 @@ from/2 reads rows, columns and a Table.Reader source, infers or takes the types,
 - `named/2` names a tensor's columns, or tuple rows' elements, in order, or says why it can't (`{:width, n, size}`, `{:rank, rank}`), and passes any other source through;
 - `unnamed?/1` is whether a source's rows have no names to read by: a tensor, or tuple rows (never a keyword list of columns);
 - `get/2` reads a column from a row by either spelling of its name, and `key/2` is the key that spells it; no atom is made. `accessor/1` is the function of a name, a function passed through;
-- `column_types/1` suggests each column's type from its whole: all temporal is `:time`, all numbers `:number`, all strings `:text`, all atoms or booleans `:category`, a mixed or empty column left out; `time_columns/1` names the temporal ones; `temporal?/1` is whether a value is a `DateTime`, `Date`, `NaiveDateTime` or an ISO 8601 string one of those parses. These are suggestions for a tool; a table's declared types are `column_type/2`'s.
+- `column_types/1` suggests each column's type from its whole: all temporal is `:time`, all numbers `:number`, all strings `:text`, all color terms (literal or typed, §1.7) `:color`, all atoms or booleans `:category`, a mixed or empty column left out; a string is never a color, so a column of CSS text is `:text`; `time_columns/1` names the temporal ones; `temporal?/1` is whether a value is a `DateTime`, `Date`, `NaiveDateTime` or an ISO 8601 string one of those parses. These are suggestions for a tool; a table's declared types are `column_type/2`'s.
 
 ```test:table-sources
 rows/1 passes a list of rows through uncopied and tuple rows unchanged, reads column maps, keyword columns, tensors and rank-1 tensor columns, refuses unequal columns, other ranks and a struct with no reader; named/2 names tensor columns and tuple rows or says why not; unnamed?/1 is true for a tensor and tuple rows, never columns
@@ -76,7 +76,7 @@ get/2 reads a key by either spelling, the exact key first, a nil value being a v
 ```
 
 ```test:table-inference
-column_types/1 types a column by its whole and leaves a mixed or empty one out; time_columns/1 reads the whole column, nil a gap, names the union of every row's keys; temporal?/1 accepts the three structs and ISO 8601 strings only
+column_types/1 types a column by its whole, a column of color terms :color and one of strings :text, and leaves a mixed or empty one out; time_columns/1 reads the whole column, nil a gap, names the union of every row's keys; temporal?/1 accepts the three structs and ISO 8601 strings only
 ```
 
 ### 1.2 The schema {#sources-schema}
@@ -90,7 +90,7 @@ column_types/1 types a column by its whole and leaves a mixed or empty one out; 
 
 | Key | Value | For a field of type | Meaning |
 |---|---|---|---|
-| `type` | `:time`, `:number`, `:category`, `:text`, `:color` or `:point` | required, every field | what the column is. A `:time` field holds **instants** (`DateTime`, `NaiveDateTime` or `Date` values, or ISO 8601 strings), never numbers: a count of ticks or a sequence number is `:number`. A `:color` field holds data colors, one per row (§1.7). A `:point` field holds **geographic positions**, `{longitude, latitude}` |
+| `type` | `:time`, `:number`, `:category`, `:text`, `:color` or `:point` | required, every field | what the column is. A `:time` field holds **instants** (`DateTime`, `NaiveDateTime` or `Date` values, or ISO 8601 strings), never numbers: a count of ticks or a sequence number is `:number`. A `:color` field holds data colors, color terms, one per row (§1.7). A `:point` field holds **geographic positions**, `{longitude, latitude}` |
 | `unit` | a UCUM code | `:number` | the unit the values are in, a code `Macaw.Data.Unit.parse/1` reads ([03 §1](03-units.md#units-codes)) |
 | `quantity` | one of `Macaw.Data.Quantity.all/0` | `:number` | what the unit measures ([03 §8](03-units.md#quantities)) |
 | `label` | a string | every type | the field's name for a person: `"Request time"` |
@@ -122,10 +122,10 @@ fetch/2 and fetch/3 read a field and an attribute by either spelling of its name
 ### 1.3 Value entries {#sources-schema-values}
 
 A declared value may say more than that it exists, as a map in place of the bare value: `%{value: v, name: "Display", color: c}`.
-- **The keys.** `value` is required and is a value as a bare one is: a string, an atom other than `nil`, `true` and `false`, or a number. `name`, optional, is a string, the value's display name. `color`, optional, is a data color (§1.7). No other key is an entry's.
+- **The keys.** `value` is required and is a value as a bare one is: a string, an atom other than `nil`, `true` and `false`, or a number. `name`, optional, is a string, the value's display name. `color`, optional, is a data color, a color term (§1.7). No other key is an entry's.
 - **Distinct by value.** The entries' values, bare and map alike, are distinct: `["ok", %{value: "ok", name: "OK"}]` lists `"ok"` twice, `:duplicate` at the later one's index.
 - **An entry that says nothing is its value.** `new/1` keeps `%{value: v}` with neither a `name` nor a `color` as the bare `v`, so the two spellings are one schema of one version.
-- **Reading them.** `values/2` is the field's bare values in their declared order, `nil` when the field declares none (an open set). `value_names/2` maps each value with a `name` to its name, and `value_colors/2` each value with a `color` to its color; each is `%{}` when none has one. `fetch/3` of `:values` answers the list as declared, entries included.
+- **Reading them.** `values/2` is the field's bare values in their declared order, `nil` when the field declares none (an open set). `value_names/2` maps each value with a `name` to its name, and `value_colors/2` each value with a `color` to its color, the term the schema holds; each is `%{}` when none has one. `fetch/3` of `:values` answers the list as declared, entries included.
 - **Checked against `order` and `status`.** With `values`, every state `order` lists and `status` names is one of them, compared with the bare values; with `order`, every state `status` names is one of `order`'s.
 
 ```test:schema-values
@@ -165,27 +165,36 @@ window_field/1 is the marked field, else the only time field not marked false, e
 - **`quantity`** is an atom other than `nil`, `true` and `false` (else `{:type, :name}`) that is one of `Macaw.Data.Quantity.all/0`, else `{:unknown_quantity, quantity}`.
 - **The pair.** A field giving both, each good, is checked by `Macaw.Data.Quantity.resolve/1`: a unit not of its quantity's dimension is `{:quantity, quantity, code}` at `[name, :quantity]`.
 
-**`status`'s roles** are a theme's words (`:good`, `:warning`, `:bad`, `:info`, `:neutral`), carried by their spelling and not checked against a list, so a role a theme adds needs no change here. A role is never a color (§1.7). **`continuity`** is carried for the components that draw a source; gaps follow it.
+**`status`'s roles** are a theme's words (`:good`, `:warning`, `:bad`, `:info`, `:neutral`), carried by their spelling and not checked against a list, so a role a theme adds needs no change here. A role is a word, never a color (§1.7). **`continuity`** is carried for the components that draw a source; gaps follow it.
 
 ```test:schema-measure
 a misspelled unit, a symbol a person types, an unknown quantity and a unit that does not measure its quantity are refused where described; a pair is checked once each is good; every quantity in its base unit and every Telemetry unit pass; any role word is carried
 ```
 
 ### 1.7 Colors: data, never drawing {#sources-schema-colors}
+A description says what a field means, and the theme chooses the color of a meaning ([macaw_layers 04 §3](https://github.com/dcoai/macaw_layers/blob/main/spec/04-themes.md#themes-rules)). A row or a value entry may still carry a color as data, a team's color or a verdict's shade, and that color is a **color term**, checked as a term:
+- **A description never names a color.** A key `color`, `colour`, `colors`, `colours`, `palette`, `fill` or `stroke` in a description is `{:color_key, key}`, whose line names the keys that carry the meaning instead (`status`, `order`, `polarity`, `quantity`). <!-- spelling: allow -->
+- **A data color is a color term** (`color?/1`):
+  - a **literal**, `%Macaw.Layers.Color{}` (`Macaw.Layers.Color.literal?/1`): the color itself is the datum, drawn as itself and not re-themed;
+  - or a **theme-relative typed color**, a theme's name or a transform of one (`{:color, "good"}`, `{:alpha, {:color, "bad"}, 0.74}`, `{:ramp, "status", 0.5}`, [macaw_layers 04 §1.3](https://github.com/dcoai/macaw_layers/blob/main/spec/04-themes.md#themes-color-typed)), whose literal operands are colors (`Macaw.Layers.Color.value?/1`) and whose names are in a theme's name grammar (`Macaw.Layers.Color.name?/1`). The page's one theme resolves it, so a theme change re-colors it.
 
-A schema describes meaning, and color is the theme's to choose from it ([macaw_layers 04](https://github.com/dcoai/macaw_layers/blob/main/spec/04-themes.md#themes-rules)):
-- **No color on a field.** A key `color`, `colour`, `colors`, `colours`, `palette`, `fill` or `stroke` in a description is `{:color_key, key}`, whose line names the keys that carry the meaning instead (`status`, `order`, `polarity`, `quantity`). <!-- spelling: allow -->
-- **A status role is a word, never a color:** a role that is a data color by its spelling is `{:type, :status}`.
-- **A data color is a literal** (`color?/1`): `#rgb`, `#rgba`, `#rrggbb` or `#rrggbbaa` in hexadecimal, or a CSS named color (CSS Color 4's, and `transparent`), any case. A value entry's `color` and a `:color` field's row values are data colors. A theme role or a typed color (visualize's `{:color, :good}`, `{:ramp, …}`) is a drawing color, which a schema never holds: `{:type, :color}`. A `:color` field takes only `label` and `continuity`; any other key is `{:invalid_for, :color}`.
+  The term says which; there is no flag.
+- **A string is never a color.** CSS text (`#hex`, a CSS name, `rgb()`, `hsl()`) is a representation of a color: a program reads it at its input edge with `Macaw.Layers.Color.parse!/1`, or writes `~RGB"#2e7d32"` in its source. A string, a bare role and any other term where a data color belongs is `{:type, :color}`, whose line names those two.
+- **Where data colors are checked:** a value entry's `color` (`new/1`), a `:color` field's row values (a derived source's output, [02 §1.2](02-derived.md#derived-conform)), a `:color` parameter (`Macaw.Data.Parameter.conforms?/2`, §2.2). `Macaw.Data.Table.column_types/1` infers `:color` for a column whose every value is a color term; a column of strings is `:text`.
+- **`new/1` holds a typed color's names as their strings,** as `Macaw.Layers.Color.color/1` writes them, so `{:color, :good}` and `{:color, "good"}` are one color, one schema of one version (§1.10).
+- **A status role is a word, never a color:** a role is an atom (other than `nil`, `true`, `false`) or a non-empty string, else `{:type, :status}`; a typed color or a literal in a `status` is no role. Since a string is never a color, a role spelled like a CSS name (`:orange`, `"red"`) is a role like any other.
+- **A `:color` field takes only `label` and `continuity`;** any other key is `{:invalid_for, :color}`.
 
-How a data color may be shown (only with a non-color cue, under a contrast guard) is a theme rule.
+How a data color may be shown is the theme's **data-color guard**: only with a non-color cue, and under a contrast guard (`Macaw.Layers.Theme.data_color/2`, [macaw_layers 04 §4](https://github.com/dcoai/macaw_layers/blob/main/spec/04-themes.md#themes-profile)).
 
-```test:schema-colors-literal
-a data color is hex in four lengths or a CSS name, any case; a short hex, a word, a role, a typed color, an atom and a number are not; a typed color in a value entry is refused
+The principle came first: a schema has described meaning and never drawing since it was specified, and a data color has always been content. When the schema was ported from visualize (macaw#104), macaw_data had no color library to call, so data colors were checked as CSS text, with an inlined list of CSS names; once macaw_layers held the colors as terms (macaw_layers 0.3.0, macaw#188), the check became the term's (macaw#187).
+
+```test:schema-data-colors
+a data color is a color term: a literal and a typed color, its names in the theme's grammar, are; a string in any CSS form, a bare role, a malformed typed color, an atom and a number are not, in color?/1, in a value entry and in a :color parameter; an atom name and its string are one color, one version; the fault names Color.parse!/1 and ~RGB
 ```
 
 ```test:schema-color-keys
-every color key on a field is refused and says why; a color hides in a status neither as a typed color nor as a color string or atom, while a role read from JSON is a role
+every color key on a field is refused and says why; a color hides in a status neither as a typed color nor as a literal, while any word is a role, one spelled like a CSS name included, and a role read from JSON is a role
 ```
 
 ### 1.8 Faults {#sources-schema-faults}
@@ -204,7 +213,7 @@ every color key on a field is refused and says why; a color hides in a status ne
 | `{:enum, allowed}` | `[name, :type]`, `[name, :polarity]`, `[name, :metric_kind]` | a value not among the allowed |
 | `{:unit, code, reason}`, `{:unknown_quantity, q}`, `{:quantity, q, code}` | `[name, :unit]` or `[name, :quantity]` | the measure (§1.6) |
 | `{:invalid_for, type}` | `[name, key]` | a key the field's type does not take |
-| `{:type, expected}` | `[name, key]` or `[name, :values, i, key]` | a value of the wrong shape, `expected` one of `:unit`, `:name`, `:string`, `:order`, `:status`, `:number`, `:positive`, `:boolean`, `:bounds`, `:values`, `:state`, `:color` |
+| `{:type, expected}` | `[name, key]` or `[name, :values, i, key]` | a value of the wrong shape, `expected` one of `:unit`, `:name`, `:string`, `:order`, `:status`, `:number`, `:positive`, `:boolean`, `:bounds`, `:values`, `:state`, `:color` (no color term, a string included, §1.7) |
 | `:required` | `[name, :values, i, :value]` | a value entry with no `value` |
 | `:unknown_entry_key` | `[name, :values, i, key]` | a key of a value entry other than its three |
 | `{:duplicate_window, other}` | `[name, :window]` | a second window field |
@@ -236,7 +245,7 @@ names compare as strings and labels, facts and extra fields are not compared; ev
 
 A schema's version is **the kernel's digest of the schema's term** (`Macaw.Layers.Document.digest/1` over `%{"fields" => fields}`, the struct's normalized fields, [macaw_layers 01 §7](https://github.com/dcoai/macaw_layers/blob/main/spec/01-kernel.md#kernel-digest)): 64 lowercase hex characters, the SHA-256 of the kernel's canonical, type-tagged encoding of that term (macaw_layers 0.3.0). So an unchanged schema has the same version on every node and under every release, and any change of content, a renamed state or a new label, is a new version. `version/1` returns it, computed once by `new/1`. **The version is never computed from a representation:** the JSON form (§1.11) is an adapter at the edge, and a value it can't write fails there, naming it, never in `new/1`.
 
-- **Names, states and roles count by their spelling,** because `new/1` normalizes them once, at construction: every field name, every state in `values`, `order` and `status`, and every role in `status`, is held as its string. So `:latency` and `"latency"` are one field, and `:ok` and `"ok"` one state, one schema `==` the other, of one version. Two spellings of one state in one description are that state twice (`:duplicate`), as two of one field are (§1.8). The words of the vocabulary (`type`, `quantity`, `polarity`, `metric_kind`) stay atoms: they are words, not names. Every function that takes a name takes either spelling. A delivery read on another node then names a version its reader can resolve (§1.12). This differs from visualize's own hash, which keeps an atom state apart from its string; reconciling the two is visualize's, at adoption.
+- **Names, states and roles count by their spelling,** because `new/1` normalizes them once, at construction: every field name, every state in `values`, `order` and `status`, and every role in `status`, is held as its string, as is every name in a value entry's typed color (§1.7). So `:latency` and `"latency"` are one field, and `:ok` and `"ok"` one state, one schema `==` the other, of one version. Two spellings of one state in one description are that state twice (`:duplicate`), as two of one field are (§1.8). The words of the vocabulary (`type`, `quantity`, `polarity`, `metric_kind`) stay atoms: they are words, not names. Every function that takes a name takes either spelling. A delivery read on another node then names a version its reader can resolve (§1.12). This differs from visualize's own hash, which keeps an atom state apart from its string; reconciling the two is visualize's, at adoption.
 - **Nothing depends on map order:** the kernel's encoding of a map is canonical, its keys in one order however it was built.
 - The test suite pins one schema's version as a literal, so a change to the encoding fails a test before it changes a version in the field.
 
@@ -246,26 +255,27 @@ the version is pinned for two schemas, is the kernel's digest of the schema's te
 
 ### 1.11 The JSON form {#sources-schema-json}
 
-**`to_json/1` and `from_json/2` are public,** so no adopter reads a hidden function (visualize#879). **It is an adapter at the edge:** the schema's identity, equality and validity are its term's, and the version never goes through it (§1.10). The map form, `to_map/1`, is a list of `[name, description]` pairs sorted by name: every description key by its string, every name, state and role as the string the schema holds, every word of the vocabulary (`type`, `quantity`, `polarity`, `metric_kind`) as its string, `status` as sorted `[state, role]` pairs, `bounds`, `values` and booleans as they are. `to_json/1` is it encoded.
+**`to_json/1` and `from_json/2` are public,** so no adopter reads a hidden function (visualize#879). **It is an adapter at the edge:** the schema's identity, equality and validity are its term's, and the version never goes through it (§1.10). The map form, `to_map/1`, is a list of `[name, description]` pairs sorted by name: every description key by its string, every name, state and role as the string the schema holds, every word of the vocabulary (`type`, `quantity`, `polarity`, `metric_kind`) as its string, `status` as sorted `[state, role]` pairs, `bounds`, `values` and booleans as they are, and a value entry's `color` in macaw_layers' color form (`Macaw.Layers.Color.Form`, [macaw_layers 04 §1.6](https://github.com/dcoai/macaw_layers/blob/main/spec/04-themes.md#themes-color-adapters)): a literal as `{"$rgb": "#2e7d32"}` (or its four fields when it is not 8-bit exact), a typed color by its tags, `{"$color": "good"}`, `{"$alpha": [{"$color": "bad"}, 0.74]}`. `to_json/1` is it encoded.
 
 **Reading** (`from_map/1`, `from_json/2`):
 - `from_json/2` reads through the kernel's gates first, the byte limit and the scan that stops at a depth or items limit ([macaw_layers 01 §5](https://github.com/dcoai/macaw_layers/blob/main/spec/01-kernel.md#kernel-gates)), `limits:` tightening them, and then decodes;
-- each word is read through its own closed vocabulary, and every name, state and role is a string: **no atom is made from a document**;
+- each word is read through its own closed vocabulary, every name, state and role is a string, and an entry's `color` is read inside out by the colors' own reader (`Macaw.Layers.Color.Form.decode_value/2`): **no atom is made from a document**;
+- a color the reader does not read, a bare string among them, stays as written, for `new/1` to refuse as `{:type, :color}`: JSON text is no more a color than any other string;
 - a key no description or entry has stays its string, and a word outside its vocabulary stays its string, for `new/1` to refuse by name;
 - anything but a list of `[string, map]` pairs is `{[], {:type, :schema}}`.
 
-A schema read back from its JSON form has the same version and the same JSON form; one spelled with strings, as JSON spells it, reads back exactly.
+A schema read back from its JSON form has the same version and the same JSON form, a literal or a typed color in an entry included; one spelled with strings, as JSON spells it, reads back exactly.
 
 ```test:schema-json-form
 to_map/1 is the sorted pairs with every name, state, role and word by its spelling, status as sorted pairs, bounds and values as they are, and to_json/1 is it encoded
 ```
 
 ```test:schema-json-read
-from_json/2 reads words through their vocabularies and names and states as strings, makes no atom, refuses an unknown word or key by new/1, refuses a non-schema and malformed JSON, and applies the byte and depth limits
+from_json/2 reads words through their vocabularies, names and states as strings and an entry's color by the colors' reader, makes no atom, refuses a color as text, refuses an unknown word or key by new/1, refuses a non-schema and malformed JSON, and applies the byte and depth limits
 ```
 
 ```test:schema-json-round-trip
-for generated schemas, the schema read back from its JSON has its version and its JSON, and a string-spelled one reads back exactly
+for generated schemas, value entries with literal and typed colors among them, the schema read back from its JSON has its version and its JSON, and a string-spelled one reads back exactly
 ```
 
 ### 1.12 The cache {#sources-schema-cache}
@@ -352,7 +362,7 @@ a description defaults its parameters, capabilities and independence, and refuse
   doc: "…"}
 ```
 
-- **Types:** a data-model type (`:time`, `:number`, `:category`, `:text`, `:color`, `:point`), `{:document, type}` for a nested document of a document type, or `:term`, a value its owner validates, only for options migrated from untyped forms. `conforms?/2` says whether a value is of a type: a `DateTime`, a number, a string or non-boolean atom or number, a string, a data color (§1.7), a `{longitude, latitude}` in range, a map, or anything for `:term`; `nil` is a value only of `:term`.
+- **Types:** a data-model type (`:time`, `:number`, `:category`, `:text`, `:color`, `:point`), `{:document, type}` for a nested document of a document type, or `:term`, a value its owner validates, only for options migrated from untyped forms. `conforms?/2` says whether a value is of a type: a `DateTime`, a number, a string or non-boolean atom or number, a string, a data color (a color term, never a string, §1.7), a `{longitude, latitude}` in range, a map, or anything for `:term`; `nil` is a value only of `:term`.
 - **`check/1`** reports every fault of a declaration, by path: the type required and known; the default and each of the values of the type; the default among the values when both are given; `legal_for` a `{slot, field, fact}`; `bindable` a boolean; `doc` a string; no other key. `keys/0` is the six keys.
 - **`validate/2`** checks given values against a map of parameters by name, every fault at once: a name no parameter has is `:unknown_param`, a missing parameter with no default `:required`, a value not of its type `{:type, type}`, one outside its values `{:enum, values}`. It answers the values with every missing parameter's default filled in.
 - **Legal values may come from the type.** metresis's aggregation is a category whose values are `legal(metric)`, so no consumer can ask for an aggregation the type forbids; `legal_for` names where such values come from, which the runtime that binds slots resolves. (metresis.md C1.)
@@ -362,7 +372,7 @@ a declaration of every type, and one with every key, passes; every fault of a ba
 ```
 
 ```test:params-types
-values conform to their types and to nothing else: times, numbers, categories, text, data colors, points in range, documents and terms; nil only to a term
+values conform to their types and to nothing else: times, numbers, categories, text, data colors (color terms, never a string), points in range, documents and terms; nil only to a term
 ```
 
 ```test:params-validate

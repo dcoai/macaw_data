@@ -29,6 +29,8 @@ defmodule Macaw.Data.Table do
   and a struct source or a tensor raises `UndefinedFunctionError` where it is read.
   """
 
+  alias Macaw.Data.Schema
+
   @compile {:no_warn_undefined, [Table, Nx]}
 
   @enforce_keys [:names, :columns, :size]
@@ -527,16 +529,19 @@ defmodule Macaw.Data.Table do
 
   @doc """
   Every named column's type, read whole: all non-`nil` values temporal is `:time`, all
-  numbers `:number`, all strings `:text`, all atoms or booleans `:category`. A mixed or
-  empty column is left out. A suggestion for a tool, never something a reader relies on;
-  a table's own declared types are `column_type/2`'s.
+  numbers `:number`, all strings `:text`, all color terms `:color` (a literal or a typed
+  color, `Macaw.Data.Schema.color?/1`), all atoms or booleans `:category`. A string is
+  never a color, so a column of CSS text is `:text`. A mixed or empty column is left out.
+  A suggestion for a tool, never something a reader relies on; a table's own declared
+  types are `column_type/2`'s.
 
-      iex> rows = [%{t: ~U[2024-01-01 00:00:00Z], v: 1, k: :a, s: "x", m: 1},
-      ...>         %{t: ~U[2024-01-02 00:00:00Z], v: 2.5, k: :b, s: "y", m: "two"}]
+      iex> rows = [%{t: ~U[2024-01-01 00:00:00Z], v: 1, k: :a, s: "x", c: {:color, "good"}, m: 1},
+      ...>         %{t: ~U[2024-01-02 00:00:00Z], v: 2.5, k: :b, s: "y", c: nil, m: "two"}]
       iex> Macaw.Data.Table.column_types(rows)
-      %{t: :time, v: :number, k: :category, s: :text}
+      %{t: :time, v: :number, k: :category, s: :text, c: :color}
   """
-  @spec column_types(source() | t()) :: %{name() => :time | :number | :category | :text}
+  @spec column_types(source() | t()) ::
+          %{name() => :time | :number | :category | :text | :color}
   def column_types(%__MODULE__{} = table),
     do: Map.new(table.names, &{&1, column_type(table, &1)})
 
@@ -560,6 +565,7 @@ defmodule Macaw.Data.Table do
       Enum.all?(values, &temporal?/1) -> :time
       Enum.all?(values, &is_number/1) -> :number
       Enum.all?(values, &is_binary/1) -> :text
+      Enum.all?(values, &Schema.color?/1) -> :color
       Enum.all?(values, &(is_atom(&1) and not is_nil(&1))) -> :category
       true -> nil
     end

@@ -23,7 +23,7 @@ defmodule Macaw.Data.DeliveryTest do
     assert Delivery.new(table) |> Delivery.table!() == table
     assert Delivery.rows(Delivery.new(table)) == [%{v: 1}, %{v: 2}]
 
-    typed = Delivery.new([%{c: "#fff"}], types: %{c: :color})
+    typed = Delivery.new([%{c: Macaw.Layers.Color.parse!("#fff")}], types: %{c: :color})
     assert Table.column_type(typed |> Delivery.table!(), :c) == :color
 
     # A value its declared type doesn't hold is the packing's fault, not the delivery's.

@@ -291,6 +291,35 @@ defmodule Macaw.Data.DerivedTest do
     end
 
     @tag verifies: "derived-conform-answers"
+    test "a :color field's values are color terms, checked as the schema checks them" do
+      source =
+        Derived.new!(
+          id: :strip,
+          from: [blocks: nil],
+          schema: %{block: %{type: :category}, fill: %{type: :color}},
+          elixir: "fn x -> x end"
+        )
+
+      red = Macaw.Layers.Color.parse!("#c62828")
+
+      rows = [
+        %{block: "a", fill: {:color, "good"}},
+        %{block: "b", fill: {:alpha, {:color, :bad}, 0.35}},
+        %{block: "c", fill: red},
+        %{block: "d", fill: nil}
+      ]
+
+      assert {:ok, [%{"fill" => {:color, "good"}}, _, %{"fill" => ^red}, _]} =
+               Derived.conform(source, rows)
+
+      for fill <- ["#c62828", "red", :good, {:color, "Bad"}, {:alpha, "#c62828", 0.5}] do
+        assert {:error, {0, "fill", {:type, :color}}} =
+                 Derived.conform(source, [%{block: "a", fill: fill}]),
+               inspect(fill)
+      end
+    end
+
+    @tag verifies: "derived-conform-answers"
     test "a value entry's value is the value" do
       source =
         Derived.new!(
@@ -299,7 +328,7 @@ defmodule Macaw.Data.DerivedTest do
           schema: %{
             state: %{
               type: :category,
-              values: [%{value: :ok, name: "OK", color: "#2e7d32"}, :warning]
+              values: [%{value: :ok, name: "OK", color: {:color, "good"}}, :warning]
             }
           },
           elixir: "fn x -> x end"

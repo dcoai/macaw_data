@@ -85,7 +85,7 @@ in context, a function reading a field no input or output describes, a window it
 | `:not_a_list` | the answer is not a list of rows (`index` and `field` are `nil`) |
 | `:not_a_row` | a row is not a map (`field` is `nil`) |
 | `:undescribed` | a row has a key its schema does not describe |
-| `{:type, type}` | a field's value is not `nil` and not of the field's type: a number for `:number`, an instant (`Macaw.Data.Window.instant?/1`) for `:time`, a string, an atom other than `true` and `false`, or a number for `:category`, a string for `:text`, `{longitude, latitude}` numbers for `:point`, a literal color (`Macaw.Data.Schema.color?/1`) for `:color` |
+| `{:type, type}` | a field's value is not `nil` and not of the field's type: a number for `:number`, an instant (`Macaw.Data.Window.instant?/1`) for `:time`, a string, an atom other than `true` and `false`, or a number for `:category`, a string for `:text`, `{longitude, latitude}` numbers for `:point`, a data color for `:color`: a color term, a literal or a typed color, and never a string (`Macaw.Data.Schema.color?/1`, [01 §1.7](01-sources.md#sources-schema-colors)) |
 | `:not_in_values` | a `:category` field's value is not one of its declared `values` |
 | `:no_identity` | an identity field is `nil` or absent: a row that does not say what it is about names nothing |
 | `:identity` | under `per`, a row names another identity than its entity's |
@@ -93,7 +93,7 @@ in context, a function reading a field no input or output describes, a window it
 An answer that does not conform is the engine's fault `:nonconforming` (§8.3), this its detail; the output the source last held stays.
 
 ```test:derived-conform-answers
-a conforming answer is its rows keyed by strings; a non-list, a non-row, an undescribed key, a value of the wrong type, a category outside its values and a missing identity are each the first fault's index, field and reason, and no fault holds the value
+a conforming answer is its rows keyed by strings, a :color field's literal and typed colors among them; a non-list, a non-row, an undescribed key, a value of the wrong type (a string or a bare role for :color), a category outside its values and a missing identity are each the first fault's index, field and reason, and no fault holds the value
 ```
 
 ```test:derived-conform-no-value

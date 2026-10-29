@@ -115,9 +115,10 @@ defmodule Macaw.Data.Parameter do
   @doc """
   Whether a value is one of a type: a `DateTime` for `:time`, a number for `:number`, a
   string, an atom (other than `nil`, `true` and `false`) or a number for `:category`, a
-  string for `:text`, a data color for `:color` (`Macaw.Data.Schema.color?/1`), a
-  `{longitude, latitude}` pair for `:point`, a map for `{:document, type}`, anything for
-  `:term`. `nil` is no value of any type but `:term`.
+  string for `:text`, a data color for `:color` (a color term, a literal
+  `%Macaw.Layers.Color{}` or a typed color, `Macaw.Data.Schema.color?/1`; a string is never
+  one), a `{longitude, latitude}` pair for `:point`, a map for `{:document, type}`, anything
+  for `:term`. `nil` is no value of any type but `:term`.
   """
   @spec conforms?(type(), term()) :: boolean()
   def conforms?(:term, _value), do: true

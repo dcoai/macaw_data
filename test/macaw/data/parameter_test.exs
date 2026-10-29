@@ -2,6 +2,8 @@ defmodule Macaw.Data.ParameterTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
+  import Macaw.Layers.Color, only: [sigil_RGB: 2]
+
   alias Macaw.Data.Parameter
 
   doctest Parameter
@@ -63,7 +65,8 @@ defmodule Macaw.Data.ParameterTest do
       category: "ok",
       category: 3,
       text: "x",
-      color: "#fff",
+      color: ~RGB"#fff",
+      color: {:alpha, {:color, :good}, 0.5},
       point: {-73.98, 40.75},
       term: nil,
       term: {:anything}
@@ -76,6 +79,8 @@ defmodule Macaw.Data.ParameterTest do
       category: nil,
       text: :x,
       color: "good",
+      color: "#fff",
+      color: :good,
       point: {200, 0},
       point: {0, 91},
       point: [0, 0]
