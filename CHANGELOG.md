@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.6.0 (2026-10-29)
 
 - What a source steps its window by: `Window.before/4`, `region/2` (visualize's `box/2`: a window as the region it asks of a schema), `range/2`, and `check/2` of the axes alone as well as of a request (dco-tek/macaw/macaw#185, #5).
 - Packing a table and reading it back do about half the work: types inferred only where not given, values checked in one pass, column names merged once, rows built a column step at a time, and time columns converted by the date's fields, a fifth of `DateTime`'s own conversion (dco-tek/macaw/macaw#185, #4).

@@ -20,6 +20,6 @@ Built in the family's order of work, which puts first what adopters consume:
 1. **the interaction event** (step 1): done, v0.1.0;
 2. **the data model** (step 3, macaw_compose#57): done, v0.2.0;
 3. **the source contract and its kit** (step 4, macaw_compose#58): done, v0.3.0;
-4. **derived sources** (step 5, macaw_compose#82): done, v0.4.0; then **transforms, table operations and aggregates** (step 6, macaw_compose#83): done, v0.5.0.
+4. **derived sources** (step 5, macaw_compose#82): done, v0.4.0; then **transforms, table operations and aggregates** (step 6, macaw_compose#83): done, v0.5.0. v0.6.0 makes a delivery keep the rows its source gave, packing on demand, for live charts (macaw#185).
 
 Each is released by git tag. An adopter published on Hex (visualize) switches when `macaw_data` is published on Hex, keeping a field-identical interim definition checked against this one meanwhile.
