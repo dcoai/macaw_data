@@ -12,7 +12,7 @@ It knows nothing of pages, components or state: those are `macaw_compose`'s, whi
 
 ## 2. Dependencies {#data-dependencies}
 
-None required at runtime beyond Elixir and OTP, so an adopter using no other Macaw library (visualize, standalone) can depend on it alone. `table` and `nx` are optional: a host that has either gets its `Table.Reader` sources or tensors read into a table ([01 §1.1](01-sources.md#sources-table)). It depends on `macaw_layers` (v0.1.0), the document kernel: a schema's JSON is read through its gates and its version is its digest ([01 §1.10](01-sources.md#sources-schema-version), [01 §1.11](01-sources.md#sources-schema-json)).
+None required at runtime beyond Elixir and OTP, so an adopter using no other Macaw library (visualize, standalone) can depend on it alone. `table` and `nx` are optional: a host that has either gets its `Table.Reader` sources or tensors read into a table ([01 §1.1](01-sources.md#sources-table)), and **a host with neither compiles it without a warning** (CI compiles it so, #7). It depends on `macaw_layers` (v0.1.0), the document kernel: a schema's JSON is read through its gates and its version is its digest ([01 §1.10](01-sources.md#sources-schema-version), [01 §1.11](01-sources.md#sources-schema-json)).
 
 ## 3. Order of work {#data-order}
 

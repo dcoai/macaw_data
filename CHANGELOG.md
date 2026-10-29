@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.6.1 (2026-10-29)
+
+- **Fixed:** compiling macaw_data in an app without the optional `table` package warned that `Table.Reader.impl_for/1` is undefined; CI now compiles it without its optional dependencies (#7).
+
 ## v0.6.0 (2026-10-29)
 
 - What a source steps its window by: `Window.before/4`, `region/2` (visualize's `box/2`: a window as the region it asks of a schema), `range/2`, and `check/2` of the axes alone as well as of a request (dco-tek/macaw/macaw#185, #5).

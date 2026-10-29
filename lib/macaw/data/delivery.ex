@@ -51,6 +51,9 @@ defmodule Macaw.Data.Delivery do
   alias Macaw.Data.Source.Request
   alias Macaw.Data.Table
 
+  # `table` is optional: `new/2` asks its protocol about a struct only when it is loaded.
+  @compile {:no_warn_undefined, [Elixir.Table.Reader]}
+
   @enforce_keys [:rows, :served]
   defstruct [:rows, :served, names: nil, types: %{}, schema: nil, origin: nil]
 

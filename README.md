@@ -31,7 +31,7 @@ Macaw's data layer (spec/00 §4): the interaction event, the data model, the sou
 Depends on `macaw_layers` (the document kernel); `table` and `nx` are optional, for reading their sources into a table. From Hex:
 
 ```elixir
-{:macaw_data, "~> 0.6.0"}
+{:macaw_data, "~> 0.6.1"}
 ```
 
 Part of [Macaw](https://github.com/dcoai/macaw).

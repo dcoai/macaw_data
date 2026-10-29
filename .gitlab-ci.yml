@@ -43,6 +43,9 @@ compile:
   stage: check
   script:
     - mix compile --force --warnings-as-errors
+    # As an app without the optional table and nx compiles it: a call into either
+    # must be silenced where it is guarded, or every such app warns (#7).
+    - MIX_ENV=prod mix compile --force --no-optional-deps --warnings-as-errors
     # Push what the store lacked, only after a green build.
     - elixir scripts/depdep.exs --push || echo "depdep bootstrap failed - nothing pushed"
 
