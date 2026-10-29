@@ -478,9 +478,241 @@ defmodule Macaw.Data.DerivedTest do
     assert Atoms.made([joined, "#{id}.host" | names]) == []
   end
 
-  @tag verifies: "derived-forms-inverse"
-  test "to_map and new are inverses; to_json and from_json too, limits first" do
-    sources = [
+  describe "the map and JSON forms" do
+    @tag verifies: "derived-forms-inverse"
+    test "from_map(to_map) and from_json(to_json) give the source back, schema as given" do
+      for source <- form_sources() do
+        assert {:ok, map} = Derived.to_map(source)
+        assert map |> JSON.encode!() |> JSON.decode!() == map
+        assert Derived.from_map(map) == {:ok, source}
+
+        assert {:ok, json} = Derived.to_json(source)
+        assert {:ok, read} = Derived.from_json(json)
+        assert read == source
+        assert read.schema.version == source.schema.version
+      end
+    end
+
+    @tag verifies: "derived-forms-inverse"
+    test "the tags are the kernel's and the source's own, the schema in its own form" do
+      [health, path, timed, regioned | _] = form_sources()
+
+      assert {:ok, %{"id" => "health", "from" => [input], "per" => per, "schema" => schema}} =
+               Derived.to_map(health)
+
+      assert input == %{"$input" => ["hosts", %{"last" => 20}]}
+      assert per == %{"$atom" => "identity"}
+      assert schema == Schema.to_map(health.schema)
+
+      assert {:ok, %{"per" => %{"$identity" => ["ops", "hosts"]}}} = Derived.to_map(path)
+
+      assert {:ok, %{"from" => [%{"$input" => [%{"$source" => "vm.memory"}, window]}]}} =
+               Derived.to_map(timed)
+
+      assert window == %{"window" => [%{"$time" => "2026-10-27T00:00:00Z"}, nil]}
+
+      # A region is keyed by field names: a name spelled like a key stays a name, and one
+      # that starts with `$` is escaped.
+      assert {:ok, %{"from" => [%{"$input" => ["places", request]}]}} = Derived.to_map(regioned)
+      assert request["region"] == %{"pop" => [1, 9], "window" => [0, 1], "$$p" => [2, 3]}
+      assert request["box"] == %{"west" => 175, "south" => -20, "east" => -175, "north" => -15}
+
+      {:ok, json} = Derived.to_json(health)
+      assert %{"$version" => 1} = JSON.decode!(json)
+    end
+
+    @tag verifies: "derived-forms-inverse"
+    test "the output schema is the one given: never written to a form and read back" do
+      schema =
+        Schema.new!(%{
+          n: %{type: :number},
+          s: %{
+            type: :category,
+            values: [
+              %{value: :ok, color: {:alpha, {:color, :good}, 0.5}},
+              %{value: :bad, color: Macaw.Layers.Color.parse!("#2e7d32")}
+            ]
+          }
+        })
+
+      source = Derived.new!(id: :x, from: [a: nil], schema: schema, elixir: "fn x -> x end")
+      assert source.schema == schema
+      assert source.schema.version == schema.version
+
+      fields = %{n: %{type: :number}, s: %{type: :category, values: [:ok, :bad]}}
+      built = Derived.new!(id: :x, from: [a: nil], schema: fields, elixir: "fn x -> x end")
+      assert built.schema == Schema.new!(fields)
+    end
+
+    @tag verifies: "derived-forms-gates"
+    test "from_json holds a document to the gates before reading it" do
+      {:ok, json} = Derived.to_json(hd(form_sources()))
+
+      assert {:error, [{[], {:limit, :bytes, 10, _}}]} =
+               Derived.from_json(json, limits: [bytes: 10])
+
+      assert {:error, [{["from", 0, "$input"], {:limit, :depth, 3, _}}]} =
+               Derived.from_json(json, limits: [depth: 3])
+
+      newer = json |> JSON.decode!() |> Map.put("$version", 2)
+      assert {:error, [{[], {:newer_schema, 2, 1}}]} = Derived.from_map(newer)
+      assert {:error, [{[], {:newer_schema, 2, 1}}]} = Derived.from_json(JSON.encode!(newer))
+    end
+
+    @tag verifies: "derived-forms-gates"
+    test "an unknown key, tag or atom is refused by name" do
+      {:ok, map} = Derived.to_map(hd(form_sources()))
+
+      assert {:error, [{["nope"], :unknown_key}]} = Derived.from_map(Map.put(map, "nope", 1))
+
+      assert {:error, [{["elixir"], {:unknown_tag, "$evil"}}]} =
+               Derived.from_map(Map.put(map, "elixir", %{"$evil" => "x"}))
+
+      assert {:error, [{[:per], {:enum, [:identity]}}]} =
+               Derived.from_map(Map.put(map, "per", %{"$atom" => "sideways"}))
+
+      assert {:error, [{[:from, 0], {:unknown_tag, "$input"}}]} =
+               Derived.from_map(Map.put(map, "from", [%{"$input" => ["hosts"]}]))
+
+      # The schema is read by its own adapter, its faults under `schema`.
+      assert {:error, [{[:schema], {:type, :schema}}]} =
+               Derived.from_map(Map.put(map, "schema", %{"n" => 1}))
+
+      assert {:error, [{[:schema, "n", :type], {:enum, _}}]} =
+               Derived.from_map(Map.put(map, "schema", [["n", %{"type" => "nope"}]]))
+
+      # The old private form is no form: its pair lists are refused at their paths.
+      old = %{map | "from" => [["hosts", %{"last" => 20}]], "per" => "identity"}
+
+      assert {:error, [{[:from, 0], {:type, :input}}, {[:per], {:enum, [:identity]}}]} =
+               Derived.from_map(old)
+    end
+
+    @tag verifies: "derived-forms-gates"
+    test "new/1 takes the value only: a map form is refused key by key" do
+      {:ok, map} = Derived.to_map(hd(form_sources()))
+      assert {:error, faults} = Derived.new(map)
+
+      for key <- Map.keys(map), do: assert({[key], :unknown_key} in faults)
+      for key <- [:id, :from, :schema, :elixir], do: assert({[key], :required} in faults)
+
+      assert {:error, faults} = Derived.new(%{"nope" => 1, id: :x})
+      assert {["nope"], :unknown_key} in faults
+    end
+
+    # Checked on the document's own names, never the node's atom count (macaw_data#1).
+    @tag verifies: "derived-forms-gates"
+    test "reading a document makes no atom of its names" do
+      [id, input, field, path, key] = names = for _ <- 1..5, do: Atoms.fresh()
+
+      json =
+        JSON.encode!(%{
+          "id" => id,
+          "from" => [%{"$input" => [[path, input], %{"region" => %{field => [0, 1]}}]}],
+          "schema" => [[field, %{"type" => "number"}]],
+          "function" => id,
+          key => 1
+        })
+
+      assert {:error, [{[^key], :unknown_key}]} = Derived.from_json(json)
+
+      {:ok, source} =
+        Derived.from_json(json |> JSON.decode!() |> Map.delete(key) |> JSON.encode!())
+
+      assert source.from == [{[path, input], %{region: %{field => [0, 1]}}}]
+      assert Atoms.made(names) == []
+    end
+
+    @tag verifies: "derived-forms-inverse"
+    property "every source with a form reads back from its map and JSON forms" do
+      check all(source <- form_source()) do
+        assert {:ok, map} = Derived.to_map(source)
+        assert map |> JSON.encode!() |> JSON.decode!() == map
+        assert Derived.from_map(map) == {:ok, source}
+        assert {:ok, json} = Derived.to_json(source)
+        assert Derived.from_json(json) == {:ok, source}
+      end
+    end
+  end
+
+  # Names a form must keep as names: spellings of its keys and tags, and of `$` data.
+  @spellings ~w(window last region id from per identity schema $p $$q $atom $input a.b x)
+
+  defp form_name, do: one_of([member_of(@spellings), string(:alphanumeric, min_length: 1)])
+
+  defp form_input do
+    gen all(
+          name <-
+            one_of([
+              form_name(),
+              map(form_name(), &{:source, &1}),
+              list_of(form_name(), min_length: 1, max_length: 3)
+            ]),
+          window <- form_window()
+        ) do
+      {name, window}
+    end
+  end
+
+  defp form_window do
+    instant = map(integer(0..1_000_000), &DateTime.from_unix!/1)
+
+    one_of([
+      constant(nil),
+      map(positive_integer(), &%{last: &1}),
+      map({instant, integer(1..1000)}, fn {from, d} ->
+        %{window: [from, DateTime.add(from, d)], latest: true}
+      end),
+      map(map_of(form_name(), integer(0..9), min_length: 1, max_length: 3), fn region ->
+        %{region: Map.new(region, fn {field, from} -> {field, [from, from + 1]} end)}
+      end)
+    ])
+  end
+
+  defp form_source do
+    gen all(
+          id <- form_name(),
+          inputs <- map(list_of(form_input(), min_length: 1, max_length: 3), &distinct/1),
+          fields <-
+            map_of(form_name(), member_of([:number, :category, :color]),
+              min_length: 1,
+              max_length: 4
+            ),
+          function <- one_of([constant(nil), form_name()]),
+          per <- member_of([nil, :identity, :named])
+        ) do
+      per =
+        case {per, inputs} do
+          {:identity, [_one]} -> :identity
+          {:named, [{name, _window} | _]} -> {:identity, name}
+          _other -> nil
+        end
+
+      schema =
+        Map.new(fields, fn
+          {name, :category} ->
+            {name, %{type: :category, values: [%{value: name, color: {:color, "good"}}]}}
+
+          {name, type} ->
+            {name, %{type: type}}
+        end)
+
+      Derived.new!(
+        id: id,
+        from: inputs,
+        schema: schema,
+        function: function,
+        elixir: if(function == nil, do: "fn x -> x end"),
+        per: per
+      )
+    end
+  end
+
+  # Inputs read under distinct keys.
+  defp distinct(inputs), do: Enum.uniq_by(inputs, fn {name, _window} -> Derived.key(name) end)
+
+  defp form_sources do
+    [
       Derived.new!(health()),
       Derived.new!(health(per: {:identity, ["ops", "hosts"]}, from: [{["ops", "hosts"], nil}])),
       Derived.new!(
@@ -495,28 +727,33 @@ defmodule Macaw.Data.DerivedTest do
           {"places",
            %{
              box: %{west: 175, south: -20, east: -175, north: -15},
-             region: %{"pop" => [1, 9]},
+             region: %{"pop" => [1, 9], "$p" => [2, 3], window: [0, 1]},
              latest: true
            }}
         ],
-        schema: %{n: %{type: :number}},
+        schema: %{
+          n: %{type: :number},
+          s: %{
+            type: :category,
+            values: [
+              %{value: :ok, color: {:alpha, {:color, "good"}, 0.5}},
+              %{value: :bad, color: Macaw.Layers.Color.parse!("#2e7d32")}
+            ]
+          }
+        },
         elixir: "fn x -> x end"
+      ),
+      Derived.new!(
+        id: :t,
+        from: [
+          {:hosts, %{window: [~U[2026-10-27 00:00:00Z], ~U[2026-10-28 00:00:00Z]]}},
+          {:load, %{region: %{"at" => [~U[2026-10-27 00:00:00Z], nil]}}}
+        ],
+        per: {:identity, :hosts},
+        schema: %{host: %{type: :category, identity: true}},
+        function: :t
       )
     ]
-
-    for source <- sources do
-      map = Derived.to_map(source)
-      assert map |> JSON.encode!() |> JSON.decode!() == map
-      assert Derived.new(map) == {:ok, source}
-      assert Derived.from_json(Derived.to_json(source)) == {:ok, source}
-    end
-
-    json = Derived.to_json(hd(sources))
-
-    assert {:error, [{[], {:limit, :bytes, 10, _}}]} =
-             Derived.from_json(json, limits: [bytes: 10])
-
-    assert {:error, [{["nope"], :unknown_key}]} = Derived.new(%{"id" => "x", "nope" => 1})
   end
 
   describe "inputs" do

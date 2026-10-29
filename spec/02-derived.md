@@ -31,12 +31,12 @@ A derived source is **data**: a struct with no function in it, its function a na
 |---|---|---|
 | `id` | the source's name: a string, or an atom other than `nil`, `true` and `false` that Elixir input spells it with, held as its string (`Macaw.Layers.Names`) | required |
 | `from` | its inputs, a non-empty list of `{name, window}` (§2) | required |
-| `schema` | its output's fields, a `%Macaw.Data.Schema{}` ([01 §1.2](01-sources.md#sources-schema)); in the map form, the map of descriptions `Schema.new/1` takes | required |
+| `schema` | its output's fields, a `%Macaw.Data.Schema{}` ([01 §1.2](01-sources.md#sources-schema)), or the map of descriptions `Schema.new/1` takes, built by it; either is used as built, never written to a form and read back | required |
 | `elixir` | the function as source text: one `fn` of one argument, its inputs, or two, its inputs and its context (§2.3), checked by the sandbox (§6.1) | one of `elixir` and `function` |
 | `function` | the name of a host's function, defined with `defsource` (§7), held as its string and found in the registry by spelling | one of `elixir` and `function` |
 | `per` | `nil`, `:identity` or `{:identity, input}` (§1.3) | `nil` |
 
-`Macaw.Data.Derived.new/1` takes the map form (§1.5), or a keyword list of the same keys, and answers `{:ok, derived}` or `{:error, faults}` with **every** fault, each `{path, reason}`, the path from the source to the value, ordered by path. `new!/1` answers the source or raises `ArgumentError` naming every fault.
+`Macaw.Data.Derived.new/1` takes the **value**, a keyword list or a map of the fields above as terms (atom keys; names atoms or strings, held as strings), and answers `{:ok, derived}` or `{:error, faults}` with **every** fault, each `{path, reason}`, the path from the source to the value, ordered by path. `new!/1` answers the source or raises `ArgumentError` naming every fault.
 
 **Alone and in context.** `new/1` checks what the source says of itself: its keys and their types, its schema through `Schema.new/1`, its inputs' shapes, `per` against the inputs' count, and the function's text through `Sandbox.check/2` with `fields: nil`, since what its inputs hold is not known alone. `Macaw.Data.Derived.validate(derived, opts)` checks it **given what it reads**:
 
@@ -49,7 +49,7 @@ The engine validates every source in context before it first runs, and again whe
 | Reason | Meaning |
 |---|---|
 | `{:type, :derived}` | at `[]`: neither a map nor a keyword list |
-| `:unknown_key` | at `[key]`: a key not of the table above |
+| `:unknown_key` | at `[key]`: a key not of the table above; a string key is none, so a map form (§1.5) given to `new/1` is refused key by key, each of its keys at `["key"]`, beside the required keys it lacks |
 | `:required` | at `[:id]`, `[:from]` or `[:schema]`; at `[:elixir]` when neither `elixir` nor `function` is given |
 | `{:type, expected}` | at the key: `:name` for `id` and `function`, `:inputs` for `from` (not a non-empty list), `:input` for an entry that is not a `{name, window}` pair, `:input_name` for a name that is none of §2.1's, `:string` for `elixir`, `:schema` for `schema` (not a map of descriptions), `:window` for a window that is none of §2.2's, `:pos_integer` for a `last` that is not a positive integer |
 | `{:exclusive, :elixir}` | at `[:function]`: both `elixir` and `function` are given; a source has one function |
@@ -128,21 +128,34 @@ each row gains every per-identity output's fields but its identity as "id.field"
 
 ### 1.5 The map and JSON forms {#derived-forms}
 
-`Macaw.Data.Derived.to_map/1` is the source's **map form**, JSON-ready, with every name a string:
+The value (§1.1) is the one true form: it is what `new/1` judges and what is built, stored and compared. Its map and JSON forms are **representations, made by an adapter at the edge** (dco-tek/macaw/macaw#188): `macaw_layers`' JSON adapter, `Macaw.Layers.Form` ([macaw_layers 01 §5](https://github.com/dcoai/macaw_layers/blob/main/spec/01-kernel.md#kernel-gates), [§6](https://github.com/dcoai/macaw_layers/blob/main/spec/01-kernel.md#kernel-forms)), with the derived source as a document type of it. The tags are the kernel's (`$atom`, `$time`, `$version`) and the source's own, in one tag table (`Macaw.Layers.Tags`); there is no other tag scheme.
 
-| Key | Map form |
+`Macaw.Data.Derived.to_map/1` writes the source's **map form**, JSON-ready: `{:ok, map}`, or every value without a form at its path, such as a window's time that is not in `Etc/UTC` (`{:type, :term}`). The kernel writes every term it knows (a name its string, a map's atom key its spelling, `:identity` the `$atom` `{"$atom": "identity"}`, a time `{"$time": "ISO 8601"}`), and the source writes its tuples under its own tags, each part in its own form:
+
+| Value | Map form |
 |---|---|
-| `"id"` | its string |
-| `"from"` | a list of `[name, window]` pairs: a short id its string, `{:source, name}` the object `{"source": name}`, a path a list of strings; the window `null`, `{"last": n}`, or a request object (§2.2) of the keys it has: `"window"` `[from, to]`, `"box"` `{"west", "south", "east", "north"}`, `"region"` a list of `[field, [from, to]]` pairs, `"latest"` a boolean, each time `{"$time": …}` |
-| `"schema"` | `Macaw.Data.Schema.to_map/1` of it ([01 §1.11](01-sources.md#sources-schema-json)) |
-| `"elixir"` | its string, or absent |
-| `"function"` | its string, or absent |
-| `"per"` | `"identity"`, `["identity", name]`, or absent |
+| `id`, `elixir`, `function` | the string; a `nil` key is absent |
+| an input `{name, window}` | `{"$input": [name, window]}` |
+| a short id, a path | the string, the list of strings |
+| `{:source, name}` | `{"$source": name}` |
+| a window | `null`, `{"last": n}`, or a request object of the keys it has: `"window"` `[from, to]`, `"box"` `{"west", "south", "east", "north"}`, `"region"` an object keyed by its fields' names, `"latest"` a boolean, each time `{"$time": …}` |
+| `per` | `{"$atom": "identity"}`, or `{"$identity": input}` |
+| `schema` | `Macaw.Data.Schema.to_map/1` of it, the schema's own adapter ([01 §1.11](01-sources.md#sources-schema-json)), its colors in the colors' form (`Macaw.Layers.Color.Form`) |
 
-`new/1` reads that form back: `new(to_map(derived)) == {:ok, derived}` for every valid source. `to_json/1` is the map form encoded, and `from_json(json, opts)` reads JSON through `macaw_layers`' gates (`Macaw.Layers.Document.read/3`: bytes, nesting and counts within `Macaw.Layers.Limits`, `opts` tightening them) before `new/1`. A pair list is used wherever a JSON object's keys would lose a name's spelling. A document that holds derived sources (a `macaw_compose` page) writes each in this form, with no tag of its own.
+A region is a **name map**: its keys are field names, never the form's keys, written as the names they are and escaped when they start with `$` (`Macaw.Layers.Tags.escape/1`). `to_json/1` is the map form encoded, stamped `"$version"` with the form's version, 1.
+
+**Reading** is the adapter's, and judging is `new/1`'s. `from_map(map, opts)` and `from_json(json, opts)` take a map form or a JSON document through the gates (`Macaw.Layers.Form.gates/3`: a JSON document's bytes, then its nesting and counts within `Macaw.Layers.Limits`, `limits:` tightening them; the version, a newer stamp refused by name; the migration), read the value from the map form by the tag table and the form's keys (an unknown tag is `{:unknown_tag, tag}` at its path, a key the form does not have stays its string, which `new/1` refuses as `:unknown_key`, a `$atom` other than `identity` is `{:enum, [:identity]}`), read the schema by `Macaw.Data.Schema.from_map/1`, its faults at `[:schema | path]`, and then judge the value by `new/1`. Reading makes no atom: every atom it gives is one of the form's closed tables (`Macaw.Layers.Vocabulary`).
+
+`from_map(to_map(derived)) == {:ok, derived}`, and likewise through JSON, for every valid source with a form. A document that holds derived sources (a `macaw_compose` page) writes each in this form.
+
+**The form changed** in macaw_data 0.7.0 (#30): before, it was a private scheme of pair lists (`[name, window]`, `["identity", name]`, a region `[[field, range], …]`) with no stamp, and `new/1` read it. Nothing in this library stored it, so no version step reads it: a document in it is read as version 1 and refused at its paths.
 
 ```test:derived-forms-inverse
-to_map and new are exact inverses for valid sources, every name a string, every input form, window form and per form among them; to_json and from_json likewise, and from_json refuses input over the limits before reading it
+from_map(to_map) and from_json(to_json) give back an equal source, its schema the same version, for every input form, window form and per form, an elixir and a function source, times and a region among them; the tags are the kernel's and the source's own
+```
+
+```test:derived-forms-gates
+from_json refuses input over the byte or depth limit before reading it, a newer version by name, an unknown tag and an unknown key by name, a $atom outside the form's atoms, and makes no atom of a document's names; new/1 refuses a map form key by key
 ```
 
 ## 2. Inputs {#derived-inputs}
@@ -181,7 +194,7 @@ The function **gets what is there** (visualize#643, settled question 3): a windo
 
 **How a function reads its inputs.** The function receives the inputs as one map from key to rows: `fn %{hosts: rows} -> … end`.
 
-- **A stored function reads a name as it reads its own literals** (§6.1): an input's key, a row's field and a row's category value is the atom of a word an allowed function takes (`:ok`, `:error`, `:day`, `:first`, …), else its string. So a row's `:ok` is the function's `:ok`, a row's `:warning` and the function's `:warning` are both `"warning"`, and `row.field` reads either spelling (§6.3).
+- **A stored function reads a name as it reads its own literals** (§6.1): an input's key, a row's field and a row's category value is the atom of a word an allowed function takes (`:ok`, `:error`, `:day`, `:first`, …), else its string. So a row's `:ok` is the function's `:ok`, a row's `:warning` and the function's `:warning` are both `"warning"`, and `row.field` reads either spelling (§6.3). Any other value is the term it is: a number, a time, and a color, literal (`%Macaw.Layers.Color{}`) or typed (`{:color, "good"}`), whole, its tags never respelled.
 - **A host's function** (§7) receives the inputs keyed by their strings (`inputs["hosts"]`) and each row as its source gave it.
 
 Whichever function answers, its rows are keyed by their fields' strings in the output (§1.2). `Macaw.Data.Derived.argument(derived, inputs)` is that first argument, each input `%{name, rows, schema}` as its owner read it.
@@ -210,7 +223,7 @@ A function of **two arguments** is called with the inputs and its **context**, t
 ```
 
 - **`"inputs"`** is keyed as the first argument keys its inputs (a stored function's by its literals' rule, a host's by the key's string), so `for {key, rows} <- inputs` finds each input's facts under the same `key`.
-- **`"schema"` is the input's schema as data, not a `%Schema{}`**: a struct is restricted in a stored function (§6.1), and reading a struct's fields would bind a stored function to the library's internals. It is a map from each field's name to its description, each description's keys their strings (`"type"`, `"unit"`, `"bounds"`, `"continuity"`, `"order"`, `"status"`, …), a field's `"values"` its declared values in order, an entry a map of its keys' strings (`%{"value" => v, "name" => "OK", "color" => c}`), a bare value itself. It is a term, not JSON: a value is the term the schema holds. An input that is a derived source gives its output's schema.
+- **`"schema"` is the input's schema as data, not a `%Schema{}`**: a struct is restricted in a stored function (§6.1), and reading a struct's fields would bind a stored function to the library's internals. It is a map from each field's name to its description, each description's keys their strings (`"type"`, `"unit"`, `"bounds"`, `"continuity"`, `"order"`, `"status"`, …), a field's `"values"` its declared values in order, an entry a map of its keys' strings (`%{"value" => v, "name" => "OK", "color" => c}`), a bare value itself. It is a term, not JSON: a value is the term the schema holds, a stored function's names and words by its literals' rule, and a value entry's color, literal or typed, whole, as a row's is (§2.2). An input that is a derived source gives its output's schema.
 - **`"window"`, `"resolution"` and `"capped"` are the delivery's** `served` facts, as the source answered them: the window actually served, the rows' spacing, whether the answer stopped short. They are not the input's own window (`last:` or a request), which says how much of the delivery the function is handed. A derived source's output is a delivery with `nil`, `nil` and `false`.
 - **No clock.** The context carries no "now". A source runs only when it is marked (§8.2), and a function that read the time would answer differently on every pulse with nothing marking it. A window that moves with the clock is its input's (`"window"`).
 - **No variables.** visualize's context also carries its scope's variables (visualize D-228). Here a variable, a selection, or anything else a function depends on is **an input like any other**: on a Macaw page, a state source. It is read as rows, its change marks the source as any input's does, and its fields are checked as any input's are.

@@ -1,178 +1,125 @@
+defmodule Macaw.Data.Derived.Form.Tags do
+  @moduledoc false
+  # The tag table of a derived source's map form (spec/02 §1.5): the kernel's tags and the
+  # source's own, an input `$input`, a source's name `$source` and `per`'s `$identity`.
+  use Macaw.Layers.Tags, live: ~w($input $source $identity)
+end
+
 defmodule Macaw.Data.Derived.Form do
   @moduledoc false
-  # A derived source's map and JSON forms (spec/02 §1.5): every name a string, a pair list
-  # wherever a JSON object's keys would lose a name's spelling, times `{"$time": …}`, the
-  # schema in its own map form. `read/1` turns the map form back into the keys `new/1`
-  # checks; `Macaw.Data.Derived` holds the public functions.
+  # A derived source as a document of `macaw_layers`' JSON adapter (spec/02 §1.5): the
+  # `Macaw.Layers.Form` and `Macaw.Layers.Version` callbacks, and the source's value and map
+  # form each way. The kernel writes and reads every term (names as strings, `per`'s
+  # `:identity` a `$atom`, times `$time`); this type writes its tuples under its own tags,
+  # and the output schema through `Macaw.Data.Schema`'s own adapter. `Macaw.Data.Derived`
+  # holds the public functions and judges what is read with `new/1`.
+
+  @behaviour Macaw.Layers.Form
+  @behaviour Macaw.Layers.Version
 
   alias Macaw.Data.Schema
-  alias Macaw.Layers.{Limits, Scan}
+  alias Macaw.Layers.{Fault, Version, Vocabulary}
+  alias Macaw.Layers.Form, as: Adapter
 
-  @keys [:id, :from, :schema, :elixir, :function, :per]
+  @keys ~w(id from schema elixir function per last window box region latest west south east north)a
 
   @doc false
+  # The source's map form: `{:ok, map}`, or every value without a form, by path.
   def to_map(source) do
-    %{
-      "id" => source.id,
-      "from" =>
-        Enum.map(source.from, fn {name, window} -> [name_form(name), window_form(window)] end),
-      "schema" => Schema.to_map(source.schema)
-    }
-    |> put_form("elixir", source.elixir)
-    |> put_form("function", source.function)
-    |> put_form("per", per_form(source.per))
+    value =
+      source
+      |> Map.from_struct()
+      |> Map.delete(:schema)
+      |> Map.reject(fn {_key, value} -> value == nil end)
+
+    with {:ok, map} <- Adapter.to_map(value, __MODULE__),
+         do: {:ok, Map.put(map, "schema", Schema.to_map(source.schema))}
   end
-
-  defp put_form(map, _key, nil), do: map
-  defp put_form(map, key, value), do: Map.put(map, key, value)
-
-  defp name_form({:source, name}), do: %{"source" => name}
-  defp name_form(name), do: name
-
-  defp window_form(nil), do: nil
-  defp window_form(%{last: n}), do: %{"last" => n}
-
-  defp window_form(%{} = window) do
-    Map.new(window, fn
-      {:window, range} ->
-        {"window", Enum.map(range, &time_form/1)}
-
-      {:box, box} ->
-        {"box", Map.new(box, fn {k, v} -> {Atom.to_string(k), v} end)}
-
-      {:region, region} ->
-        {"region",
-         region |> Enum.sort() |> Enum.map(fn {f, r} -> [f, Enum.map(r, &time_form/1)] end)}
-
-      {:latest, latest} ->
-        {"latest", latest}
-    end)
-  end
-
-  defp time_form(%DateTime{} = time), do: %{"$time" => DateTime.to_iso8601(time)}
-  defp time_form(other), do: other
-
-  defp per_form(nil), do: nil
-  defp per_form(:identity), do: "identity"
-  defp per_form({:identity, name}), do: ["identity", name_form(name)]
 
   @doc false
-  # JSON read through the limits and the scan, then decoded to a map.
-  def decode(json, opts) when is_binary(json) do
-    limits = Limits.new(Keyword.get(opts, :limits, []))
-
-    cond do
-      byte_size(json) > limits.bytes ->
-        {:error, [{[], {:limit, :bytes, limits.bytes, byte_size(json)}}]}
-
-      match?({:error, _}, Scan.scan(json, limits)) ->
-        {:error, fault} = Scan.scan(json, limits)
-        {:error, [fault]}
-
-      true ->
-        case JSON.decode(json) do
-          {:ok, map} when is_map(map) -> {:ok, map}
-          {:ok, _other} -> {:error, [{[], {:type, :derived}}]}
-          {:error, reason} -> {:error, [{[], {:json, inspect(reason)}}]}
-        end
-    end
+  # The source's JSON form, stamped with this type's version.
+  def to_json(source) do
+    with {:ok, map} <- to_map(source),
+         do: {:ok, JSON.encode!(Map.put(map, Version.stamp(), current()))}
   end
-
-  # The map form read into a source's keys: string keys mean the map form, whose names,
-  # windows, schema and per are read back; atom keys are taken as Elixir gives them.
-  @form_keys Map.new(@keys, &{Atom.to_string(&1), &1})
 
   @doc false
-  def read(map) do
-    if map |> Map.keys() |> Enum.any?(&is_binary/1),
-      do: read_map_form(map),
-      else: {:ok, map}
-  end
+  # A map form or a JSON document through the gates to the value it holds, for `new/1` to
+  # judge: `{:ok, value}`, or the faults of the first gate that refuses it, else every fault
+  # of reading the value and the schema.
+  def read(input, opts) do
+    with {:ok, map} <- Adapter.gates(input, __MODULE__, Keyword.take(opts, [:limits])) do
+      {schema, map} = map |> Map.delete(Version.stamp()) |> Map.pop("schema", :absent)
 
-  defp read_map_form(map) do
-    {known, unknown} = Enum.split_with(map, fn {k, _v} -> Map.has_key?(@form_keys, k) end)
-
-    case unknown do
-      [] ->
-        Enum.reduce_while(known, {:ok, %{}}, fn {k, v}, {:ok, acc} ->
-          key = Map.fetch!(@form_keys, k)
-
-          case read_value(key, v) do
-            {:ok, value} -> {:cont, {:ok, Map.put(acc, key, value)}}
-            {:error, errors} -> {:halt, {:error, errors}}
-          end
-        end)
-
-      _keys ->
-        {:error, for({k, _v} <- unknown, do: {[k], :unknown_key})}
+      case {Adapter.from_map(map, __MODULE__), schema(schema)} do
+        {{:ok, value}, {:ok, schema}} -> {:ok, put_schema(value, schema)}
+        {value, schema} -> {:error, Fault.sort(faults(value) ++ faults(schema))}
+      end
     end
   end
 
-  defp read_value(:from, inputs) when is_list(inputs) do
-    {:ok,
-     Enum.map(inputs, fn
-       [name, window] -> {read_name(name), read_window(window)}
-       other -> other
-     end)}
-  end
+  # The output schema is read by its own adapter, its faults under `[:schema]`.
+  defp schema(:absent), do: {:ok, :absent}
 
-  defp read_value(:schema, pairs) when is_list(pairs) do
-    case Schema.from_map(pairs) do
-      {:ok, schema} ->
-        {:ok, schema}
-
-      {:error, errors} ->
-        {:error, Enum.map(errors, fn {path, reason} -> {[:schema | path], reason} end)}
+  defp schema(form) do
+    case Schema.from_map(form) do
+      {:ok, schema} -> {:ok, schema}
+      {:error, faults} -> {:error, for({path, reason} <- faults, do: {[:schema | path], reason})}
     end
   end
 
-  defp read_value(:per, "identity"), do: {:ok, :identity}
-  defp read_value(:per, ["identity", name]), do: {:ok, {:identity, read_name(name)}}
-  defp read_value(_key, value), do: {:ok, value}
+  defp put_schema(value, :absent), do: value
+  defp put_schema(value, schema), do: Map.put(value, :schema, schema)
 
-  defp read_name(%{"source" => name}), do: {:source, name}
-  defp read_name(name), do: name
+  defp faults({:ok, _value}), do: []
+  defp faults({:error, faults}), do: faults
 
-  defp read_window(nil), do: nil
-  defp read_window(%{"last" => n} = window) when map_size(window) == 1, do: %{last: n}
+  # -- the behaviors -----------------------------------------------------------------------
 
-  defp read_window(%{} = window) do
-    keys = %{"window" => :window, "box" => :box, "region" => :region, "latest" => :latest}
+  @impl Version
+  def current, do: 1
 
-    if window |> Map.keys() |> Enum.all?(&Map.has_key?(keys, &1)) do
-      Map.new(window, fn
-        {"window", range} when is_list(range) -> {:window, Enum.map(range, &read_time/1)}
-        {"box", box} when is_map(box) -> {:box, read_box(box)}
-        {"region", pairs} when is_list(pairs) -> {:region, read_region(pairs)}
-        {k, v} -> {Map.fetch!(keys, k), v}
-      end)
-    else
-      window
+  # The line starts at 1: no document is older.
+  @impl Version
+  def step(document, _from), do: {:ok, document}
+
+  @impl Adapter
+  def tags, do: Macaw.Data.Derived.Form.Tags
+  @impl Adapter
+  def keys, do: Vocabulary.table(@keys)
+  @impl Adapter
+  def atoms, do: Vocabulary.table([:identity])
+
+  # An input `{name, window}` as `{"$input": [name, window]}`, a source's name
+  # `{"$source": name}`, and `{:identity, input}` as `{"$identity": input}`, each part in
+  # its own form. A part with no form leaves the term to the kernel, which refuses it at
+  # its path.
+  @impl Adapter
+  def encode_value({:source, name}) when is_binary(name), do: {:ok, %{"$source" => name}}
+  def encode_value({:identity, name}), do: tagged("$identity", name)
+
+  def encode_value({name, window})
+      when (is_binary(name) or is_list(name) or is_tuple(name)) and
+             (is_nil(window) or is_map(window)),
+      do: tagged("$input", [name, window])
+
+  def encode_value(_term), do: :default
+
+  defp tagged(tag, payload) do
+    case Adapter.encode_term(payload, __MODULE__, [{:tag, tag}]) do
+      {:ok, form} -> {:ok, %{tag => form}}
+      {:error, _faults} -> :default
     end
   end
 
-  defp read_window(other), do: other
+  @impl Adapter
+  def decode_value("$input", [name, window]), do: {:ok, {name, window}}
+  def decode_value("$source", name) when is_binary(name), do: {:ok, {:source, name}}
+  def decode_value("$identity", name), do: {:ok, {:identity, name}}
+  def decode_value(_tag, _payload), do: :default
 
-  @box %{"west" => :west, "south" => :south, "east" => :east, "north" => :north}
-
-  defp read_box(box) do
-    if box |> Map.keys() |> Enum.all?(&Map.has_key?(@box, &1)),
-      do: Map.new(box, fn {k, v} -> {Map.fetch!(@box, k), v} end),
-      else: box
-  end
-
-  defp read_region(pairs) do
-    if Enum.all?(pairs, &match?([field, range] when is_binary(field) and is_list(range), &1)),
-      do: Map.new(pairs, fn [field, range] -> {field, Enum.map(range, &read_time/1)} end),
-      else: pairs
-  end
-
-  defp read_time(%{"$time" => iso} = tag) when map_size(tag) == 1 do
-    case DateTime.from_iso8601(iso) do
-      {:ok, time, 0} -> time
-      _other -> tag
-    end
-  end
-
-  defp read_time(other), do: other
+  # A request window's region is keyed by its input's fields: names, never this type's keys.
+  @impl Adapter
+  def name_map?([{:tag, "$input"}, 1, :region]), do: true
+  def name_map?(_path), do: false
 end

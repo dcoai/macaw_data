@@ -150,6 +150,73 @@ defmodule Macaw.Data.Derived.EngineContextTest do
       assert Delivery.rows(Engine.outputs(engine)[["a"]]) == [%{"n" => 7}]
     end
 
+    # Typed colors and literal colors in the rows and in the context's schema reach the
+    # function as the terms they are, never respelled by its literals' rule (#29, #30).
+    @tag verifies: ["derived-engine-run", "derived-argument", "derived-context-facts"]
+    test "a color reaches a function as the term it is, in its rows and its context" do
+      green = Macaw.Layers.Color.parse!("#2e7d32")
+      bad = {:alpha, {:color, "bad"}, 0.5}
+
+      schema =
+        Schema.new!(%{
+          t: %{type: :number, window: true},
+          host: %{type: :category, identity: true},
+          state: %{
+            type: :category,
+            values: [%{value: :ok, color: green}, %{value: :down, color: bad}]
+          },
+          c: %{type: :color}
+        })
+
+      rows = [%{t: 1, host: "a", c: {:color, "good"}}, %{t: 2, host: "b", c: green}]
+
+      colors = %{
+        n: %{type: :number},
+        typed: %{type: :color},
+        literal: %{type: :color},
+        entry: %{type: :color},
+        nested: %{type: :color}
+      }
+
+      elixir = ~S"""
+      fn %{hosts: rows}, c ->
+        [ok, down] = c["inputs"]["hosts"]["schema"]["state"]["values"]
+
+        [%{n: 1, typed: Enum.at(rows, 0).c, literal: Enum.at(rows, 1).c,
+           entry: ok["color"], nested: down["color"]}]
+      end
+      """
+
+      stored = Derived.new!(id: :a, from: [hosts: nil], schema: colors, elixir: elixir)
+
+      hosted =
+        Derived.new!(id: :b, from: [hosts: nil], schema: %{n: %{type: :number}}, function: :seen)
+
+      engine =
+        engine(%{["a"] => stored, ["b"] => hosted})
+        |> Engine.push(%{hosts: Delivery.new(rows)}, %{hosts: schema}, 0)
+        |> Engine.run(0)
+
+      assert Engine.faults(engine) == %{}
+
+      assert Delivery.rows(Engine.outputs(engine)[["a"]]) == [
+               %{
+                 "n" => 1,
+                 "typed" => {:color, "good"},
+                 "literal" => green,
+                 "entry" => green,
+                 "nested" => bad
+               }
+             ]
+
+      assert_received {:context, %{"hosts" => ^rows}, context}
+
+      assert context["inputs"]["hosts"]["schema"]["state"]["values"] == [
+               %{"value" => "ok", "color" => green},
+               %{"value" => "down", "color" => bad}
+             ]
+    end
+
     @tag verifies: "derived-engine-run"
     test "a derived source's output is a delivery with no facts, under its output's schema" do
       a = stored(:a, "fn %{hosts: rows} -> [%{n: Enum.count(rows)}] end")

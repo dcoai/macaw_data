@@ -83,9 +83,10 @@ defmodule Macaw.Data.Derived do
   # -- construction (spec/02 §1.1) ---------------------------------------------------------
 
   @doc """
-  A derived source of a keyword list, a map with atom keys, or its map form (spec/02
-  §1.5), checked alone (spec/02 §1.1): `{:ok, derived}`, or `{:error, errors}` with every
-  fault by path.
+  A derived source of its value, a keyword list or a map of its fields as terms, checked
+  alone (spec/02 §1.1): `{:ok, derived}`, or `{:error, errors}` with every fault by path.
+  Its keys are atoms, and a string key is none of them: a map form is refused key by key
+  as `:unknown_key`, since it is read by `from_map/2`, never guessed at here.
   """
   @spec new(map() | keyword()) :: {:ok, t()} | {:error, [error(), ...]}
   def new(source) when is_list(source) do
@@ -94,12 +95,7 @@ defmodule Macaw.Data.Derived do
       else: {:error, [{[], {:type, :derived}}]}
   end
 
-  def new(source) when is_map(source) and not is_struct(source) do
-    case Form.read(source) do
-      {:ok, source} -> checked(source)
-      {:error, errors} -> {:error, errors}
-    end
-  end
+  def new(source) when is_map(source) and not is_struct(source), do: checked(source)
 
   def new(_other), do: {:error, [{[], {:type, :derived}}]}
 
@@ -146,8 +142,8 @@ defmodule Macaw.Data.Derived do
   end
 
   # A source's names are strings (spec/02 §1.1): its id, its inputs' names and paths, its
-  # identity input, its function and its output's schema, read through its map form, so
-  # an atom and a string of one spelling are one name.
+  # identity input, its function and its output's schema's (`Schema.new/1`'s), so an atom
+  # and a string of one spelling are one name.
   defp named(source) do
     Enum.reduce(
       [
@@ -189,14 +185,13 @@ defmodule Macaw.Data.Derived do
   defp named_per({:identity, name}), do: {:identity, input(name)}
   defp named_per(other), do: other
 
-  # The schema as its map form reads it back: every field name and category value a string.
+  # The schema as built: a `%Schema{}` as given, fields by `Schema.new/1`, which holds every
+  # name, state and role as its string. No form is written or read.
   defp named_schema(%Schema{} = schema), do: schema
 
   defp named_schema(fields) when is_map(fields) and not is_struct(fields) do
-    with {:ok, schema} <- Schema.new(fields),
-         {:ok, schema} <- Schema.from_map(Schema.to_map(schema)) do
-      schema
-    else
+    case Schema.new(fields) do
+      {:ok, schema} -> schema
       {:error, _errors} -> fields
     end
   end
@@ -839,27 +834,36 @@ defmodule Macaw.Data.Derived do
   # -- forms (spec/02 §1.5) ----------------------------------------------------------------
 
   @doc """
-  The source's map form (spec/02 §1.5), JSON-ready with every name a string:
-  `new(to_map(derived)) == {:ok, derived}`.
+  The source's map form (spec/02 §1.5), JSON-ready, written by `macaw_layers`' JSON adapter
+  (`Macaw.Layers.Form`) under the kernel's tags and the source's own, its schema by
+  `Macaw.Data.Schema.to_map/1`: `{:ok, map}`, or every value without a form, by path (a
+  window's time not in `Etc/UTC` is `{:type, :term}`). `from_map(map) == {:ok, derived}`.
   """
-  @spec to_map(t()) :: map()
+  @spec to_map(t()) :: {:ok, map()} | {:error, [error(), ...]}
   def to_map(%__MODULE__{} = source), do: Form.to_map(source)
 
-  @doc "The source's JSON form: `to_map/1`, encoded."
-  @spec to_json(t()) :: String.t()
-  def to_json(%__MODULE__{} = source), do: JSON.encode!(to_map(source))
+  @doc "The source's JSON form: `to_map/1`, stamped `\"$version\"` and encoded."
+  @spec to_json(t()) :: {:ok, String.t()} | {:error, [error(), ...]}
+  def to_json(%__MODULE__{} = source), do: Form.to_json(source)
 
   @doc """
-  The derived source a JSON document holds: read through `macaw_layers`' limits and scan
-  first, so input over a limit is refused before it is decoded (`limits:` tightens them),
-  then decoded and read by `new/1`.
+  The derived source a map form holds: through `macaw_layers`' gates
+  (`Macaw.Layers.Form.gates/3`: the depth and item limits, the version), read by its tag
+  table and keys, making no atom, its schema by `Macaw.Data.Schema.from_map/1`, then
+  judged by `new/1`. `limits:` tightens the limits.
+  """
+  @spec from_map(map(), keyword()) :: {:ok, t()} | {:error, [error(), ...]}
+  def from_map(map, opts \\ []) when is_map(map), do: read(map, opts)
+
+  @doc """
+  The derived source a JSON document holds: as `from_map/2`, its bytes and nesting held to
+  the limits before it is decoded.
   """
   @spec from_json(binary(), keyword()) :: {:ok, t()} | {:error, [error(), ...]}
-  def from_json(json, opts \\ []) when is_binary(json) do
-    case Form.decode(json, opts) do
-      {:ok, map} -> new(map)
-      {:error, errors} -> {:error, errors}
-    end
+  def from_json(json, opts \\ []) when is_binary(json), do: read(json, opts)
+
+  defp read(input, opts) do
+    with {:ok, value} <- Form.read(input, opts), do: new(value)
   end
 
   # -- words -------------------------------------------------------------------------------

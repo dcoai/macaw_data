@@ -65,14 +65,18 @@ defmodule Macaw.Data.Derived.Context do
   defp entry(term, value), do: term(term, value)
 
   # A value within a term: a map's keys and values (a `status` maps values to roles), a
-  # list's and a tuple's elements; a struct (an instant) is a value whole.
+  # list's and a tuple's elements; a struct (an instant, a literal color) and a typed
+  # color are values whole, so a color reaches the function as the term it is.
   defp term(map, value) when is_map(map) and not is_struct(map),
     do: Map.new(map, fn {k, v} -> {term(k, value), term(v, value)} end)
 
   defp term(list, value) when is_list(list), do: Enum.map(list, &term(&1, value))
 
-  defp term(tuple, value) when is_tuple(tuple),
-    do: tuple |> Tuple.to_list() |> Enum.map(&term(&1, value)) |> List.to_tuple()
+  defp term(tuple, value) when is_tuple(tuple) do
+    if Schema.color?(tuple),
+      do: tuple,
+      else: tuple |> Tuple.to_list() |> Enum.map(&term(&1, value)) |> List.to_tuple()
+  end
 
   defp term(other, value), do: value.(other)
 end
