@@ -114,11 +114,11 @@ defmodule Macaw.Data.Source.Push do
   end
 
   defp merge(nil, delivery, schema, limit),
-    do: merge(%{delivery | table: empty(delivery.table)}, delivery, schema, limit)
+    do: merge(%{delivery | rows: empty(delivery.rows)}, delivery, schema, limit)
 
   defp merge(held, delivery, schema, limit) do
-    old = Delivery.rows(held)
-    new = Delivery.rows(delivery)
+    old = Delivery.named_rows(held)
+    new = Delivery.named_rows(delivery)
     version = delivery.schema || held.schema
 
     case Schema.window_field(schema) do
@@ -177,17 +177,23 @@ defmodule Macaw.Data.Source.Push do
   defp newest(rows, time), do: Enum.reduce(rows, nil, &Window.latest(&2, Table.get(&1, time)))
   defp earliest(rows, time), do: Enum.reduce(rows, nil, &Window.earliest(&2, Table.get(&1, time)))
 
-  defp empty(table), do: Table.slice(table, 0, 0)
+  defp empty(%Table{} = table), do: Table.slice(table, 0, 0)
+  defp empty(_rows), do: []
 
-  # The held columns, and any the increment adds, of their types.
-  defp rebuild(held, rows, delivery) do
+  # What is held, in the form the source gave it: when both are tables, the held columns
+  # and any the increment adds, of their types; else the rows themselves (macaw#185).
+  defp rebuild(%Delivery{rows: %Table{} = held_table} = held, rows, %Delivery{
+         rows: %Table{} = table
+       }) do
     types =
-      Enum.reduce([held.table, delivery.table], %{}, fn table, acc ->
+      Enum.reduce([held_table, table], %{}, fn table, acc ->
         Enum.reduce(Table.names(table), acc, &Map.put_new(&2, &1, Table.column_type(table, &1)))
       end)
 
-    names = Table.names(held.table) ++ (Table.names(delivery.table) -- Table.names(held.table))
+    names = Table.names(held_table) ++ (Table.names(table) -- Table.names(held_table))
     columns = for name <- names, do: {name, types[name], Enum.map(rows, &Map.get(&1, name))}
-    %{held | table: Table.new!(columns)}
+    %{held | rows: Table.new!(columns)}
   end
+
+  defp rebuild(held, rows, _delivery), do: %{held | rows: rows, names: nil}
 end

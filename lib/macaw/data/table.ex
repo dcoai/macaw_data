@@ -286,6 +286,9 @@ defmodule Macaw.Data.Table do
   end
 
   def rows([]), do: []
+  # A delivery's rows as they are (macaw#185). A map pattern, so this module needs no
+  # delivery at compile time.
+  def rows(%{__struct__: Macaw.Data.Delivery, rows: rows}), do: rows(rows)
   # A map pattern, not `%Nx.Tensor{}`: a struct pattern needs the struct defined at
   # compile time, and a consumer without Nx has none.
   def rows(%{__struct__: Nx.Tensor} = tensor), do: tensor_rows(tensor, Nx.rank(tensor))
@@ -360,6 +363,20 @@ defmodule Macaw.Data.Table do
   end
 
   def named(source, names) when is_list(names), do: {:ok, source}
+
+  @doc """
+  Whether a source's rows have no names: a tensor, or tuple rows (a list whose first
+  row is a tuple and which is not a keyword list of columns). `named/2` gives them some.
+
+      iex> Macaw.Data.Table.unnamed?([{1, 4.0}])
+      true
+      iex> Macaw.Data.Table.unnamed?([x: [1, 2]])
+      false
+  """
+  @spec unnamed?(term()) :: boolean()
+  def unnamed?(%{__struct__: Nx.Tensor}), do: true
+  def unnamed?([first | _] = rows) when is_tuple(first), do: not columns?(rows, first)
+  def unnamed?(_source), do: false
 
   defp named_rows(rows, names, n) do
     rows

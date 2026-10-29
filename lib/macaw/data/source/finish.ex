@@ -61,21 +61,21 @@ defmodule Macaw.Data.Source.Finish do
 
     delivery
     |> step(:window in supports or request.window == nil or field == nil, fn d ->
-      rows = Window.trim(Delivery.rows(d), field, request.window)
+      rows = Window.trim(Delivery.named_rows(d), field, request.window)
       d |> rebuild(rows) |> serve(:window, Window.intersect(d.served.window, request.window))
     end)
     |> step(:box in supports or request.box == nil, fn d ->
       d
-      |> rebuild(Window.trim_box(Delivery.rows(d), field, request.box))
+      |> rebuild(Window.trim_box(Delivery.named_rows(d), field, request.box))
       |> serve(:window, request.box)
     end)
     |> step(:region in supports or request.region == nil, fn d ->
-      rebuild(d, Window.trim_region(Delivery.rows(d), request.region))
+      rebuild(d, Window.trim_region(Delivery.named_rows(d), request.region))
     end)
     |> step(:latest in supports or not request.latest, fn d ->
       rows =
         Window.latest_rows(
-          Delivery.rows(d),
+          Delivery.named_rows(d),
           &Window.position(Table.get(&1, field)),
           &Schema.identity(schema, &1)
         )
@@ -93,14 +93,17 @@ defmodule Macaw.Data.Source.Finish do
 
   defp serve(delivery, key, value), do: %{delivery | served: Map.put(delivery.served, key, value)}
 
-  # The same columns, in their order and of their types; fewer rows.
-  defp rebuild(%Delivery{table: table} = delivery, rows) do
+  # Fewer rows, in the delivery's form: a table the same columns in their order and of
+  # their types; any other source the rows themselves, named (macaw#185).
+  defp rebuild(%Delivery{rows: %Table{} = table} = delivery, rows) do
     columns =
       for name <- Table.names(table),
           do: {name, Table.column_type(table, name), Enum.map(rows, &Map.get(&1, name))}
 
-    %{delivery | table: Table.new!(columns)}
+    %{delivery | rows: Table.new!(columns)}
   end
+
+  defp rebuild(%Delivery{} = delivery, rows), do: %{delivery | rows: rows, names: nil}
 
   @doc """
   The delivery reduced to `budget` rows by the reducer `method` names in `registry`
@@ -117,7 +120,7 @@ defmodule Macaw.Data.Source.Finish do
       iex> alias Macaw.Data.{Delivery, Schema, Source.Finish}
       iex> schema = Schema.new!(%{t: %{type: :number, window: true}, v: %{type: :number}})
       iex> reduced = Finish.reduce(Delivery.new(for t <- 1..100, do: %{t: t, v: rem(t * 7, 5)}), schema, 10)
-      iex> {Table.size(reduced.table), reduced.served.reduced_by}
+      iex> {length(Delivery.rows(reduced)), reduced.served.reduced_by}
       {10, :runtime}
   """
   @spec reduce(Delivery.t(), Schema.t(), pos_integer() | nil, String.t() | atom(), Registry.t()) ::
@@ -132,7 +135,7 @@ defmodule Macaw.Data.Source.Finish do
   def reduce(%Delivery{} = delivery, %Schema{} = schema, budget, method, %Registry{} = registry)
       when is_integer(budget) and budget > 0 do
     method = reducer!(registry, method)
-    rows = Delivery.rows(delivery)
+    rows = Delivery.named_rows(delivery)
     clock = Schema.window_field(schema)
     numbers = for {name, %{type: :number}} <- schema.fields, name != clock, do: name
 

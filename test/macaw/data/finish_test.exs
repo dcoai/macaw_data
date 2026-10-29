@@ -13,7 +13,7 @@ defmodule Macaw.Data.FinishTest do
 
   defp request(fields), do: Request.new!([now: @now] ++ fields)
   defp described(schema, supports \\ []), do: Description.new!(schema: schema, supports: supports)
-  defp ts(delivery, field \\ "t"), do: Table.column(delivery.table, field)
+  defp ts(delivery, field \\ "t"), do: Table.column(delivery |> Delivery.table!(), field)
 
   @numbers Schema.new!(%{"t" => %{type: :number, window: true}, "v" => %{type: :number}})
   @hundred Delivery.new(for(t <- 1..100, do: %{"t" => t, "v" => rem(t * 7, 5)}),
@@ -48,7 +48,7 @@ defmodule Macaw.Data.FinishTest do
         request(window: [DateTime.add(@now, 3600), DateTime.add(@now, 7200)])
       )
 
-    assert Table.column(d.table, "v") == [1, 2]
+    assert Table.column(d |> Delivery.table!(), "v") == [1, 2]
 
     assert_raise ArgumentError, ~r/cannot answer/, fn ->
       Finish.finish(Delivery.new(rows), described(schema), request(window: [0, 1]))
@@ -71,10 +71,16 @@ defmodule Macaw.Data.FinishTest do
     europe = %{west: -10, south: 35, east: 30, north: 60}
     fiji = %{west: 175, south: -20, east: -175, north: -15}
 
-    assert Table.column(Finish.finish(d, described(schema), request(box: europe)).table, "name") ==
+    assert Table.column(
+             Finish.finish(d, described(schema), request(box: europe)) |> Delivery.table!(),
+             "name"
+           ) ==
              ["Paris"]
 
-    assert Table.column(Finish.finish(d, described(schema), request(box: fiji)).table, "name") ==
+    assert Table.column(
+             Finish.finish(d, described(schema), request(box: fiji)) |> Delivery.table!(),
+             "name"
+           ) ==
              ["Suva", "Taveuni"]
 
     assert Finish.finish(d, described(schema), request(box: europe)).served.window == europe
@@ -165,7 +171,7 @@ defmodule Macaw.Data.FinishTest do
   @tag verifies: "finish-budget"
   test "a budget the source did not honor is reduced by Macaw, recorded :runtime; series share it" do
     d = Finish.finish(@hundred, described(@numbers), request(budget: 10))
-    assert Table.size(d.table) == 10
+    assert Table.size(d |> Delivery.table!()) == 10
     assert d.served.reduced_by == :runtime
     assert hd(ts(d)) == 1 and List.last(ts(d)) == 100
 
@@ -184,10 +190,10 @@ defmodule Macaw.Data.FinishTest do
     rows = for t <- 1..100, s <- ["a", "b"], do: %{"t" => t, "s" => s, "v" => :math.sin(t / 5)}
     d = Finish.finish(Delivery.new(rows), described(by_host), request(budget: 20))
     counts = d |> Delivery.rows() |> Enum.frequencies_by(& &1["s"])
-    assert counts["a"] > 0 and counts["b"] > 0 and Table.size(d.table) <= 20
+    assert counts["a"] > 0 and counts["b"] > 0 and Table.size(d |> Delivery.table!()) <= 20
 
     m4 = Finish.reduce(@hundred, @numbers, 12, :m4)
-    assert Table.size(m4.table) <= 12 and m4.served.reduced_by == :runtime
+    assert Table.size(m4 |> Delivery.table!()) <= 12 and m4.served.reduced_by == :runtime
   end
 
   @tag verifies: "finish-only-removes"
@@ -227,7 +233,7 @@ defmodule Macaw.Data.FinishTest do
     pooled =
       Finish.finish(@hundred, described(@numbers), request(budget: Finish.pooled([60, 15])))
 
-    assert Table.size(Finish.reduce(pooled, @numbers, 15).table) == 15
+    assert Table.size(Finish.reduce(pooled, @numbers, 15) |> Delivery.table!()) == 15
   end
 
   @tag verifies: "window-arithmetic"
@@ -246,5 +252,49 @@ defmodule Macaw.Data.FinishTest do
     assert Window.instant?(~N[2026-01-01 00:00:00]) and not Window.instant?(1)
     assert Window.time?(1) and not Window.time?("1")
     refute Window.in_box?(nil, %{west: 0, south: 0, east: 1, north: 1})
+  end
+
+  # A delivery keeps the rows its source gave (macaw#185): finishing removes rows from
+  # them in their own form, and never packs a row list into a table.
+  @tag verifies: "finish-keeps-form"
+  test "finishing keeps the rows' form: a row list stays rows, values untouched; tuple rows are named" do
+    rows = for t <- 1..20, do: %{"t" => t, "v" => t * 2, "at" => ~N[2026-10-29 00:00:00]}
+    d = Finish.finish(Delivery.new(rows), described(@numbers), request(window: [5, 7]))
+
+    assert is_list(d.rows)
+    assert d.rows == Enum.slice(rows, 4, 3)
+    assert Enum.all?(d.rows, &is_integer(&1["v"]))
+    assert hd(d.rows)["at"] == ~N[2026-10-29 00:00:00]
+
+    tuples = for t <- 1..20, do: {t, t * 2}
+
+    named =
+      Finish.finish(
+        Delivery.new(tuples, names: ["t", "v"]),
+        described(@numbers),
+        request(window: [5, 7])
+      )
+
+    assert named.rows == [%{"t" => 5, "v" => 10}, %{"t" => 6, "v" => 12}, %{"t" => 7, "v" => 14}]
+
+    # Nothing to do: the rows as they came, tuples and all.
+    untouched = Delivery.new(tuples)
+    assert Finish.finish(untouched, described(@numbers), request([])) == untouched
+
+    # A step that must read tuple rows by name, with no names: refused, never dropped.
+    assert_raise ArgumentError, ~r/tuple rows have no names/, fn ->
+      Finish.finish(Delivery.new(tuples), described(@numbers), request(window: [5, 7]))
+    end
+
+    # A table stays a table, its columns and types.
+    table =
+      Table.new!([
+        {"t", :number, Enum.to_list(1..20)},
+        {"v", :number, Enum.map(1..20, &(&1 * 1.0))}
+      ])
+
+    kept = Finish.finish(Delivery.new(table), described(@numbers), request(window: [5, 7]))
+    assert %Table{} = kept.rows
+    assert Table.column(kept.rows, "v") == [5.0, 6.0, 7.0]
   end
 end

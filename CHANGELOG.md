@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Breaking:** a delivery keeps the rows its source gave (dco-tek/macaw/macaw#185). `%Delivery{rows, names, types, served, schema, origin}`: nothing is packed or rewritten when it is made; `Delivery.rows/1` and `Table.rows/1` of a delivery read the rows as they are (a row list uncopied, tuple rows unchanged); `Delivery.table/2` and `table!/2` pack them for a reader that wants columns; `named_rows/1` names tuple rows and tensors by `names:`; `empty?/1`. The `table` field is gone: read `Delivery.table!/1`. Finishing and push keep the rows' form. `Table.unnamed?/1` (#3).
+
 ## v0.5.4 (2026-10-28)
 
 - The macaw logo in the docs and the README (macaw#175).

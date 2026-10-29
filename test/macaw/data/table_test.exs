@@ -117,6 +117,13 @@ defmodule Macaw.Data.TableTest do
       assert Table.named(Nx.tensor(1), [:t]) == {:error, {:rank, 0}}
       rows = [%{t: 1}]
       assert Table.named(rows, [:t]) == {:ok, rows}
+
+      # Whether a source has no names to read by: a tensor and tuple rows, never columns.
+      assert Table.unnamed?(Nx.tensor([[1, 10]]))
+      assert Table.unnamed?([{1, 10}])
+      refute Table.unnamed?(t: [1, 2])
+      refute Table.unnamed?(rows)
+      refute Table.unnamed?(%{t: [1]})
     end
 
     @tag verifies: "table-sources"

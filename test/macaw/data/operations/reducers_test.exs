@@ -33,7 +33,7 @@ defmodule Macaw.Data.Operations.ReducersTest do
     m4 = finish(reduce: "m4")
     assert ts(m4) == @rows |> Reduce.m4(5, &{&1.t, &1.v}) |> Enum.map(& &1.t)
     assert ts(finish(reduce: :m4)) == ts(m4)
-    assert Table.size(m4.table) <= 20
+    assert Table.size(m4 |> Delivery.table!()) <= 20
   end
 
   @tag verifies: "operations-reducers-named"

@@ -66,7 +66,7 @@ defmodule Macaw.Data.PushTest do
     end
   end
 
-  defp ts(push), do: Table.column(Push.held(push).table, "t")
+  defp ts(push), do: Table.column(Push.held(push) |> Delivery.table!(), "t")
 
   @tag verifies: "push-handshake"
   test "the handshake's schema comes first, so the increments resolve without asking describe" do
@@ -180,7 +180,7 @@ defmodule Macaw.Data.PushTest do
       end)
       |> Push.drain(&no_describe/1)
 
-    assert Table.column(Push.held(push).table, "msg") == ["m3", "m4", "m5"]
+    assert Table.column(Push.held(push) |> Delivery.table!(), "msg") == ["m3", "m4", "m5"]
     assert Push.held(push).served.capped
   end
 

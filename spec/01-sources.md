@@ -14,7 +14,7 @@ A **source** is anything a component's slot reads. One contract serves feeds, qu
 
 ### 1.1 The table {#sources-table}
 
-**`Macaw.Data.Table` is columnar typed data,** the currency of deliveries, derived sources and components. A table is named columns of declared types, every column the same length. Its design is visualize#916's (closed when this step absorbed it): rows as lists of maps cost a garbage collection that copies every row, and packed columns don't.
+**`Macaw.Data.Table` is columnar typed data,** the currency of derived sources and components, and the form a delivery packs into for a reader that wants columns (§3). A table is named columns of declared types, every column the same length. Its design is visualize#916's (closed when this step absorbed it): rows as lists of maps cost a garbage collection that copies every row, and packed columns don't.
 
 | Type | Holds | Stored as |
 |---|---|---|
@@ -63,11 +63,12 @@ from/2 reads rows, columns and a Table.Reader source, infers or takes the types,
 **The row helpers read any source,** as visualize's `Visualize.Data.Table` does (this is its port):
 - `rows/1` of a list of rows is the list itself, uncopied; of a map or keyword list of equal-length columns, one map per row; of a rank-2 tensor, one tuple per row, of a rank-1 tensor its values; of a `Table.Reader` source, its rows keyed as the reader names its columns. A map whose values are not equal-length lists, a tensor of another rank, and a struct with no reader are the caller's errors;
 - `named/2` names a tensor's columns, or tuple rows' elements, in order, or says why it can't (`{:width, n, size}`, `{:rank, rank}`), and passes any other source through;
+- `unnamed?/1` is whether a source's rows have no names to read by: a tensor, or tuple rows (never a keyword list of columns);
 - `get/2` reads a column from a row by either spelling of its name, and `key/2` is the key that spells it; no atom is made. `accessor/1` is the function of a name, a function passed through;
 - `column_types/1` suggests each column's type from its whole: all temporal is `:time`, all numbers `:number`, all strings `:text`, all atoms or booleans `:category`, a mixed or empty column left out; `time_columns/1` names the temporal ones; `temporal?/1` is whether a value is a `DateTime`, `Date`, `NaiveDateTime` or an ISO 8601 string one of those parses. These are suggestions for a tool; a table's declared types are `column_type/2`'s.
 
 ```test:table-sources
-rows/1 passes a list of rows through uncopied and tuple rows unchanged, reads column maps, keyword columns, tensors and rank-1 tensor columns, refuses unequal columns, other ranks and a struct with no reader; named/2 names tensor columns and tuple rows or says why not
+rows/1 passes a list of rows through uncopied and tuple rows unchanged, reads column maps, keyword columns, tensors and rank-1 tensor columns, refuses unequal columns, other ranks and a struct with no reader; named/2 names tensor columns and tuple rows or says why not; unnamed?/1 is true for a tensor and tuple rows, never columns
 ```
 
 ```test:table-row-helpers
@@ -402,7 +403,7 @@ a request carries every axis with its defaults; every fault of a bad window, box
 4. **`:latest`**: each identity's latest row by the window field, the later in order on a tie; a row whose identity or time is `nil` names nothing and is dropped.
 5. **`:budget`**: the rows reduced to the budget, `reduced_by: :runtime`. Each series (the rows sharing every `:category` field's value) is reduced field by field against the window field, or the row's place without one, by the registered reducer `reduce:` names, by spelling ([04 §7](04-operations.md#operations-reducers)): Largest-Triangle-Three-Buckets (`"lttb"`, the default) or M4 (`"m4"`) in `macaw_data`'s own package, over `Macaw.Data.Reduce`, or any transform an enabled package registers that declares `reduces/0` (`operations:`, the registry, `macaw_data`'s own by default); a name that is no registered reducer raises `ArgumentError` naming it. Then the union of the kept rows returned whole, in their order. When many series leave the union over the budget, an even stride over it keeps the first and the last: **never more than the budget**. A delivery within the budget, and a schema with no `:number` field to reduce by, come back as they are.
 
-A step the source honored is not done again. **Finishing only removes rows,** so it never widens the window and never adds a row. A request the schema cannot answer (`Macaw.Data.Window.check/2`) raises `ArgumentError`: a window not of the window field's type or with no window field, a box with no `:point` window field, a region field not described, not `:time` or `:number`, mixed or inverted, or `latest` with no declared identity or no `:time` or `:number` window field to order by; the request is the caller's. `Macaw.Data.Window` holds the comparisons, trims and positions it uses, ported from visualize's `Visualize.Feed.Window`.
+A step the source honored is not done again. **Finishing only removes rows,** so it never widens the window and never adds a row, and it **keeps the rows' form** (macaw#185): a table stays a table of the same columns and types, and any other source becomes the rows it kept, read by name (`Delivery.named_rows/1`), never packed; a delivery no step acts on comes back as it is. A request the schema cannot answer (`Macaw.Data.Window.check/2`) raises `ArgumentError`: a window not of the window field's type or with no window field, a box with no `:point` window field, a region field not described, not `:time` or `:number`, mixed or inverted, or `latest` with no declared identity or no `:time` or `:number` window field to order by; the request is the caller's. `Macaw.Data.Window` holds the comparisons, trims and positions it uses, ported from visualize's `Visualize.Feed.Window`.
 
 ```test:finish-window
 a window the source did not honor is trimmed, an open bound open, the served window intersected; an honored window, and no window, leave the delivery as it is; a time window trims by DateTime, and a number window on a time field is the caller's error
@@ -424,6 +425,10 @@ latest keeps each identity's latest row by the window field, dropping a row with
 a budget the source did not honor is reduced, the ends kept, recorded runtime; an honored or unneeded budget is not; series share it; m4 reduces too
 ```
 
+```test:finish-keeps-form
+a row list finished by a window stays a list of the same rows, integers and naive times untouched; tuple rows with names come back named; with nothing to do, tuple rows come back as they are; a step that must read tuple rows without names raises; a table stays a table
+```
+
 ```test:finish-only-removes
 for generated rows, windows and budgets, finishing keeps only rows of the input, all within the window, and at most the budget
 ```
@@ -434,8 +439,14 @@ times compare by kind; intersections, positions, the newer seam, applies and the
 
 ## 3. Deliveries {#sources-delivery}
 
-**`Macaw.Data.Delivery` is one answer of a source:** its rows, and what it actually served, a handful of terms beside the rows, never per row. `%Delivery{table, schema, served, origin}`:
-- **`table`**, the rows, a `Macaw.Data.Table` (§1.1). `new/2` reads any source shape into one at the edge (`types:` passed to `Table.from/2`; a table passes as it is), and raises `ArgumentError` for rows no table reads. `rows/1` is the row view.
+**`Macaw.Data.Delivery` is one answer of a source:** its rows, and what it actually served, a handful of terms beside the rows, never per row. `%Delivery{rows, names, types, schema, served, origin}`:
+- **`rows`, the rows as the source gave them** (macaw#185): a list of row maps or tuples, a map or keyword list of columns, an `Nx.Tensor`, a `Table.Reader` source, or a `Macaw.Data.Table`, which passes as it is. **Nothing is packed or rewritten when a delivery is made:** a delivery is on the hottest path a live chart has, every tick of every chart reading it, and packing at the edge cost a reader of rows half a second for 50,000 rows (visualize#970), dropped tuple rows, and rewrote values a reader gave (an integer beside floats, a naive time, a sparse row). `new/2` checks only the shape, and raises `ArgumentError` for rows of no shape a source has.
+- **`names`**: the column names of tuple rows or a tensor, in order, or `nil`; **`types`**: column types for packing, `%{}` to infer them.
+- **Reading:**
+  - `rows/1` (and `Table.rows/1` of a delivery) is the row view, as `Table.rows/1` reads the source: a row list itself, uncopied, its tuple rows unchanged; a table, a column map or a tensor one row at a time. Nothing is rewritten.
+  - `named_rows/1` is the rows as maps, for a reader that reads them by name (finishing, push, a reducer): tuple rows and a tensor named by `names` (`Table.named/2`). **Tuple rows without names raise `ArgumentError`:** they cannot be read by name, and are never dropped for it.
+  - `table/2` packs the rows into a `Macaw.Data.Table` (§1.1) for a reader that wants columns, `{:ok, table}` or `{:error, faults}`, with the delivery's `types` and `names` and any `opts` gives; `table!/2` raises. **Packing normalizes, there and only there:** the delivery's rows never change. A source that already holds a table delivers it, and a reader of columns pays nothing.
+  - `empty?/1` is whether there are no rows.
 - **`schema`**, the **version** of the schema the rows were produced under (§1.10), never the schema itself, which the cache holds by version (§1.12); `nil` when the source has none.
 - **`served`**, what this answer served, which may differ from what was asked:
   - `window`: a range `[from, to]` over a `:time` or `:number` window field; a **box** `%{west: w, south: s, east: e, north: n}` over a `:point` one, in degrees, latitudes from −90 to 90 with `south` at most `north`, longitudes from −180 to 180 (`west` east of `east` crosses the antimeridian); or `nil`;
@@ -451,7 +462,15 @@ times compare by kind; intersections, positions, the newer seam, applies and the
 **Absence is never zero:** a source never fills a gap with 0, and a delivery's table keeps every gap `nil` (§1.1). (metresis.md C1.)
 
 ```test:delivery-table
-a delivery's rows are a table read from rows, columns and keyword columns, a table passing as it is, types taken; rows no table reads and a delivery of a delivery are refused
+a delivery reads rows, columns, keyword columns and a table as rows, empty?/1 answering; a table passes as it is; table/2 packs with the delivery's types, and a value its type doesn't hold is table/2's fault, not new/2's; a value of no source shape and a delivery of a delivery are refused
+```
+
+```test:delivery-rows-as-given
+50,000 tuple rows read back the same term through rows/1 and Table.rows/1; integers, naive times, ISO strings and a sparse row read back unchanged; only the packed table normalizes
+```
+
+```test:delivery-tuple-rows
+tuple rows and a tensor read back as given; named_rows/1 and table/2 name them by names (or table/2's names:); without names named_rows/1 raises, and with too few it raises naming the fit
 ```
 
 ```test:delivery-absence
