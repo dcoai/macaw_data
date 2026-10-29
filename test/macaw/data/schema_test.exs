@@ -225,7 +225,7 @@ defmodule Macaw.Data.SchemaTest do
     @tag verifies: "schema-version"
     test "values do not move the version of a schema that does not use them" do
       assert Schema.version(Schema.new!(%{v: %{type: :number}})) ==
-               "34a96e0edc698a78cb79c83781c3edcb394de328937dde489e58c85aec6c002b"
+               "901bd0f3873437c4371044a6ebb6fa91607c583f924c7f7b97ff8d324f1cae44"
     end
 
     @tag verifies: "schema-new"
@@ -702,25 +702,20 @@ defmodule Macaw.Data.SchemaTest do
   describe "version/1: the kernel's digest" do
     @tag verifies: "schema-version"
     test "is pinned: a change of encoding is a deliberate, visible change" do
-      # The canonical JSON {"fields":[["v",{"type":"number"}]]}: `sha256sum` agrees.
+      # macaw_layers 0.3.0's term digest of the map form (its spec/01 §7 encoding).
       assert Schema.version(Schema.new!(%{v: %{type: :number}})) ==
-               "34a96e0edc698a78cb79c83781c3edcb394de328937dde489e58c85aec6c002b"
+               "901bd0f3873437c4371044a6ebb6fa91607c583f924c7f7b97ff8d324f1cae44"
 
       assert Schema.version(Schema.new!(@full)) ==
-               "fb5676163072ddb04e8689323388a5209eaeca8651755dd1fd88c2d2fd885f6c"
+               "fabcf88f497d675542291a642c0efb46d7986b3e84af1e0968d648c910edaccf"
     end
 
     @tag verifies: "schema-version"
-    test "is the kernel's digest of the map form, the SHA-256 of its canonical JSON" do
-      bytes = ~s({"fields":[["v",{"type":"number"}]]})
-
+    test "is the kernel's digest of the map form" do
       assert Schema.version(Schema.new!(%{v: %{type: :number}})) ==
                Macaw.Layers.Document.digest(%{
                  "fields" => Schema.to_map(Schema.new!(%{v: %{type: :number}}))
                })
-
-      assert Schema.version(Schema.new!(%{v: %{type: :number}})) ==
-               Base.encode16(:crypto.hash(:sha256, bytes), case: :lower)
     end
 
     @tag verifies: "schema-version"

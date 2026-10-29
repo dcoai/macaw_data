@@ -48,7 +48,7 @@ defmodule Macaw.Data.MixProject do
     [
       # The document kernel (macaw_compose spec/00 §4): names, vocabularies, the scan and
       # limits a schema's JSON is read through, and the digest that is its version.
-      {:macaw_layers, "~> 0.2.2"},
+      {:macaw_layers, "~> 0.3.0"},
       # Optional readers at the table's edge (spec/01 §1.1): a host that has either gets
       # its tensors or `Table.Reader` sources read into a table; one that has neither never
       # fetches them.
