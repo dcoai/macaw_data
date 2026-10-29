@@ -18,14 +18,17 @@ defmodule Macaw.Data.Schema do
   `identity: true`, several such fields together naming it (spec/01 §1.4). The window
   field is `window_field/1`'s (spec/01 §1.5).
 
-  A schema is identified by its `version`: the kernel's digest of its map form
-  (`Macaw.Layers.Document.digest/1`, spec/01 §1.10), the same on every node and under
-  every release, and new with any change of content. Names, states and roles count by
-  their spelling, so `:latency` and `"latency"` are one field of one version, as they are
-  after a trip through JSON. A `Macaw.Data.Delivery` names the version its rows were
-  produced under; `Macaw.Data.Schema.Cache` holds schemas by `{source, version}`.
-  `compatibility/2` says when one schema's rows read as another's (spec/01 §1.9).
-  `to_json/1` and `from_json/2` are its public JSON form (spec/01 §1.11).
+  Names, states and roles count by their spelling: `new/1` writes each as a string, once,
+  so `:latency` and `"latency"` are one field, and the schema holds it as `"latency"`.
+  Every function that takes a name takes either spelling.
+
+  A schema is identified by its `version`: the kernel's digest of its term, the normalized
+  fields (`Macaw.Layers.Document.digest/1`, spec/01 §1.10), the same on every node and
+  under every release, and new with any change of content. A `Macaw.Data.Delivery` names
+  the version its rows were produced under; `Macaw.Data.Schema.Cache` holds schemas by
+  `{source, version}`. `compatibility/2` says when one schema's rows read as another's
+  (spec/01 §1.9). `to_json/1` and `from_json/2` are its public JSON form, an adapter at the
+  edge that the version never goes through (spec/01 §1.11).
 
   Ported from visualize's `Visualize.Data.Schema`, with the `:point` type, literal data
   colors, the window field, the kernel's digest and a public JSON form.
@@ -67,7 +70,7 @@ defmodule Macaw.Data.Schema do
           optional(:quantity) => atom(),
           optional(:label) => String.t(),
           optional(:order) => [String.t() | atom() | number(), ...],
-          optional(:status) => %{term() => atom()},
+          optional(:status) => %{value() => atom() | String.t()},
           optional(:polarity) => :higher_is_better | :lower_is_better | :neutral,
           optional(:target) => number(),
           optional(:continuity) => number(),
@@ -92,9 +95,9 @@ defmodule Macaw.Data.Schema do
         }
 
   @type t :: %__MODULE__{
-          fields: %{name() => description()},
+          fields: %{String.t() => description()},
           version: String.t(),
-          identity: [name()] | nil
+          identity: [String.t()] | nil
         }
 
   @typedoc "A fault of `new/1`: the path from the schema to the value, and why."
@@ -167,6 +170,8 @@ defmodule Macaw.Data.Schema do
 
   @doc """
   The schema of a map of field descriptions, or every fault of it by path (spec/01 §1.2).
+  A fault names the field as given; the schema holds every name, state and role as its
+  string (spec/01 §1.10).
 
       iex> Macaw.Data.Schema.new(%{v: %{type: :category, unit: "s"}})
       {:error, [{[:v, :unit], {:invalid_for, :category}}]}
@@ -182,7 +187,7 @@ defmodule Macaw.Data.Schema do
 
     case Enum.sort_by(errors, &elem(&1, 0)) do
       [] ->
-        fields = Map.new(fields, fn {name, d} -> {name, declared(d)} end)
+        fields = Map.new(fields, fn {name, d} -> {spell(name), d |> declared() |> spelled()} end)
         {:ok, %__MODULE__{fields: fields, version: hash(fields), identity: identities(fields)}}
 
       errors ->
@@ -222,12 +227,8 @@ defmodule Macaw.Data.Schema do
       :error
   """
   @spec fetch(t(), name()) :: {:ok, description()} | :error
-  def fetch(%__MODULE__{fields: fields}, name) when is_atom(name) or is_binary(name) do
-    case Map.fetch(fields, name) do
-      {:ok, description} -> {:ok, description}
-      :error -> Map.fetch(fields, other_spelling(fields, name))
-    end
-  end
+  def fetch(%__MODULE__{fields: fields}, name) when is_atom(name) or is_binary(name),
+    do: Map.fetch(fields, spell(name))
 
   @doc "One attribute of a field's description; `:error` when the field or the attribute is absent."
   @spec fetch(t(), name(), atom()) :: {:ok, term()} | :error
@@ -297,8 +298,8 @@ defmodule Macaw.Data.Schema do
   end
 
   @doc """
-  The fields the schema declares `identity: true`, as it spells them, ordered by name as a
-  string; `[]` when it declares none (spec/01 §1.2, visualize D-167).
+  The fields the schema declares `identity: true`, as strings, in order; `[]` when it
+  declares none (spec/01 §1.2, visualize D-167).
 
       iex> schema = Macaw.Data.Schema.new!(%{
       ...>   iface: %{type: :category, identity: true},
@@ -306,9 +307,9 @@ defmodule Macaw.Data.Schema do
       ...>   bytes: %{type: :number}
       ...> })
       iex> Macaw.Data.Schema.identity(schema)
-      [:host, :iface]
+      ["host", "iface"]
   """
-  @spec identity(t()) :: [name()]
+  @spec identity(t()) :: [String.t()]
   def identity(%__MODULE__{identity: identity}) when is_list(identity), do: identity
   def identity(%__MODULE__{fields: fields}), do: identities(fields)
 
@@ -319,7 +320,7 @@ defmodule Macaw.Data.Schema do
 
   @doc """
   A row's identity under the schema (spec/01 §1.2, visualize D-167): the bare value of the one
-  identity field, a map from field to value, keyed as the schema spells them, for several,
+  identity field, a map from field to value, keyed by the fields' strings, for several,
   and `nil` when the schema declares none or the row has no value for one of them. Each
   field is read by either spelling of its name.
 
@@ -329,7 +330,7 @@ defmodule Macaw.Data.Schema do
       iex> two = Macaw.Data.Schema.new!(%{host: %{type: :category, identity: true},
       ...>   iface: %{type: :category, identity: true}})
       iex> Macaw.Data.Schema.identity(two, %{host: "mx1", iface: "eth0", bytes: 9})
-      %{host: "mx1", iface: "eth0"}
+      %{"host" => "mx1", "iface" => "eth0"}
       iex> Macaw.Data.Schema.identity(two, %{host: "mx1"})
       nil
   """
@@ -355,13 +356,13 @@ defmodule Macaw.Data.Schema do
 
       iex> alias Macaw.Data.Schema
       iex> Schema.window_field(Schema.new!(%{t: %{type: :time}, v: %{type: :number}}))
-      :t
+      "t"
       iex> Schema.window_field(Schema.new!(%{tick: %{type: :number, window: true}, v: %{type: :number}}))
-      :tick
+      "tick"
       iex> Schema.window_field(Schema.new!(%{a: %{type: :time}, b: %{type: :time}}))
       nil
   """
-  @spec window_field(t()) :: name() | nil
+  @spec window_field(t()) :: String.t() | nil
   def window_field(%__MODULE__{fields: fields}) do
     case for({name, %{window: true}} <- fields, do: name) do
       [name] -> name
@@ -398,11 +399,11 @@ defmodule Macaw.Data.Schema do
 
   @doc """
   Whether `other`'s rows read as `schema`'s (spec/01 §1.2, visualize D-159): for each field of
-  `schema`, `other` has a field of the same name compared as strings, of the same type,
-  and for a `:number` field a unit that converts into `schema`'s — two absent units
-  agree, one absent facing a present one does not. `{:error, faults}` lists every fault,
-  `field` spelled as `schema` spells it, ordered by its name as a string. Labels and facts
-  are not compared, and `other`'s extra fields are not faults — except identity (visualize D-167):
+  `schema`, `other` has a field of the same name, of the same type, and for a `:number`
+  field a unit that converts into `schema`'s — two absent units agree, one absent facing a
+  present one does not. `{:error, faults}` lists every fault, `field` the field's string,
+  ordered by it. Labels and facts are not compared, and `other`'s extra fields are not
+  faults — except identity (visualize D-167):
   a field one schema declares `identity: true` and the other does not is `{:identity, a,
   b}`, `a` and `b` whether each declares it, even a field only `other` has, since
   `other`'s rows read as `schema`'s would merge the things `other` tells apart.
@@ -413,14 +414,14 @@ defmodule Macaw.Data.Schema do
       :ok
       iex> bytes = Macaw.Data.Schema.new!(%{"value" => %{type: :number, unit: "By"}})
       iex> Macaw.Data.Schema.compatibility(live, bytes)
-      {:error, [{:t, :missing}, {:value, {:unit, "ms", "By"}}]}
+      {:error, [{"t", :missing}, {"value", {:unit, "ms", "By"}}]}
       iex> hosts = Macaw.Data.Schema.new!(%{host: %{type: :category, identity: true}})
       iex> ifaces = Macaw.Data.Schema.new!(%{host: %{type: :category, identity: true},
       ...>   iface: %{type: :category, identity: true}})
       iex> Macaw.Data.Schema.compatibility(hosts, ifaces)
-      {:error, [{:iface, {:identity, false, true}}]}
+      {:error, [{"iface", {:identity, false, true}}]}
   """
-  @spec compatibility(t(), t()) :: :ok | {:error, [{name(), incompatibility()}, ...]}
+  @spec compatibility(t(), t()) :: :ok | {:error, [{String.t(), incompatibility()}, ...]}
   def compatibility(%__MODULE__{fields: fields} = schema, %__MODULE__{} = other) do
     ours =
       Enum.flat_map(fields, fn {name, description} ->
@@ -439,7 +440,7 @@ defmodule Macaw.Data.Schema do
           fetch(schema, name) == :error,
           do: {name, {:identity, false, true}}
 
-    case Enum.sort_by(ours ++ theirs, fn {name, _reason} -> to_string(name) end) do
+    case Enum.sort_by(ours ++ theirs, &elem(&1, 0)) do
       [] -> :ok
       faults -> {:error, faults}
     end
@@ -473,13 +474,6 @@ defmodule Macaw.Data.Schema do
 
   defp compatible(_name, _ours, _theirs), do: []
 
-  # The key of `fields` spelled as `name` is in the other spelling; never creates an atom.
-  defp other_spelling(_fields, name) when is_atom(name), do: Atom.to_string(name)
-
-  defp other_spelling(fields, name) do
-    Enum.find(Map.keys(fields), fn key -> is_atom(key) and Atom.to_string(key) == name end)
-  end
-
   # -- checks ---------------------------------------------------------------------------
 
   defp field(name, _description) when not (is_atom(name) or is_binary(name)) or name == "",
@@ -506,21 +500,23 @@ defmodule Macaw.Data.Schema do
   end
 
   defp in_order(name, %{order: order, status: status}) when is_list(order) and is_map(status) do
+    order = Enum.map(order, &spell/1)
+
     for {state, _role} <- status,
-        state not in order,
+        spell(state) not in order,
         do: {[name, :status, state], :not_in_order}
   end
 
   defp in_order(_name, _description), do: []
 
   defp in_values(name, %{values: [_ | _] = declared} = description) do
-    values = Enum.map(declared, &bare/1)
+    values = Enum.map(declared, &spell(bare(&1)))
 
     order =
       case Map.get(description, :order) do
         [_ | _] = order ->
           for {state, i} <- Enum.with_index(order),
-              state not in values,
+              spell(state) not in values,
               do: {[name, :order, i], :not_in_values}
 
         _none ->
@@ -531,7 +527,7 @@ defmodule Macaw.Data.Schema do
       case Map.get(description, :status) do
         status when is_map(status) ->
           for {state, _role} <- status,
-              state not in values,
+              spell(state) not in values,
               do: {[name, :status, state], :not_in_values}
 
         _none ->
@@ -553,6 +549,16 @@ defmodule Macaw.Data.Schema do
         spelled = Atom.to_string(name),
         MapSet.member?(strings, spelled),
         do: {[spelled], {:duplicate_field, name}}
+  end
+
+  # A state a status names in both spellings is named twice: `:duplicate` at the string,
+  # the later by term order, as a field is.
+  defp twice(states, path) do
+    for state <- states,
+        is_atom(state),
+        spelled = Atom.to_string(state),
+        spelled in states,
+        do: {path ++ [spelled], :duplicate}
   end
 
   # A feed's windows are over one field: a second `window: true` is reported at the later
@@ -614,7 +620,7 @@ defmodule Macaw.Data.Schema do
   defp key(name, _type, :status, value) do
     if is_map(value) and not is_struct(value) and
          Enum.all?(value, fn {state, role} -> state?(state) and role?(role) end),
-       do: [],
+       do: twice(Map.keys(value), [name, :status]),
        else: [{[name, :status], {:type, :status}}]
   end
 
@@ -661,6 +667,20 @@ defmodule Macaw.Data.Schema do
   defp plain(%{value: value} = entry) when map_size(entry) == 1, do: value
   defp plain(entry), do: entry
 
+  # Every state and role of a checked description as its string (spec/01 §1.10). The
+  # words of the vocabulary stay atoms: they are words, not names.
+  defp spelled(description) do
+    Map.new(description, fn
+      {:order, order} -> {:order, Enum.map(order, &spell/1)}
+      {:status, status} -> {:status, Map.new(status, fn {s, role} -> {spell(s), spell(role)} end)}
+      {:values, values} -> {:values, Enum.map(values, &spelled_value/1)}
+      other -> other
+    end)
+  end
+
+  defp spelled_value(%{value: value} = entry), do: %{entry | value: spell(value)}
+  defp spelled_value(value), do: spell(value)
+
   # A unit is a UCUM code `Macaw.Data.Unit` reads (spec/03 §1, visualize D-157).
   defp unit(value, path) when is_binary(value) and value != "" do
     case Unit.parse(value) do
@@ -693,16 +713,17 @@ defmodule Macaw.Data.Schema do
 
   defp order(_other, path), do: [{path, {:type, :order}}]
 
-  # Each state listed once: a later one listed before is `:duplicate` at its index. A
-  # value entry is compared by its value, and one whose value is no state is its own fault.
+  # Each state listed once, by its spelling: a later one listed before is `:duplicate` at
+  # its index. A value entry is compared by its value, and one whose value is no state is
+  # its own fault.
   defp distinct(states, path) do
     states
     |> Enum.with_index()
     |> Enum.reduce({MapSet.new(), []}, fn {state, i}, {seen, errors} ->
       cond do
         not state?(state) -> {seen, errors}
-        MapSet.member?(seen, state) -> {seen, [{path ++ [i], :duplicate} | errors]}
-        true -> {MapSet.put(seen, state), errors}
+        MapSet.member?(seen, spell(state)) -> {seen, [{path ++ [i], :duplicate} | errors]}
+        true -> {MapSet.put(seen, spell(state)), errors}
       end
     end)
     |> elem(1)
@@ -775,15 +796,17 @@ defmodule Macaw.Data.Schema do
   defp bounds?(_other), do: false
 
   defp state?(v), do: is_binary(v) or is_number(v) or (is_atom(v) and v not in @not_names)
-  # A role is a theme's word, by its spelling (an atom in process, a string read from JSON),
-  # and never a color: a status says what a state means, and the theme colors the meaning.
+  # A role is a theme's word, either spelling, held as its string (spec/01 §1.10), and never
+  # a color: a status says what a state means, and the theme colors the meaning.
   defp role?(v) when is_binary(v), do: v != "" and not color?(v)
   defp role?(v) when is_atom(v) and v not in @not_names, do: not color?(Atom.to_string(v))
   defp role?(_v), do: false
 
   # -- the version and the JSON form (spec/01 §1.10, §1.11) -----------------------------
 
-  defp hash(fields), do: fields |> json_form() |> then(&Document.digest(%{"fields" => &1}))
+  # The kernel's digest of the schema's term, its normalized fields; never of a
+  # representation of it, so the JSON form below is not on the way.
+  defp hash(fields), do: Document.digest(%{"fields" => fields})
 
   @doc """
   The schema's map form (spec/01 §1.11): the JSON-ready list of `[name, description]`
@@ -837,29 +860,26 @@ defmodule Macaw.Data.Schema do
     end
   end
 
+  # Names, states and roles are strings already (`new/1`); the adapter writes the keys
+  # and the words of the vocabulary as theirs.
   defp json_form(fields) do
     fields
-    |> Enum.map(fn {name, description} -> [spell(name), write_description(description)] end)
+    |> Enum.map(fn {name, description} -> [name, write_description(description)] end)
     |> Enum.sort_by(&hd/1)
   end
 
   defp write_description(description) do
     Map.new(description, fn
-      {:values, values} when is_list(values) -> {"values", Enum.map(values, &write_value/1)}
-      {:status, status} when is_map(status) -> {"status", write_status(status)}
-      {:order, order} when is_list(order) -> {"order", Enum.map(order, &spell/1)}
-      {:bounds, bounds} -> {"bounds", bounds}
+      {:values, values} -> {"values", Enum.map(values, &write_value/1)}
+      {:status, status} -> {"status", status |> Enum.map(&Tuple.to_list/1) |> Enum.sort()}
       {key, value} -> {Atom.to_string(key), spell(value)}
     end)
   end
 
   defp write_value(%{} = entry),
-    do: Map.new(entry, fn {key, value} -> {Atom.to_string(key), spell(value)} end)
+    do: Map.new(entry, fn {key, value} -> {Atom.to_string(key), value} end)
 
-  defp write_value(value), do: spell(value)
-
-  defp write_status(status),
-    do: status |> Enum.map(fn {state, role} -> [spell(state), spell(role)] end) |> Enum.sort()
+  defp write_value(value), do: value
 
   # A name, a state, a role or a word by its spelling; anything else as it is.
   defp spell(atom) when is_atom(atom) and atom not in @not_names, do: Atom.to_string(atom)

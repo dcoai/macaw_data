@@ -130,7 +130,7 @@ defmodule Macaw.Data.Window do
       iex> alias Macaw.Data.Schema
       iex> schema = Schema.new!(%{t: %{type: :number, window: true}, v: %{type: :number}})
       iex> Macaw.Data.Window.region([0, 10], schema)
-      %{t: [0, 10]}
+      %{"t" => [0, 10]}
       iex> Macaw.Data.Window.region([~U[2026-10-14 00:00:00Z], nil], schema)
       nil
       iex> Macaw.Data.Window.region(%{v: [0, 1]}, schema)

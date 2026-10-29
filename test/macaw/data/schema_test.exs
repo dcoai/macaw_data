@@ -40,7 +40,11 @@ defmodule Macaw.Data.SchemaTest do
   describe "new/1: a description by meaning" do
     @tag verifies: "schema-new"
     test "every key with a value it takes" do
-      assert {:ok, %Schema{fields: @full}} = Schema.new(@full)
+      assert {:ok, %Schema{fields: fields}} = Schema.new(@full)
+      # Held by the names' strings; every role a string too (spec/01 §1.10).
+      assert Map.keys(fields) == ["latency", "route", "state", "t"]
+      assert fields["latency"] == @full.latency
+      assert fields["state"].status == %{"ok" => "good", "warn" => "warning", "fail" => "bad"}
     end
 
     @tag verifies: "schema-new"
@@ -81,7 +85,7 @@ defmodule Macaw.Data.SchemaTest do
                  }
                })
 
-      assert Schema.fetch(schema, :state, :values) == {:ok, values}
+      assert Schema.fetch(schema, :state, :values) == {:ok, ["ok", "warning", "error"]}
 
       assert {:error, errors} =
                Schema.new(%{
@@ -128,16 +132,19 @@ defmodule Macaw.Data.SchemaTest do
                  }
                })
 
-      # The description is kept as declared; the accessors read it.
-      assert Schema.fetch(schema, :state, :values) == {:ok, values}
-      assert Schema.values(schema, :state) == ["ok", "degraded", :down, "unknown", 3]
+      # The description is kept as declared, its values by their spelling; the accessors
+      # read it.
+      assert Schema.fetch(schema, :state, :values) ==
+               {:ok, List.replace_at(values, 2, %{value: "down", color: "#B71C1Ccc"})}
+
+      assert Schema.values(schema, :state) == ["ok", "degraded", "down", "unknown", 3]
       assert Schema.values(schema, "state") == Schema.values(schema, :state)
       assert Schema.value_names(schema, :state) == %{"ok" => "OK", "degraded" => "Degraded"}
 
       assert Schema.value_colors(schema, :state) == %{
                "ok" => "#2e7d32",
                "degraded" => "orange",
-               down: "#B71C1Ccc"
+               "down" => "#B71C1Ccc"
              }
     end
 
@@ -148,7 +155,7 @@ defmodule Macaw.Data.SchemaTest do
 
       assert Schema.values(schema, :s) == nil
       assert Schema.values(schema, :missing) == nil
-      assert Schema.values(schema, :b) == [:a, :b]
+      assert Schema.values(schema, :b) == ["a", "b"]
 
       for field <- [:s, :missing, :b] do
         assert Schema.value_names(schema, field) == %{}
@@ -162,7 +169,7 @@ defmodule Macaw.Data.SchemaTest do
       bare = Schema.new!(%{s: %{type: :category, values: [:ok, "x"]}})
 
       assert entry == bare
-      assert Schema.fetch(entry, :s, :values) == {:ok, [:ok, "x"]}
+      assert Schema.fetch(entry, :s, :values) == {:ok, ["ok", "x"]}
     end
 
     @tag verifies: "schema-values"
@@ -225,7 +232,7 @@ defmodule Macaw.Data.SchemaTest do
     @tag verifies: "schema-version"
     test "values do not move the version of a schema that does not use them" do
       assert Schema.version(Schema.new!(%{v: %{type: :number}})) ==
-               "901bd0f3873437c4371044a6ebb6fa91607c583f924c7f7b97ff8d324f1cae44"
+               "5cae6d9dd503007869b92cbf89f1983b6b8511eaa1e8f4f1f698abd6b02f0c0a"
     end
 
     @tag verifies: "schema-new"
@@ -539,7 +546,7 @@ defmodule Macaw.Data.SchemaTest do
     test "one field, or several, may declare it; a :category, :text or :number one" do
       for type <- [:category, :text, :number] do
         assert {:ok, schema} = Schema.new(%{id: %{type: type, identity: true}})
-        assert Schema.identity(schema) == [:id]
+        assert Schema.identity(schema) == ["id"]
       end
 
       assert {:ok, schema} =
@@ -550,7 +557,7 @@ defmodule Macaw.Data.SchemaTest do
                  bytes: %{type: :number}
                })
 
-      assert Schema.identity(schema) == [:host, "iface"]
+      assert Schema.identity(schema) == ["host", "iface"]
     end
 
     @tag verifies: "schema-identity"
@@ -561,14 +568,14 @@ defmodule Macaw.Data.SchemaTest do
           host: %{type: :category, identity: true}
         })
 
-      assert schema.identity == [:host, :iface]
+      assert schema.identity == ["host", "iface"]
       by_hand = %Schema{fields: schema.fields, version: schema.version}
       assert by_hand.identity == nil
-      assert Schema.identity(by_hand) == [:host, :iface]
+      assert Schema.identity(by_hand) == ["host", "iface"]
 
       assert Schema.identity(by_hand, %{host: "mx1", iface: "eth0"}) == %{
-               host: "mx1",
-               iface: "eth0"
+               "host" => "mx1",
+               "iface" => "eth0"
              }
     end
 
@@ -611,8 +618,8 @@ defmodule Macaw.Data.SchemaTest do
       assert Schema.identity(one, %{x: 1.5}) == nil
 
       assert Schema.identity(two, %{"host" => "mx1", iface: "eth0"}) == %{
-               host: "mx1",
-               iface: "eth0"
+               "host" => "mx1",
+               "iface" => "eth0"
              }
 
       assert Schema.identity(two, %{host: "mx1", iface: nil}) == nil
@@ -650,16 +657,16 @@ defmodule Macaw.Data.SchemaTest do
     end
 
     @tag verifies: "schema-compatibility"
-    test "every fault, in the first schema's spelling, ordered by name" do
+    test "every fault, by the field's string, ordered by name" do
       other =
         Schema.new!(%{"t" => %{type: :number}, "value" => %{type: :number, unit: "By"}})
 
       assert Schema.compatibility(@live, other) ==
                {:error,
                 [
-                  {:panel, :missing},
-                  {:t, {:type, :time, :number}},
-                  {:value, {:unit, "ms", "By"}}
+                  {"panel", :missing},
+                  {"t", {:type, :time, :number}},
+                  {"value", {:unit, "ms", "By"}}
                 ]}
     end
 
@@ -671,11 +678,11 @@ defmodule Macaw.Data.SchemaTest do
       eur = Schema.new!(%{v: %{type: :number, unit: "{iso4217:EUR}"}})
 
       assert Schema.compatibility(bare, bare) == :ok
-      assert Schema.compatibility(ms, bare) == {:error, [{:v, {:unit, "ms", nil}}]}
-      assert Schema.compatibility(bare, ms) == {:error, [{:v, {:unit, nil, "ms"}}]}
+      assert Schema.compatibility(ms, bare) == {:error, [{"v", {:unit, "ms", nil}}]}
+      assert Schema.compatibility(bare, ms) == {:error, [{"v", {:unit, nil, "ms"}}]}
 
       assert Schema.compatibility(usd, eur) ==
-               {:error, [{:v, {:unit, "{iso4217:USD}", "{iso4217:EUR}"}}]}
+               {:error, [{"v", {:unit, "{iso4217:USD}", "{iso4217:EUR}"}}]}
 
       assert Schema.compatibility(usd, usd) == :ok
     end
@@ -688,8 +695,8 @@ defmodule Macaw.Data.SchemaTest do
       ifaces = Schema.new!(%{"host" => host, "iface" => host, "v" => %{type: :number}})
 
       assert Schema.compatibility(hosts, hosts) == :ok
-      assert Schema.compatibility(hosts, bare) == {:error, [{:host, {:identity, true, false}}]}
-      assert Schema.compatibility(bare, hosts) == {:error, [{:host, {:identity, false, true}}]}
+      assert Schema.compatibility(hosts, bare) == {:error, [{"host", {:identity, true, false}}]}
+      assert Schema.compatibility(bare, hosts) == {:error, [{"host", {:identity, false, true}}]}
       # Extra fields are not faults, but an extra identity field is.
       assert Schema.compatibility(hosts, ifaces) ==
                {:error, [{"iface", {:identity, false, true}}]}
@@ -702,20 +709,29 @@ defmodule Macaw.Data.SchemaTest do
   describe "version/1: the kernel's digest" do
     @tag verifies: "schema-version"
     test "is pinned: a change of encoding is a deliberate, visible change" do
-      # macaw_layers 0.3.0's term digest of the map form (its spec/01 §7 encoding).
+      # macaw_layers 0.3.0's term digest of the schema's term (its spec/01 §7 encoding).
       assert Schema.version(Schema.new!(%{v: %{type: :number}})) ==
-               "901bd0f3873437c4371044a6ebb6fa91607c583f924c7f7b97ff8d324f1cae44"
+               "5cae6d9dd503007869b92cbf89f1983b6b8511eaa1e8f4f1f698abd6b02f0c0a"
 
       assert Schema.version(Schema.new!(@full)) ==
-               "fabcf88f497d675542291a642c0efb46d7986b3e84af1e0968d648c910edaccf"
+               "66fddf97b5cab061875480b0f727729d35b39aab07291b3e1b33232d8bf194aa"
     end
 
     @tag verifies: "schema-version"
-    test "is the kernel's digest of the map form" do
-      assert Schema.version(Schema.new!(%{v: %{type: :number}})) ==
+    test "is the kernel's digest of the schema's term" do
+      schema = Schema.new!(%{v: %{type: :number}, s: %{type: :category, status: %{ok: :good}}})
+
+      assert Schema.version(schema) ==
                Macaw.Layers.Document.digest(%{
-                 "fields" => Schema.to_map(Schema.new!(%{v: %{type: :number}}))
+                 "fields" => %{
+                   "v" => %{type: :number},
+                   "s" => %{type: :category, status: %{"ok" => "good"}}
+                 }
                })
+
+      # Never of a representation: the JSON form is an adapter the version does not go through.
+      refute Schema.version(schema) ==
+               Macaw.Layers.Document.digest(%{"fields" => Schema.to_map(schema)})
     end
 
     @tag verifies: "schema-version"
@@ -762,12 +778,74 @@ defmodule Macaw.Data.SchemaTest do
 
     @tag verifies: "schema-version"
     test "a string state and the atom state are one value, by its spelling" do
-      # They are one value after a trip through JSON, so the version is the same before it:
-      # a delivery read on another node names a version its reader can resolve.
+      # `new/1` writes each as its string, so the version is the same through JSON too: a
+      # delivery read on another node names a version its reader can resolve.
       a = Schema.new!(%{s: %{type: :category, order: ["ok"], status: %{"ok" => :good}}})
       b = Schema.new!(%{s: %{type: :category, order: [:ok], status: %{ok: "good"}}})
       assert a.version == b.version
       refute a.version == Schema.new!(%{s: %{type: :category, order: ["OK"]}}).version
+    end
+
+    @tag verifies: "schema-version"
+    test "names, states and roles in either spelling: one schema, one version" do
+      atoms =
+        Schema.new!(%{
+          state: %{
+            type: :category,
+            values: [%{value: :ok, name: "OK"}, :warn, :fail, 3],
+            order: [:ok, :warn, :fail],
+            status: %{ok: :good, warn: :warning, fail: :bad}
+          },
+          host: %{type: :category, identity: true},
+          t: %{type: :time}
+        })
+
+      strings =
+        Schema.new!(%{
+          "state" => %{
+            type: :category,
+            values: [%{value: "ok", name: "OK"}, "warn", "fail", 3],
+            order: ["ok", "warn", "fail"],
+            status: %{"ok" => "good", "warn" => "warning", "fail" => "bad"}
+          },
+          "host" => %{type: :category, identity: true},
+          "t" => %{type: :time}
+        })
+
+      assert atoms == strings
+      assert atoms.version == strings.version
+      assert {:ok, ^atoms} = Schema.from_json(Schema.to_json(atoms))
+    end
+
+    @tag verifies: "schema-version"
+    test "a state in both spellings is one state, listed or named twice" do
+      assert {:ok, _} =
+               Schema.new(%{s: %{type: :category, order: [:ok], status: %{"ok" => :good}}})
+
+      assert {:ok, _} = Schema.new(%{s: %{type: :category, values: ["ok"], order: [:ok]}})
+
+      assert faults(%{s: %{type: :category, order: [:ok, "ok"]}}) ==
+               [{[:s, :order, 1], :duplicate}]
+
+      assert faults(%{s: %{type: :category, values: [%{value: :ok, name: "OK"}, "ok"]}}) ==
+               [{[:s, :values, 1], :duplicate}]
+
+      assert faults(%{s: %{type: :category, status: %{:ok => :good, "ok" => :bad}}}) ==
+               [{[:s, :status, "ok"], :duplicate}]
+    end
+
+    @tag verifies: "schema-version"
+    test "a typed color or a color struct in a value entry never crashes new/1" do
+      # Whether such a color is a data color is spec/01 §1.7's; the version no longer goes
+      # through the JSON form, so building one answers rather than raises.
+      red = %Macaw.Layers.Color{r: 255.0, g: 0.0, b: 0.0, opacity: 1.0}
+
+      for color <- [{:color, :good}, red] do
+        entry = %{s: %{type: :category, values: [%{value: "ok", color: color}]}}
+
+        assert match?({:ok, %Schema{}}, Schema.new(entry)) or
+                 match?({:error, [_ | _]}, Schema.new(entry))
+      end
     end
 
     defp shuffled(list), do: StreamData.map(StreamData.integer(), fn _ -> Enum.shuffle(list) end)
@@ -862,13 +940,13 @@ defmodule Macaw.Data.SchemaTest do
     test "the window field: the marked one, else the only time field, else none" do
       field = &Schema.window_field(Schema.new!(&1))
 
-      assert field.(%{t: %{type: :time}, v: %{type: :number}}) == :t
-      assert field.(%{t: %{type: :time}, tick: %{type: :number, window: true}}) == :tick
+      assert field.(%{t: %{type: :time}, v: %{type: :number}}) == "t"
+      assert field.(%{t: %{type: :time}, tick: %{type: :number, window: true}}) == "tick"
       assert field.(%{a: %{type: :time}, b: %{type: :time}}) == nil
-      assert field.(%{a: %{type: :time}, b: %{type: :time, window: true}}) == :b
+      assert field.(%{a: %{type: :time}, b: %{type: :time, window: true}}) == "b"
       assert field.(%{t: %{type: :time, window: false}}) == nil
       assert field.(%{v: %{type: :number}}) == nil
-      assert field.(%{p: %{type: :point, window: true}}) == :p
+      assert field.(%{p: %{type: :point, window: true}}) == "p"
 
       assert faults(%{a: %{type: :time, window: true}, b: %{type: :point, window: true}}) ==
                [{[:b, :window], {:duplicate_window, :a}}]

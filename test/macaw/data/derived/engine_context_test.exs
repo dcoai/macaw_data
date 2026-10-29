@@ -98,10 +98,10 @@ defmodule Macaw.Data.Derived.EngineContextTest do
                      "state" => %{
                        "type" => :category,
                        "values" => [
-                         %{"value" => :ok, "name" => "OK", "color" => "#2e7d32"},
-                         :down
+                         %{"value" => "ok", "name" => "OK", "color" => "#2e7d32"},
+                         "down"
                        ],
-                       "status" => %{ok: :good}
+                       "status" => %{"ok" => "good"}
                      },
                      "cpu" => %{"type" => :number, "bounds" => [0, 100], "continuity" => 60}
                    },

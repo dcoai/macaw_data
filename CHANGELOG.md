@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Breaking:** every schema version changes (D1, #28, dco-tek/macaw/macaw#188). `Schema.version` is the kernel's digest of the schema's term, not of its JSON form, which is now only an adapter at the edge; a value entry's color no longer goes through the JSON form when `Schema.new/1` versions the schema, so a typed color there can't crash it. The struct holds every field name, state and role as its string, normalized once by `new/1`, so `fields`, `identity/1`, `window_field/1`, `compatibility/2`'s faults and `identity/2`'s maps name fields by their strings; every function that takes a name still takes either spelling. A state named in both spellings in one description is `:duplicate`.
+
 ## v0.6.1 (2026-10-29)
 
 - **Fixed:** compiling macaw_data in an app without the optional `table` package warned that `Table.Reader.impl_for/1` is undefined; CI now compiles it without its optional dependencies (#7).

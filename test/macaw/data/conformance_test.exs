@@ -151,18 +151,18 @@ defmodule Macaw.Data.ConformanceTest do
     test "a row without its declared identity is a finding naming the field" do
       findings = Conformance.check(:deliveries, Broken.new(:no_identity), @opts)
 
-      assert {:deliveries, {:no_identity, _probe, :unit} = reason} =
+      assert {:deliveries, {:no_identity, _probe, "unit"} = reason} =
                Enum.find(findings, &match?({_, {:no_identity, _, _}}, &1))
 
-      assert Conformance.format({:deliveries, reason}) =~ "no value for :unit"
+      assert Conformance.format({:deliveries, reason}) =~ ~s(no value for "unit")
     end
 
     @tag verifies: "conformance-flaws"
     test "a measure the vocabulary refuses is its own finding, naming the field" do
-      assert [{:describe, {:measure, :v, {:unit, "mss", {:unknown_atom, "mss"}}}} = finding] =
+      assert [{:describe, {:measure, "v", {:unit, "mss", {:unknown_atom, "mss"}}}} = finding] =
                Conformance.check(:describe, Broken.new(:misspelled_unit), @opts)
 
-      assert Conformance.format(finding) =~ "field :v"
+      assert Conformance.format(finding) =~ ~s(field "v")
     end
 
     @tag verifies: "conformance-errors"

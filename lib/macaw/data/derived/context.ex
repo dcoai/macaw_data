@@ -50,7 +50,7 @@ defmodule Macaw.Data.Derived.Context do
   @spec schema(Schema.t(), (term() -> term())) :: map()
   def schema(%Schema{fields: fields}, value \\ & &1) do
     Map.new(fields, fn {name, description} ->
-      {to_string(name), Map.new(description, &description(&1, value))}
+      {name, Map.new(description, &description(&1, value))}
     end)
   end
 

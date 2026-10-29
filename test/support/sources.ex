@@ -196,7 +196,7 @@ defmodule Macaw.Data.Test.Sources do
     # A schema assembled around `Schema.new/1`, its value field in a unit the vocabulary
     # does not read: the struct a source could build by hand.
     defp misspelled(%Schema{fields: fields} = schema, :misspelled_unit),
-      do: %{schema | fields: put_in(fields, [:v, :unit], "mss")}
+      do: %{schema | fields: put_in(fields, ["v", :unit], "mss")}
 
     defp misspelled(schema, _flaw), do: schema
 

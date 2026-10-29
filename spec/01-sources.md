@@ -8,7 +8,7 @@ A **source** is anything a component's slot reads. One contract serves feeds, qu
 - **`Data.Schema`:** each field's **meaning**: `type` (`:time | :number | :category | :text | :color | :point`, a `:point` being a geographic position), and where known `unit` (UCUM), `quantity`, `label`, `order`, `status`, `polarity`, `continuity`, `bounds`, `identity`, `window`, and declared `values` with names and colors ([§1.2](#sources-schema)). (visualize.md C1.)
 - **The window field** is the field a request's window applies to: the one marked `window: true`, else the schema's only `:time` field. A `box` window applies to a `:point` window field. A schema with neither, or with several `:time` fields and none marked, has no window field, and requests to it carry none ([§1.5](#sources-schema-window)).
 - **A schema gives data colors, never drawing colors.** A `:color` field, or a color on a declared value (a team's color), is content; how it may be shown is a theme rule ([macaw_layers 04](https://github.com/dcoai/macaw_layers/blob/main/spec/04-themes.md#themes-rules)).
-- **A schema's version is the SHA-256 of a canonical encoding,** the kernel's digest of its map form ([§1.10](#sources-schema-version)). A delivery names the version, and a push sends the schema before rows made under it. (visualize.md C1; metresis.md C1.)
+- **A schema's version is the SHA-256 of a canonical encoding,** the kernel's digest of the schema's term, its fields with every name normalized to its string at construction; the JSON form is an adapter the version never goes through ([§1.10](#sources-schema-version)). A delivery names the version, and a push sends the schema before rows made under it. (visualize.md C1; metresis.md C1.)
 - **Identity is declared** (`identity: true`, composite allowed), never guessed. Selection, `latest` and per-identity derivations read it. (visualize.md C1.)
 - **Units and quantities** come from one vocabulary, specified in [03](03-units.md): UCUM codes with an ISO 4217 currency extension, and a fixed list of quantities. Nothing translates between two vocabularies. (metresis.md C1.)
 
@@ -82,7 +82,7 @@ column_types/1 types a column by its whole and leaves a mixed or empty one out; 
 ### 1.2 The schema {#sources-schema}
 
 **`Macaw.Data.Schema` is a source's schema:** what each of its fields means, whoever draws it, and never how it is drawn. It is `%Macaw.Data.Schema{fields, version, identity}`:
-- `fields` maps a field name (an atom or a string, as the source's rows spell it) to its **description**, a map of the keys below;
+- `fields` maps a field name to its **description**, a map of the keys below. `new/1` takes a name as an atom or a string, as the source's rows spell it, and the struct holds it as its string, as it holds every state and role (§1.10);
 - `version` is the schema's version (§1.10);
 - `identity` is the declared identity fields of `identity/1` (§1.4), derived by `new/1` so a row's identity is read without walking the fields again; a struct assembled by hand may leave it `nil`, and `identity/1` derives it then.
 
@@ -136,7 +136,7 @@ values may be entries with a name and a color, read back by values/2, value_name
 
 Which rows are about the same thing is a fact about the source, so the source declares it: `identity: true` on each field whose value names the entity a row is about. Nothing guesses it.
 - **The fields.** `identity` is allowed on a `:category`, `:text` or `:number` field, and never on a `:time` field, which says when, not what, nor on a `:color` or `:point` one (`{:invalid_for, type}`). It is a boolean, and `false` is the same as absent: `new/1` drops `identity: false`, so the two spellings are one schema of one version.
-- **Composite.** Several fields may say `true`, together one identity. `identity/1` is the declared fields, ordered by name as a string, `[]` for none.
+- **Composite.** Several fields may say `true`, together one identity. `identity/1` is the declared fields, as strings in order, `[]` for none.
 - **A row's identity.** `identity/2` is bare for one field, a map from field to value for several, each field read by either spelling of its name; `nil` when the schema declares none or the row lacks a value for one of them.
 
 ```test:schema-identity
@@ -208,7 +208,7 @@ every color key on a field is refused and says why; a color hides in a status ne
 | `:required` | `[name, :values, i, :value]` | a value entry with no `value` |
 | `:unknown_entry_key` | `[name, :values, i, key]` | a key of a value entry other than its three |
 | `{:duplicate_window, other}` | `[name, :window]` | a second window field |
-| `:duplicate` | `[name, :order, i]`, `[name, :values, i]` | a state listed twice |
+| `:duplicate` | `[name, :order, i]`, `[name, :values, i]`, `[name, :status, state]` | a state listed twice, or named in `status` as an atom and as its string (at the string), by its spelling (§1.10) |
 | `:not_in_order`, `:not_in_values` | `[name, :status, state]`, `[name, :order, i]` | a state the order, or the values, do not list |
 
 ```test:schema-faults
@@ -217,36 +217,36 @@ the field names and the shape of a schema are checked, every fault is reported b
 
 ### 1.9 Compatibility {#sources-schema-compatibility}
 
-Two schemas can describe the same data in different words: a live feed and a store's history of one metric spell their fields differently (`:t` and `"t"`), label them from different sources, and know different facts. `compatibility(schema, other)` says whether `other`'s rows read as `schema`'s: `:ok`, or `{:error, faults}` with every fault, each `{field, reason}`, the field spelled as `schema` spells it, ordered by its name as a string. The rule is per field of `schema`; `other`'s extra fields are not faults:
+Two schemas can describe the same data in different words: a live feed and a store's history of one metric spell their fields differently (`:t` and `"t"`), label them from different sources, and know different facts. `compatibility(schema, other)` says whether `other`'s rows read as `schema`'s: `:ok`, or `{:error, faults}` with every fault, each `{field, reason}`, the field by its string, ordered by it. The rule is per field of `schema`; `other`'s extra fields are not faults:
 
 | Reason | Meaning |
 |---|---|
 | `:missing` | `other` has no field of that name, compared as strings |
 | `{:type, a, b}` | `other`'s field is of type `b` where `schema`'s is `a` |
 | `{:unit, a, b}` | a `:number` field whose units do not convert, `other`'s `b` to `schema`'s `a` by `Macaw.Data.Unit.conversion/2`, or one absent facing a present one; two absent agree |
-| `{:identity, a, b}` | the two declare different identity fields, `a` and `b` whether each declares `identity: true` on it. Checked for every field either declares, so an identity field only `other` has is a fault, spelled as `other` spells it: reading `other`'s rows as `schema`'s would merge what `other` tells apart |
+| `{:identity, a, b}` | the two declare different identity fields, `a` and `b` whether each declares `identity: true` on it. Checked for every field either declares, so an identity field only `other` has is a fault, by its string: reading `other`'s rows as `schema`'s would merge what `other` tells apart |
 
 No other attribute is compared: a label, an implied quantity, `polarity`, `bounds` or `order` is what each source knows, and reading `other`'s rows keeps `schema`'s.
 
 ```test:schema-compatibility
-names compare as strings and labels, facts and extra fields are not compared; every fault in the first schema's spelling, by name; units convert or fault, two absent agreeing; different identity fields fault whichever schema declares them
+names compare as strings and labels, facts and extra fields are not compared; every fault by the field's string, by name; units convert or fault, two absent agreeing; different identity fields fault whichever schema declares them
 ```
 
 ### 1.10 The version {#sources-schema-version}
 
-A schema's version is **the kernel's digest of its map form** (`Macaw.Layers.Document.digest/1` over `%{"fields" => to_map(schema)}`, [macaw_layers 01 §7](https://github.com/dcoai/macaw_layers/blob/main/spec/01-kernel.md#kernel-digest)): 64 lowercase hex characters, the SHA-256 of the kernel's canonical, type-tagged encoding of that term (macaw_layers 0.3.0). So an unchanged schema has the same version on every node and under every release, and any change of content, a renamed state or a new label, is a new version. `version/1` returns it, computed once by `new/1`.
+A schema's version is **the kernel's digest of the schema's term** (`Macaw.Layers.Document.digest/1` over `%{"fields" => fields}`, the struct's normalized fields, [macaw_layers 01 §7](https://github.com/dcoai/macaw_layers/blob/main/spec/01-kernel.md#kernel-digest)): 64 lowercase hex characters, the SHA-256 of the kernel's canonical, type-tagged encoding of that term (macaw_layers 0.3.0). So an unchanged schema has the same version on every node and under every release, and any change of content, a renamed state or a new label, is a new version. `version/1` returns it, computed once by `new/1`. **The version is never computed from a representation:** the JSON form (§1.11) is an adapter at the edge, and a value it can't write fails there, naming it, never in `new/1`.
 
-- **Names, states and roles count by their spelling.** `:latency` and `"latency"` are one field, and `:ok` and `"ok"` one state, so a schema and its trip through JSON, which spells every one as a string, have one version. A delivery read on another node then names a version its reader can resolve (§1.12). This differs from visualize's own hash, which keeps an atom state apart from its string; reconciling the two is visualize's, at adoption.
-- **Nothing depends on map order:** the canonical encoding sorts keys, and the fields are pairs sorted by name.
+- **Names, states and roles count by their spelling,** because `new/1` normalizes them once, at construction: every field name, every state in `values`, `order` and `status`, and every role in `status`, is held as its string. So `:latency` and `"latency"` are one field, and `:ok` and `"ok"` one state, one schema `==` the other, of one version. Two spellings of one state in one description are that state twice (`:duplicate`), as two of one field are (§1.8). The words of the vocabulary (`type`, `quantity`, `polarity`, `metric_kind`) stay atoms: they are words, not names. Every function that takes a name takes either spelling. A delivery read on another node then names a version its reader can resolve (§1.12). This differs from visualize's own hash, which keeps an atom state apart from its string; reconciling the two is visualize's, at adoption.
+- **Nothing depends on map order:** the kernel's encoding of a map is canonical, its keys in one order however it was built.
 - The test suite pins one schema's version as a literal, so a change to the encoding fails a test before it changes a version in the field.
 
 ```test:schema-version
-the version is pinned for two schemas, is the kernel's digest of the map form, is the same whichever way a name or a state is spelled, does not depend on the order the maps were built in, and changes with any change of content
+the version is pinned for two schemas, is the kernel's digest of the schema's term and not of its JSON form, is the same whichever way a name, a state or a role is spelled, the two schemas equal, does not depend on the order the maps were built in, and changes with any change of content; a state in both spellings is listed twice; a typed color in a value entry never crashes new/1
 ```
 
 ### 1.11 The JSON form {#sources-schema-json}
 
-**`to_json/1` and `from_json/2` are public,** so no adopter reads a hidden function (visualize#879). The map form, `to_map/1`, is a list of `[name, description]` pairs sorted by name: every description key by its string, every name, state and role by its spelling, every word of the vocabulary (`type`, `quantity`, `polarity`, `metric_kind`) as its string, `status` as sorted `[state, role]` pairs, `bounds`, `values` and booleans as they are. `to_json/1` is it encoded.
+**`to_json/1` and `from_json/2` are public,** so no adopter reads a hidden function (visualize#879). **It is an adapter at the edge:** the schema's identity, equality and validity are its term's, and the version never goes through it (§1.10). The map form, `to_map/1`, is a list of `[name, description]` pairs sorted by name: every description key by its string, every name, state and role as the string the schema holds, every word of the vocabulary (`type`, `quantity`, `polarity`, `metric_kind`) as its string, `status` as sorted `[state, role]` pairs, `bounds`, `values` and booleans as they are. `to_json/1` is it encoded.
 
 **Reading** (`from_map/1`, `from_json/2`):
 - `from_json/2` reads through the kernel's gates first, the byte limit and the scan that stops at a depth or items limit ([macaw_layers 01 §5](https://github.com/dcoai/macaw_layers/blob/main/spec/01-kernel.md#kernel-gates)), `limits:` tightening them, and then decodes;
