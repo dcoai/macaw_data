@@ -352,6 +352,19 @@ defmodule Macaw.Data.Derived.SandboxTest do
     end
 
     @tag verifies: "derived-runner-liveness"
+    test "a call that worked past its timeout and then waits for less than it answers" do
+      # About 100 ms of work, past the 100 ms bound under any load, then 40 ms in `receive`:
+      # blocked for less than the bound since it last worked, so it is not hung (#67).
+      worked_then_waited = fn ->
+        Enum.reduce(1..5_000_000, 0, &+/2)
+        receive do: (:never_sent -> :ok), after: (40 -> :answered)
+      end
+
+      assert {:ok, :answered, _spent} =
+               Macaw.Data.Bounded.run(worked_then_waited, reductions: 100_000_000, timeout: 100)
+    end
+
+    @tag verifies: "derived-runner-liveness"
     test "a call blocked in receive is hung, capped or not; one with no cap is hung whatever it does" do
       blocked = fn -> receive(do: (:never_sent -> :ok)) end
       assert Macaw.Data.Bounded.run(blocked, reductions: 1_000_000, timeout: 20) == :hung
