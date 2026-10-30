@@ -8,7 +8,7 @@ defmodule Macaw.Data.TablePackingTest do
 
   alias Macaw.Data.Table
 
-  defp storage(table, name), do: elem(Map.fetch!(table.columns, name), 1)
+  import Macaw.Data.Test.Storage, only: [storage: 2]
 
   # A `DateTime` in any zone, built by its fields: no time-zone database is involved.
   defp zoned(%DateTime{} = utc, {time_zone, zone_abbr, utc_offset, std_offset}) do
@@ -382,6 +382,18 @@ defmodule Macaw.Data.TablePackingTest do
     ])
   end
 
+  # Any data a :term column holds: never a function, a PID, a reference or a port, which
+  # have no digest (spec/01 §1.1.2).
+  defp data_gen do
+    tree(one_of([integer(), float(), binary(), atom(:alphanumeric), boolean()]), fn child ->
+      one_of([
+        list_of(child, max_length: 3),
+        tuple({child, child}),
+        map_of(child, child, max_length: 2)
+      ])
+    end)
+  end
+
   # A column of one type: its declared type and its values.
   defp column_gen do
     one_of([
@@ -412,7 +424,7 @@ defmodule Macaw.Data.TablePackingTest do
          list_of(gappy(member_of([{:color, "good"}, {:alpha, {:color, "bad"}, 0.5}])))}
       ),
       tuple({constant(:point), list_of(gappy(tuple({float(), float()})))}),
-      tuple({constant(:term), list_of(gappy(term()))})
+      tuple({constant(:term), list_of(gappy(data_gen()))})
     ])
   end
 

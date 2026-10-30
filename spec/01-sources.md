@@ -53,11 +53,11 @@ A **source** is anything a component's slot reads. One contract serves feeds, qu
 - **Category values read back as strings** by `rows/1`, `get/2` and `column/2`, in every form: the rule is the `:category` type's, not its encoding's. An atom other than `nil`, `true` and `false` is held as the string that spells it, in the list too, and those three stay themselves. So `[:ok, true, "warn"]` reads back `["ok", true, "warn"]` whichever form holds it.
 - **Text is Arrow `utf8` only when it is valid UTF-8,** every string checked by itself (two halves of one character are each invalid, though their bytes together are not). A text column holding a binary that is not is Arrow `binary`, the same layout; a category column holding one is kept as its list.
 - **A missing value is `nil`,** in every type. A packed column keeps a **validity bitmap** beside its buffers, so a gap stays a gap and reads back as `nil`, never as 0 (§3). A bitmap is **least-significant-bit first,** as Arrow numbers bits: value i is bit (i rem 8) of byte (i div 8), and the padding bits of the last byte are 0. A missing value's slot in a values buffer holds zeros, which Arrow leaves unspecified, and takes no bytes of a text column's data.
-- **`new/1`** builds a table from `{name, type, values}` columns and reports every fault at once: a type not in the list (`{:enum, types}`), a value its type does not hold (`{[name, i], {:type, type}}`: a number column's non-number, a time column's non-time, a color column's value that is not a color term, `Schema.color?/1`, a point column's non-point), a column of another length than the first (`{:length, n}`), a name given twice (`:duplicate`). `new!/1` raises naming them.
+- **`new/1`** builds a table from `{name, type, values}` columns and reports every fault at once: a type not in the list (`{:enum, types}`), a value its type does not hold (`{[name, i], {:type, type}}`: a number column's non-number, a time column's non-time, a color column's value that is not a color term, `Schema.color?/1`, a point column's non-point), a value that is not data, a function, a PID, a reference, a port or an improper list, which has no digest (`{[name, i], :not_data}`, §1.1.2), a column of another length than the first (`{:length, n}`), a name given twice (`:duplicate`). `new!/1` raises naming them.
 - **Reading back:** `column/2` is a column's values in order. `rows/1` is the row view: one map per row keyed by every column name. `row/2` is one row, `nil` past the end; `names/1`, `size/1` and `column_type/2` describe the table.
-- **`slice/3`** is a run of rows as a table of the same columns; a packed column's buffers are sliced, not copied, and its bitmaps shifted to start at the slice. A text column's offsets keep pointing into its parent's data, and a dictionary column keeps its parent's dictionary, as Arrow's slices do.
-- **The packed columns live off the process heap:** a binary over 64 bytes is reference-counted, so a collection never copies it, and a table's cost to its process does not grow with its rows.
-- **One chunk today.** A table is one chunk of each column; a zoned column's and a category column's dictionary are the column's. Chunked tables are #9's.
+- **`slice/3`** is a run of rows as a table of the same columns. It keeps the chunks the run spans and where the run starts and ends in them (§1.1.1), copying nothing; a column read from it slices its packed buffers and shifts its bitmaps to start at the slice. A text column's offsets keep pointing into their chunk's data, and a dictionary column keeps its chunk's dictionary, as Arrow's slices do.
+- **The packed columns live off the process heap:** a binary over 64 bytes is reference-counted, so a collection never copies it. A table's cost to its process is a constant number of words per chunk, never per row.
+- **Chunked** (§1.1.1): every form above is a chunk's, so a zoned column's and a category column's dictionary are its chunk's.
 
 ```test:table-new
 new/1 builds named typed columns and refuses an unknown type, a value of the wrong type, a column of another length and a duplicate name, all at once, ordered by path; a string in a color column is refused
@@ -88,7 +88,7 @@ for generated columns of each type with gaps, new/1 and from/2 then rows/1 and c
 ```
 
 ```test:table-off-heap
-a table of a million numbers costs its process the same number of words as one of a hundred thousand, its column a reference-counted binary
+a table of a million numbers costs its process the same number of words a chunk as one of a hundred thousand, never words a row, each chunk's column a reference-counted binary
 ```
 
 ```test:table-round-trip
@@ -96,7 +96,7 @@ for generated rows of numbers, floats, strings and times with gaps, rows to a ta
 ```
 
 ```test:table-slice
-slice/3 is the rows from start, count of them, for generated tables and bounds; row/2 is one row or nil; a slice shares its parent's binary
+slice/3 is the rows from start, count of them, for generated tables, chunkings and bounds; row/2 is one row or nil; a slice shares its parent's chunks and their binaries
 ```
 
 **Row lists are accepted at the edge.** `from/2` reads every shape data arrives in into a table:
@@ -128,6 +128,66 @@ get/2 reads a key by either spelling, the exact key first, a nil value being a v
 
 ```test:table-inference
 column_types/1 types a column by its whole, a column of color terms :color and one of strings :text, and leaves a mixed or empty one out; time_columns/1 reads the whole column, nil a gap, names the union of every row's keys; temporal?/1 accepts the three structs and ISO 8601 strings only
+```
+
+#### 1.1.1 Chunks {#sources-table-chunks}
+
+**A table is an ordered list of chunks** (macaw_data#9). A chunk is a run of rows of every column, each column packed by itself in §1.1's forms: Arrow's record batch, so one column across the chunks is Arrow's chunked array. A chunk is immutable. Its forms depend on its own values alone, so a column may be int64 in one chunk and float64 in the next, and a zoned or category column's dictionary is its chunk's.
+
+- **A table views its chunks.** It holds each chunk with the run of that chunk's rows it reads, its first row and its count. `chunks/1` lists them, in order: every chunk the table references, and nothing else.
+- **Canonical chunks.** `new/1` and `from/2` build them, and `compact/1` rewrites any table into them. Canonical chunks are aligned by row count, `chunk_rows/0` (8,192) rows each from the first row, the last shorter. A table with no rows has no chunks. The chunk size is not a setting: no caller chooses it.
+- **Live windows cost the new data.** Nothing below copies a chunk's buffers:
+  - **`append/2`** adds another table's chunks after the table's own. The two have the same names in the same order, each of the same type; another table is `{:error, {:columns, expected, given}}`, each a list of `{name, type}`.
+  - **`trim/2`** drops the oldest rows: it drops every chunk wholly before the cut, and moves the first that remains to start at the cut. A dropped chunk is in no entry of `chunks/1`, so it is freed once nothing else references it.
+  - **`slice/3`** keeps the chunks the run spans, cut at both ends. It pins only those chunks.
+- **The packed buffers are read per chunk:** `column/2` reads each view's slice of its chunk's column, in order.
+
+```test:table-chunks
+new/1 builds canonical chunks of chunk_rows/0 rows from the first, the last shorter, and none for no rows; chunks/1 lists each chunk with its first row and count; a column is packed per chunk, int64 in one chunk and float64 in the next, a dictionary per chunk, and reads back whole
+```
+
+```test:table-append-trim
+appending and trimming give the contents a fresh build of the same rows would have, for generated rows, chunkings and cuts; append copies no chunk and refuses a table of other names or types; trim drops every chunk wholly before the cut, and a dropped chunk is in no entry of chunks/1
+```
+
+#### 1.1.2 Identity is the contents {#sources-table-identity}
+
+**A table's identity is its contents, not its layout** (macaw_data#9; an amendment to macaw#188 D5, recorded there): its names in order, each column's type, and each column's values in order as `column/2` reads them back. The same rows chunked two ways are one value.
+
+- **`Table.t()` is opaque,** and `==` on the struct is not a table's equality: two equal tables may hold different chunks.
+- **`equal?/2`** is whether two tables have the same contents. Values compare strictly, as the kernel's digest tells them apart, so `1` and `1.0` differ, and so do `0.0` and `-0.0`.
+- **`digest/1`** is the table's content digest: 64 lowercase hex characters, a SHA-256 over the table's **canonical form**. It is over the values, never the buffers: a dictionary built again in another order, a column held in another form, and another chunking all keep it. Two tables are `equal?/2` exactly when their digests are equal.
+- **The canonical form.** Each value has one canonical form whatever storage holds it: a tag byte naming its kind, an 8-byte little-endian word, and bytes of its own.
+
+  | Value | Tag | Word | Own bytes |
+  |---|---|---|---|
+  | `nil` | 0 | 0 | none |
+  | an integer within int64 | 1 | the integer | none |
+  | a float | 2 | its binary64 bits | none |
+  | an integer beyond int64 | 3 | 0 | its kernel encoding |
+  | a binary | 4 | its byte size | its bytes |
+  | any other term | 7 | 0 | its kernel encoding |
+  | a UTC `DateTime` | 8 | microseconds since the Unix epoch | its precision, one byte |
+  | a `NaiveDateTime` | 9 | wall-clock microseconds since 1970-01-01 | its precision, one byte |
+  | a `Date` | 10 | days since 1970-01-01 | none |
+  | a `DateTime` in another zone | 11 | UTC microseconds since the Unix epoch | its precision, one byte, then the kernel encoding of `{time_zone, zone_abbr, utc_offset, std_offset}` |
+
+  A time of a calendar other than ISO is "any other term". A column's canonical form is three streams over its values in order: the tags, the words, and the own bytes. The digest is the SHA-256 of a version byte (1), the kernel's encoding (`Macaw.Layers.Document.digest/1`'s, its version byte aside) of `{"macaw.table", [{name, type}, …]}`, the row count as 64 bits big-endian, and then for each column in order the SHA-256 of each of its three streams. Each stream is hashed by itself, so where a chunk ends never reaches the digest. The packed forms lay their values out nearly so already (int64 and float64 values, UTC microseconds, a text column's bytes), so a chunk's digest costs about one pass over its buffers.
+- **A table holds data.** A value that is not data (a function, a PID, a reference, a port, an improper list) has no digest, so `new/1` refuses it, `{[name, i], :not_data}`, whatever the column's type.
+- **A chunk's digest** (`Table.Chunk.digest/1`) is its content digest as a one-chunk table of the table's names and types. It is computed once, when the chunk is built, and kept in the chunk. Reading it never hashes, and neither does slicing, trimming or appending.
+- **`compact/1`** of two equal tables is the same struct (`==`), canonical chunks with the same digests. A table already canonical is returned as it is.
+- **The kernel's digest of the struct is of its layout,** until the kernel lets a type supply its canonical digest input (macaw_layers#18), a table's being its digest. Until then a table's digest is `Table.digest/1`. The kernel's encoding it uses is a copy, held byte-for-byte equal to `Macaw.Layers.Document.digest/1`.
+
+```test:table-equal
+for generated rows, the same rows chunked two ways are equal? with one digest, compact/1 of each is ==, and changing one value changes both
+```
+
+```test:table-data
+new/1 refuses a value that is not data, a function, a PID, a reference, a port or an improper list, by its path, as not_data, in any chunk; every other value of a term column is held
+```
+
+```test:table-digest
+digest/1 is the SHA-256 of the canonical form, the same for every form of the same values, each value a chunk of its own or all in one; the kernel's encoding it uses is the kernel's, byte for byte; a chunk's digest is its own as a one-chunk table; a dictionary built again in another order keeps it; 1 and 1.0 and 0.0 and -0.0 differ; reading a chunk's digest, slicing, trimming and appending hash nothing, and new/1 hashes each chunk once
 ```
 
 ### 1.2 The schema {#sources-schema}

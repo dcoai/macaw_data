@@ -5,6 +5,8 @@ defmodule Macaw.Data.TableTest do
 
   alias Macaw.Data.Table
 
+  import Macaw.Data.Test.Storage, only: [storage: 2]
+
   doctest Table
 
   @rows [%{t: 1, v: 10.0}, %{t: 2, v: 20.0}, %{t: 3, v: 30.0}]
@@ -366,10 +368,10 @@ defmodule Macaw.Data.TableTest do
         ])
 
       # The bitmap is least-significant-bit first: values 0 and 2 present, 0b101.
-      assert {:number, {:int64, bin, valid}} = table.columns.i
+      assert {:int64, bin, valid} = storage(table, :i)
       assert byte_size(bin) == 24 and valid == <<0b101>>
-      assert {:number, {:integral, _, <<0b101>>, <<0b100>>}} = table.columns.f
-      assert {:time, {:utc, _, <<0b101>>, _precision}} = table.columns.t
+      assert {:integral, _, <<0b101>>, <<0b100>>} = storage(table, :f)
+      assert {:utc, _, <<0b101>>, _precision} = storage(table, :t)
 
       # Each value reads back as given, integer or float; never 0 for a gap.
       assert Table.column(table, :i) === [1, nil, -3]
@@ -383,15 +385,30 @@ defmodule Macaw.Data.TableTest do
     end
 
     @tag verifies: "table-off-heap"
-    test "a table's cost to its process does not grow with its rows" do
-      small = Table.new!([{"v", :number, Enum.map(1..100_000, &(&1 * 1.0))}])
-      large = Table.new!([{"v", :number, Enum.map(1..1_000_000, &(&1 * 1.0))}])
+    test "a table's cost to its process is words a chunk, never words a row" do
+      # Whole chunks, so each table's cost is its chunks' and nothing else's.
+      rows = Table.chunk_rows()
 
-      assert :erts_debug.size(large) == :erts_debug.size(small)
-      assert {:number, {:float64, bin, _}} = large.columns["v"]
-      assert byte_size(bin) == 8_000_000
-      # Over 64 bytes, a binary is reference-counted, off the process heap.
-      assert :binary.referenced_byte_size(bin) == 8_000_000
+      build = fn chunks ->
+        Table.new!([{"v", :number, Enum.map(1..(chunks * rows), &(&1 * 1.0))}])
+      end
+
+      words = &:erts_debug.size/1
+      small = build.(12)
+      large = build.(123)
+
+      # One chunk more costs the same words, whatever the table's length.
+      per_chunk = words.(build.(2)) - words.(build.(1))
+      assert Table.size(large) >= 1_000_000
+      assert words.(large) - words.(small) == (123 - 12) * per_chunk
+      assert per_chunk < rows / 50
+
+      for {chunk, 0, ^rows} <- Table.chunks(large) do
+        assert {:float64, bin, _} = chunk.columns["v"]
+        assert byte_size(bin) == 8 * rows
+        # Over 64 bytes, a binary is reference-counted, off the process heap.
+        assert :binary.referenced_byte_size(bin) == 8 * rows
+      end
     end
 
     @tag verifies: "table-edge"
@@ -478,13 +495,26 @@ defmodule Macaw.Data.TableTest do
     end
 
     @tag verifies: "table-slice"
-    property "slice/3 is the rows from start, count of them, as a table" do
+    property "slice/3 is the rows from start, count of them, as a table, however it is chunked" do
       check all(
               values <- list_of(one_of([integer(), constant(nil)]), max_length: 40),
+              cuts <- list_of(integer(0..40), max_length: 6),
               start <- integer(0..45),
               count <- integer(0..45)
             ) do
-        table = Table.new!([{"v", :number, values}, {"s", :term, values}])
+        # The same values, appended at generated cuts.
+        table =
+          [0 | cuts]
+          |> Enum.filter(&(&1 <= length(values)))
+          |> Enum.concat([length(values)])
+          |> Enum.sort()
+          |> Enum.chunk_every(2, 1, :discard)
+          |> Enum.map(fn [from, to] ->
+            piece = Enum.slice(values, from, to - from)
+            Table.new!([{"v", :number, piece}, {"s", :term, piece}])
+          end)
+          |> Enum.reduce(fn piece, acc -> elem(Table.append(acc, piece), 1) end)
+
         sliced = Table.slice(table, start, count)
         assert Table.rows(sliced) == Enum.slice(Table.rows(table), start, count)
         assert Table.size(sliced) == length(Enum.slice(values, start, count))
@@ -492,12 +522,15 @@ defmodule Macaw.Data.TableTest do
     end
 
     @tag verifies: "table-slice"
-    test "row/2 is one row, nil past the end, and a slice shares its parent's binary" do
+    test "row/2 is one row, nil past the end, and a slice shares its parent's chunks" do
       table = Table.new!([{"v", :number, Enum.map(1..100, &(&1 * 1.0))}])
       assert Table.row(table, 0) == %{"v" => 1.0}
       assert Table.row(table, 100) == nil
 
-      %{columns: %{"v" => {:number, {:float64, bin, _}}}} = Table.slice(table, 10, 20)
+      [{chunk, 0, 100}] = Table.chunks(table)
+      assert [{^chunk, 10, 20}] = Table.chunks(Table.slice(table, 10, 20))
+
+      {:float64, bin, _} = storage(Table.slice(table, 10, 20), "v")
       assert byte_size(bin) == 160
       assert :binary.referenced_byte_size(bin) == 800
     end
