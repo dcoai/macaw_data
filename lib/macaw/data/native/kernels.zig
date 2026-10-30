@@ -12,7 +12,7 @@ const e = @import("erl_nif");
 /// The kernels' interface version, read once at start (`Macaw.Data.Native`): the library
 /// answers only when it is the version the Elixir side was compiled against.
 pub fn abi() u32 {
-    return 2;
+    return 3;
 }
 
 // -- buffers --------------------------------------------------------------------------------
@@ -106,10 +106,11 @@ fn YOf(comptime yf: YForm) type {
     return if (yf == .int64) i64 else f64;
 }
 
-/// A view's piece of the ladder partial, as `Ladder.partial/4`'s Elixir walk computes it:
-/// its segments in row order, each run's buckets ascending, each once, every point's row
-/// counted within the view; `:fallback` where the Elixir path would answer with an integer
-/// past 64 bits or raise, so it answers instead.
+/// A view's piece of the ladder partial, as `Ladder.partial/4`'s Elixir walk computes it and
+/// `Ladder.Packed.pack/1` packs it, byte for byte: its segments in row order, each run's
+/// buckets ascending, each once, every point's row counted within the view; `:fallback`
+/// where the Elixir path would answer with an integer past 64 bits or raise, so it answers
+/// instead.
 pub fn ladder(
     xform: u8,
     xdata: beam.term,
@@ -346,60 +347,63 @@ fn Walk(comptime xf: XForm, comptime kind: Kind, comptime yf: YForm) type {
             };
         }
 
-        // -- the terms ------------------------------------------------------------------------
+        // -- the packed piece (`Ladder.Packed`) ------------------------------------------------
 
-        inline fn number(env: beam.env, comptime T: type, v: T) e.ErlNifTerm {
-            return if (T == i64) e.enif_make_int64(env, v) else e.enif_make_double(env, v);
-        }
-
-        fn point(env: beam.env, p: Point) e.ErlNifTerm {
-            var parts = [3]e.ErlNifTerm{ e.enif_make_int64(env, p.row), number(env, S, p.s), number(env, Y, p.y) };
-            return e.enif_make_tuple_from_array(env, &parts, 3);
-        }
-
-        /// A bucket's four points, each row's point built once: a row that is the bucket's
-        /// first and its least, say, is one term in both places, as the walk shares it.
-        fn summary(env: beam.env, bk: Bucket) [4]e.ErlNifTerm {
-            const ps = [4]Point{ bk.first, bk.last, bk.low, bk.high };
-            var terms: [4]e.ErlNifTerm = undefined;
-            for (ps, 0..) |p, j| {
-                terms[j] = for (ps[0..j], 0..) |q, m| {
-                    if (q.row == p.row) break terms[m];
-                } else point(env, p);
-            }
-            return terms;
-        }
-
-        /// The segments as the Elixir walk answers them: `{:run, [{b, {first, last, low,
-        /// high}}]}` and `{:gap, row}`, built from the end so each list is made in one pass.
-        fn build(segments: []const Segment, buckets: []const Bucket) beam.term {
+        /// The piece as `Ladder.Packed.pack/1` writes the walk's segments, byte for byte: a
+        /// header with the points' types, a head per segment, then 88 bytes a bucket. One
+        /// binary, off the process heap past 64 bytes; no term is built a bucket.
+        fn build(segments: []const Segment, buckets: []const Bucket) !beam.term {
             const env = beam.context.env;
-            const run_atom = e.enif_make_atom(env, "run");
-            const gap_atom = e.enif_make_atom(env, "gap");
-            var out = e.enif_make_list(env, 0);
+            const size = packed_header + segments.len * packed_head + buckets.len * packed_bucket;
+            var term: e.ErlNifTerm = undefined;
+            const raw = e.enif_make_new_binary(env, size, &term);
+            if (raw == null) return error.OutOfMemory;
+            const out = raw[0..size];
 
-            var si = segments.len;
-            while (si > 0) {
-                si -= 1;
-                const seg = segments[si];
-                var pair: [2]e.ErlNifTerm = undefined;
-                if (seg.gap) {
-                    pair = .{ gap_atom, e.enif_make_int64(env, seg.row) };
-                } else {
-                    var list = e.enif_make_list(env, 0);
-                    var bi = seg.start + seg.len;
-                    while (bi > seg.start) {
-                        bi -= 1;
-                        const bk = buckets[bi];
-                        var points = summary(env, bk);
-                        var entry = [2]e.ErlNifTerm{ e.enif_make_int64(env, bk.b), e.enif_make_tuple_from_array(env, &points, 4) };
-                        list = e.enif_make_list_cell(env, e.enif_make_tuple_from_array(env, &entry, 2), list);
-                    }
-                    pair = .{ run_atom, list };
-                }
-                out = e.enif_make_list_cell(env, e.enif_make_tuple_from_array(env, &pair, 2), out);
+            // With no bucket there is no point to type, and the walk's packing writes 0, 0.
+            out[0] = 1;
+            out[1] = if (buckets.len == 0 or S == i64) 0 else 1;
+            out[2] = if (buckets.len == 0 or Y == i64) 0 else 1;
+            out[3] = 0;
+            put(u32, out, 4, @intCast(segments.len));
+
+            var at: usize = packed_header;
+            for (segments) |seg| {
+                out[at] = if (seg.gap) 0 else 1;
+                out[at + 1] = 0;
+                out[at + 2] = 0;
+                out[at + 3] = 0;
+                put(u32, out, at + 4, if (seg.gap) seg.row else @intCast(seg.len));
+                at += packed_head;
             }
-            return .{ .v = out };
+
+            for (segments) |seg| {
+                if (seg.gap) continue;
+                for (buckets[seg.start .. seg.start + seg.len]) |bk| {
+                    put(i64, out, at, bk.b);
+                    at += 8;
+                    for ([4]Point{ bk.first, bk.last, bk.low, bk.high }) |p| {
+                        put(u32, out, at, p.row);
+                        putNumber(S, out, at + 4, p.s);
+                        putNumber(Y, out, at + 12, p.y);
+                        at += 20;
+                    }
+                }
+            }
+            return .{ .v = term };
+        }
+
+        inline fn putNumber(comptime T: type, out: []u8, at: usize, v: T) void {
+            if (T == i64) put(i64, out, at, v) else put(u64, out, at, @bitCast(v));
         }
     };
+}
+
+/// `Ladder.Packed`'s sizes: the header, a segment's head and a bucket's record.
+const packed_header: usize = 8;
+const packed_head: usize = 8;
+const packed_bucket: usize = 8 + 4 * (4 + 8 + 8);
+
+inline fn put(comptime T: type, out: []u8, at: usize, v: T) void {
+    std.mem.writeInt(T, out[at..][0..@sizeOf(T)], v, .little);
 }

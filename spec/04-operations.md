@@ -167,7 +167,11 @@ take n: 100 reads only the chunks it returns, its work growing by a step a chunk
   A group's order of first appearance is kept: a group none of whose rows remain is gone, and the groups are ordered by where their first rows read. A group whose first row was removed has its next first row unknown without reading the chunk, so that chunk recomputes.
 - **Recompute otherwise:** a floating-point sum or mean, min and max, M4's extremes, `lttb`'s preselection and every other step recompute that one chunk, once per content digest. Subtraction drifts in floating point, which would break the property that every path gives the same result.
 
-**What a frame costs** (macaw_data#9 item 7). A synthetic frame loop modeled on visualize's (`Macaw.Data.Test.FrameLoop`) holds a live source's 50,000-row window, appends a canonical chunk's worth of readings a frame and trims the oldest, and runs a chart's steps over it: `take n: 100`, `filter`, a `window` then `m4` to 1,000 pixels, a `window` then `lttb` to 1,000 points, and `sum` by series. It runs two ways: recomputed in full, and per chunk through a cache. The default suite states the per-chunk recompute's cost as work, in reductions: its changed chunks cost at most a full run over one chunk's readings, and its whole frame, merges included, at most half the full recompute. A wall-clock run is `@tag :benchmark` (`mix test --only benchmark`) and gates nothing; its results, and the decision on native kernels they inform, are recorded on macaw_data#9. The real loop's number is visualize's to measure. Its pure-Elixir cost is pinned as well (macaw_data#41): at most 1,100,000 reductions a per-chunk frame and 600,000 for its merges alone. **A frame's garbage collection is the caller's to size:** the cache's parts, the ladder's partials above all, are terms on the caller's heap, so a frame process at the default heap collects them over and over, and its wall time is mostly collection; one whose minimum heap holds the cache (`:erlang.spawn_opt/2`'s `min_heap_size`) pays almost none. The benchmark reports both.
+**What a frame costs** (macaw_data#9 item 7). A synthetic frame loop modeled on visualize's (`Macaw.Data.Test.FrameLoop`) holds a live source's 50,000-row window, appends a canonical chunk's worth of readings a frame and trims the oldest, and runs a chart's steps over it: `take n: 100`, `filter`, a `window` then `m4` to 1,000 pixels, a `window` then `lttb` to 1,000 points, and `sum` by series. It runs two ways: recomputed in full, and per chunk through a cache. The default suite states the per-chunk recompute's cost as work, in reductions: its changed chunks cost at most a full run over one chunk's readings, and its whole frame, merges included, at most half the full recompute. A wall-clock run is `@tag :benchmark` (`mix test --only benchmark`) and gates nothing; its results, and the decision on native kernels they inform, are recorded on macaw_data#9. The real loop's number is visualize's to measure. Its pure-Elixir cost is pinned as well (macaw_data#41): at most 1,100,000 reductions a per-chunk frame and 600,000 for its merges alone. **A frame's garbage collection:** the ladder's partials, the bulk of the cache, are packed binaries off the caller's heap (§4.5.3, macaw_data#46), so the frame loop's cache is about 11,000 words of heap (it was about 824,000 words of terms) and a collection no longer copies it. What a frame at the default heap still collects is its own working garbage, the terms a merge builds as it reads; a caller that sizes its frame process's heap (`:erlang.spawn_opt/2`'s `min_heap_size`) pays almost none of that. The benchmark reports both.
+
+```test:operations-cache-frame-heap
+the frame loop's cache, on either path, holds at most 50,000 words on the frame process's heap: the ladder's partials sit beside it as packed binaries
+```
 
 ```test:operations-cache-frame-budget
 the synthetic frame loop's per-chunk frame costs at most 1,100,000 reductions and its merges alone at most 600,000, so a regression in a per-row path fails the default suite
@@ -460,7 +464,7 @@ combining two chunks' partials costs the same reductions whether each holds ten 
 ```
 
 ```test:operations-ladder-walk
-for generated rows on linear, time and log scales, with gaps, repeated and out-of-order x, integer and float readings, and levels below and above 0, a chunk's partial equals one built from the definition; a sorted chunk of integer x and float y costs at most 12 reductions a row, its two columns' decoding included
+for generated rows on linear, time and log scales, with gaps, repeated and out-of-order x, integer and float readings, and levels below and above 0, a chunk's partial equals one built from the definition; a sorted chunk of integer x and float y costs at most 12 reductions a row, its two columns' decoding included, and 1.5 a bucket packing its piece (§4.5.3)
 ```
 
 ```test:operations-ladder-gaps
@@ -471,7 +475,7 @@ a gap on a chunk boundary survives m4 and lttb, which answer under every chunkin
 
 **A chunk's partial is computed by a native kernel where the kernels are loaded** (§1.7, macaw_data#38). `Ladder.partial/4` hands the view to it when both columns are in a form it reads, on a linear or time scale:
 - **x:** int64, float64, timestamp[us] (a UTC, zoned or naive instant's microseconds) or date32. **y:** int64 or float64. Validity is read from each column's bitmap in place, a view's rows counted from its first slot. The `:log` scale, whose `log2` per row must equal `:math.log2/1`, and every other form stay on the Elixir walk.
-- **Its answer is the Elixir walk's piece, term for term:** the same segments, runs and gaps, each run's buckets ascending and each once (a run out of x order sorted by bucket and each bucket's summaries merged, as `summary/2` merges them), and every point's `s` and `y` an integer where the walk's is one and the same float where it is a float. `s` follows `space/3` operation for operation: microseconds over 1,000,000 as a float on a linear scale, days times 86,400.0, a float x times 1,000,000.0 on a time scale.
+- **Its answer is the Elixir walk's piece, byte for byte as packed (§4.5.3):** the same segments, runs and gaps, each run's buckets ascending and each once (a run out of x order sorted by bucket and each bucket's summaries merged, as `summary/2` merges them), and every point's `s` and `y` an integer where the walk's is one and the same float where it is a float. `s` follows `space/3` operation for operation: microseconds over 1,000,000 as a float on a linear scale, days times 86,400.0, a float x times 1,000,000.0 on a time scale.
 - **It hands the view back** (`:fallback`) where the walk would answer with an integer past 64 bits or raise: an x times 1,000,000 past int64, an integer shifted left past it, a float quotient whose floor is past it, a level whose `2^k` is no float's exact power of two. The Elixir walk then answers, so those edges are its own.
 - **Its cost:** the view's columns are never decoded and no bitmap is expanded; the kernel's time is not counted in reductions. A call over at most `Native.sync_rows/0` rows runs on a normal scheduler: a few nanoseconds a row, and at worst, every row its own bucket, about half a millisecond building the answer. A larger view runs on a dirty CPU scheduler.
 
@@ -481,6 +485,20 @@ for generated rows of every x form the kernel reads, on linear and time scales, 
 
 ```test:operations-ladder-native-bound
 a call over sync_rows/0 rows, 8,192, each its own bucket, the largest answer a call builds, takes under 1 ms on a normal scheduler, and a view past sync_rows runs on a dirty scheduler with the same answer
+```
+
+#### 4.5.3 Packed pieces {#operations-ladder-packed}
+
+**A partial's piece is one binary** (macaw_data#38, #46; `Ladder.Packed`), so a partial a caller's cache holds is a few words on its heap and a binary off it, whatever its buckets, and its merge reads buffers. The Elixir walk packs its segments; the native kernel (§4.5.2) writes the same bytes. Little-endian throughout:
+- **A header,** 8 bytes: `1`, then the points' `s` type and `y` type (`0` every one an int64, `1` every one a float64; both `0` with no bucket), a zero byte, and the count of segments (u32).
+- **A head a segment,** in row order, 8 bytes: a gap is `0`, three zero bytes and its first row (u32); a run is `1`, three zero bytes and its count of buckets (u32).
+- **The runs' buckets,** in order, 88 bytes each: the bucket (i64), then its first, last, least and greatest points, each its row (u32), `s` and `y` (8 bytes each, of the header's types).
+- **A piece whose points aren't of one type,** or whose bucket or integer `s` is past int64 (a macaw form's mixed readings, a log scale's far bucket), is `2` followed by the segments in the external term format, every value kept exactly as the walk answered it.
+
+`combine/2` concatenates pieces and reads none; `runs/1` reads each piece once into its buckets as its view's, and `coarsen/2` reads, folds and packs again. A piece read back is the walk's segments, term for term.
+
+```test:operations-ladder-packed-read
+for generated segments of either number type, mixed types, values past int64, gaps and runs, a piece packed and read back is the segments, term for term, and read as a view's it is each gap and bucket with that view
 ```
 
 ### 4.6 sort {#operations-sort}

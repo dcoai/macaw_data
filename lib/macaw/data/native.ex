@@ -21,7 +21,7 @@ defmodule Macaw.Data.Native do
   @key {__MODULE__, :loaded?}
   @elixir {__MODULE__, :elixir}
   # The interface version kernels.zig answers (`abi/0`), so a stale library is not used.
-  @abi 2
+  @abi 3
   @sync_rows 8_192
 
   @doc "Whether the native kernels are built and loaded: decided once, at the application's start."

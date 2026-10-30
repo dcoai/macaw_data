@@ -79,11 +79,25 @@ defmodule Macaw.Data.Operations.FrameLoopTest do
     end
   end
 
+  describe "the cache a frame holds" do
+    @tag verifies: "operations-cache-frame-heap"
+    test "sits off the frame process's heap: at most 50,000 words of it, packed partials beside it" do
+      # The ladder's partials were about 824,000 words of terms (macaw_data#46); packed,
+      # each is a binary off the heap, so the cache is its keys and the other steps' parts.
+      # A partial grown back into terms fails here. Both paths pack the same bytes.
+      for path <- [& &1.(), &Native.elixir/1] do
+        {_window, cache} = path.(fn -> loop(3) end)
+        words = :erts_debug.flat_size(cache)
+        assert words <= 50_000, "the frame loop's cache holds #{words} words on the heap"
+      end
+    end
+  end
+
   describe "the wall clock" do
     defp next_of(window), do: FrameLoop.next(window)
 
-    # A frame process's minimum heap that holds the frame loop's cache (about 824,000
-    # words) with room for a frame's garbage (macaw_data#41).
+    # A frame process's minimum heap with room for a frame's working garbage (macaw_data#41);
+    # the cache itself is about 11,000 words, its partials packed off the heap (#46).
     @heap_words 4_000_000
 
     # macaw_data#9 item 7: stated, not gated. `mix test --only benchmark`.

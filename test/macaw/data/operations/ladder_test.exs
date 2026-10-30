@@ -8,9 +8,10 @@ defmodule Macaw.Data.Operations.LadderTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
-  alias Macaw.Data.{Operations, Reduce, Table}
+  alias Macaw.Data.{Native, Operations, Reduce, Table}
   alias Macaw.Data.Operations.Step
   alias Macaw.Data.Operations.Transforms.{Ladder, Lttb, M4}
+  alias Macaw.Data.Operations.Transforms.Ladder.Packed
   alias Macaw.Data.Test.{Storage, Work}
 
   @registry Operations.registry()
@@ -333,6 +334,46 @@ defmodule Macaw.Data.Operations.LadderTest do
       end
     end
 
+    # A merged partial's runs with every ref a row of the whole input: view `v`'s row `r`
+    # is the rows of the views before it plus `r`.
+    defp global_runs({_k, views, _pieces} = merged) do
+      offsets = views |> Enum.scan(0, fn {_c, _f, n}, at -> at + n end) |> then(&[0 | &1])
+      at = fn {v, r} -> Enum.at(offsets, v) + r end
+      point = fn v, {r, s, y} -> {at.(if v, do: {v, r}, else: r), s, y} end
+
+      for segment <- Ladder.runs(merged) do
+        case segment do
+          {:gap, ref} ->
+            {:gap, at.(ref)}
+
+          {:run, buckets} ->
+            {:run,
+             for {b, {v, {f, l, lo, hi}}} <- buckets do
+               {b, {point.(v, f), point.(v, l), point.(v, lo), point.(v, hi)}}
+             end}
+        end
+      end
+    end
+
+    @tag verifies: "operations-ladder-merge"
+    test "a merged partial reads as one chunk's: runs and gaps joined, a straddled bucket merged" do
+      rows = for {t, v} <- wave(900), do: {t, if(rem(t, 97) in [5, 6], do: nil, else: v)}
+      input = table(rows)
+      bound = %{x: "t", y: "v", x_name: "t", y_name: "v", kind: :linear}
+
+      for k <- [0, 3, 6], size <- [7, 64, 211, 450] do
+        merged =
+          input
+          |> Storage.chunked(size)
+          |> Table.chunks()
+          |> Enum.map(&Ladder.partial(&1, bound, k, "m4"))
+          |> Enum.reduce(&Ladder.combine(&2, &1))
+
+        [one] = input |> Storage.chunked(:one) |> Table.chunks()
+        assert global_runs(merged) == global_runs(Ladder.partial(one, bound, k, "m4"))
+      end
+    end
+
     @tag verifies: "operations-ladder-merge"
     property "rows whose x is out of order answer m4 and lttb as over one chunk" do
       check all(
@@ -443,20 +484,26 @@ defmodule Macaw.Data.Operations.LadderTest do
         end
 
         assert Ladder.partial(view, bound, k, "m4") ==
-                 {k, [view], [{0, defined(xs, ys, bound, k)}]}
+                 {k, [view], [{0, Packed.pack(defined(xs, ys, bound, k))}]}
       end
     end
 
     @tag verifies: "operations-ladder-walk"
-    test "a sorted chunk of integer x and float y costs at most 12 reductions a row" do
+    test "a sorted chunk of integer x and float y costs at most 12 reductions a row, and 1.5 a bucket packed" do
       n = Table.chunk_rows()
       input = table(for i <- 0..(n - 1), do: {i * 3, :math.sin(i / 50) * 100})
       [view] = Table.chunks(input)
       bound = %{x: "t", y: "v", x_name: "t", y_name: "v", kind: :linear}
 
+      # The Elixir walk's work, whatever the kernels: at level 0 every row is a bucket of
+      # its own, the most packing a chunk does.
       for k <- [0, 4, 9] do
-        {reductions, _} = Work.reductions(fn -> Ladder.partial(view, bound, k, "m4") end)
-        assert reductions <= 12 * n, "#{reductions} reductions for #{n} rows at level #{k}"
+        {reductions, {_k, _views, [{0, piece}]}} =
+          Work.reductions(fn -> Native.elixir(fn -> Ladder.partial(view, bound, k, "m4") end) end)
+
+        buckets = for {:run, run} <- Packed.unpack(piece), reduce: 0, do: (b -> b + length(run))
+        budget = 12 * n + div(3 * buckets, 2)
+        assert reductions <= budget, "#{reductions} reductions for #{n} rows at level #{k}"
       end
     end
   end

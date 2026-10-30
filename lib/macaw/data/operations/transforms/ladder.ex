@@ -18,7 +18,8 @@ defmodule Macaw.Data.Operations.Transforms.Ladder do
   - **A partial** holds a piece a view, in chunk order: the view's runs of rows, split by
     gaps (a row whose x or y is `nil`, each run of gap rows kept as its first), each run
     its buckets **ascending by bucket**, per bucket the first, the last, the least and the
-    greatest point, each `{row, s, y}`. Partials merge associatively in chunk order by
+    greatest point, each `{row, s, y}`, packed into one binary a piece (`Ladder.Packed`),
+    off the process heap, so a cache of partials costs its holder a few words each. Partials merge associatively in chunk order by
     concatenation (`combine/2`), so a merge costs the chunks, not the buckets; the chunk
     edges are joined once, when the merged partial is read (`runs/1`): a bucket
     straddling an edge merges its two summaries and a gap on an edge stays one gap. A
@@ -33,6 +34,7 @@ defmodule Macaw.Data.Operations.Transforms.Ladder do
   alias Macaw.Data.Table
   alias Macaw.Data.Table.Chunk
   alias Macaw.Data.Operations.Transforms
+  alias Macaw.Data.Operations.Transforms.Ladder.Packed
 
   @kinds [:linear, :time, :log]
   @epoch_naive ~N[1970-01-01 00:00:00]
@@ -52,11 +54,15 @@ defmodule Macaw.Data.Operations.Transforms.Ladder do
   @typedoc "A run's buckets, ascending by bucket, each once."
   @type run :: [{integer(), summary()}]
 
+  @typedoc "A view's segments in row order: its runs, and each run of gap rows as its first row."
+  @type segments :: [{:run, run()} | {:gap, non_neg_integer()}]
+
   @typedoc """
-  One view's segments in row order (its runs, and each run of gap rows as its first row),
-  under the view's index among the partial's views.
+  One view's segments packed into one binary (`Ladder.Packed`), under the view's index
+  among the partial's views: off the process heap, so a cache of partials costs its holder
+  a few words a piece, whatever the buckets.
   """
-  @type piece :: {non_neg_integer(), [{:run, run()} | {:gap, non_neg_integer()}]}
+  @type piece :: {non_neg_integer(), binary()}
 
   @typedoc """
   A bucket's summary as `runs/1` reads it, `{view, summary}`: its points are rows of that
@@ -216,7 +222,7 @@ defmodule Macaw.Data.Operations.Transforms.Ladder do
   def partial(view, bound, k, op) do
     case native(view, bound, k) do
       :fallback -> partial_elixir(view, bound, k, op)
-      segments -> {k, [view], [{0, segments}]}
+      piece -> {k, [view], [{0, piece}]}
     end
   end
 
@@ -227,7 +233,8 @@ defmodule Macaw.Data.Operations.Transforms.Ladder do
   def partial_elixir(view, %{x_name: x_name, y_name: y_name, kind: kind} = bound, k, op) do
     xs = Transforms.view_values(view, x_name)
     ys = Transforms.view_values(view, y_name)
-    {k, [view], [{0, walk(xs, ys, 0, {kind, k, pow2(k), bound, op}, nil, nil, [])}]}
+    segments = walk(xs, ys, 0, {kind, k, pow2(k), bound, op}, nil, nil, [])
+    {k, [view], [{0, Packed.pack(segments)}]}
   end
 
   # The piece by the native kernel (spec/04 §4.5.2), reading the view's x and y buffers in
@@ -409,12 +416,16 @@ defmodule Macaw.Data.Operations.Transforms.Ladder do
   defp coarsen_pieces(pieces, k, to) do
     d = Integer.pow(2, to - k)
 
-    for {v, segments} <- pieces do
-      {v,
-       Enum.map(segments, fn
-         {:run, [{b, s} | rest]} -> {:run, fold_run(rest, d, Integer.floor_div(b, d), s, [])}
-         gap -> gap
-       end)}
+    for {v, piece} <- pieces do
+      segments =
+        piece
+        |> Packed.unpack()
+        |> Enum.map(fn
+          {:run, [{b, s} | rest]} -> {:run, fold_run(rest, d, Integer.floor_div(b, d), s, [])}
+          gap -> gap
+        end)
+
+      {v, Packed.pack(segments)}
     end
   end
 
@@ -440,37 +451,40 @@ defmodule Macaw.Data.Operations.Transforms.Ladder do
   @spec runs(partial()) :: [{:gap, ref()} | {:run, [{integer(), located()}]}]
   def runs({_k, _views, pieces}) do
     pieces
-    |> Enum.reduce([], fn {v, segments}, acc -> Enum.reduce(segments, acc, &join(&1, v, &2)) end)
+    |> Enum.reduce([], fn {v, piece}, acc ->
+      piece |> Packed.located(v) |> Enum.reduce(acc, &join/2)
+    end)
     |> Enum.reduce([], fn
       {:run, frags}, out -> [{:run, run_buckets(frags)} | out]
       gap, out -> [gap | out]
     end)
   end
 
-  # Segments joined newest first; a run's fragments, `{view, buckets}`, newest first too.
-  defp join({:run, run}, v, [{:run, frags} | acc]), do: [{:run, [{v, run} | frags]} | acc]
-  defp join({:run, run}, v, acc), do: [{:run, [{v, run}]} | acc]
-  defp join({:gap, _row}, _v, [{:gap, _} | _] = acc), do: acc
-  defp join({:gap, row}, v, acc), do: [{:gap, {v, row}} | acc]
+  # Segments joined newest first, each read as its view's (`Packed.located/2`); a run's
+  # fragments, its located buckets, newest first too.
+  defp join({:run, run}, [{:run, frags} | acc]), do: [{:run, [run | frags]} | acc]
+  defp join({:run, run}, acc), do: [{:run, [run]} | acc]
+  defp join({:gap, _ref}, [{:gap, _} | _] = acc), do: acc
+  defp join({:gap, _ref} = gap, acc), do: [gap | acc]
 
-  defp run_buckets([{v, run}]), do: for({b, s} <- run, do: {b, {v, s}})
+  defp run_buckets([run]), do: run
 
   defp run_buckets(frags) do
     {entries, ordered?} =
       frags
       |> Enum.reverse()
-      |> Enum.reduce({[], true}, fn {v, run}, acc -> Enum.reduce(run, acc, &add(v, &1, &2)) end)
+      |> Enum.reduce({[], true}, fn run, acc -> Enum.reduce(run, acc, &add/2) end)
 
     if ordered?, do: Enum.reverse(entries), else: ascending(entries, &located/2)
   end
 
-  defp add(v, {b, s}, {[{b, held} | rest], ordered?}),
-    do: {[{b, located(held, {v, s})} | rest], ordered?}
+  defp add({b, s}, {[{b, held} | rest], ordered?}),
+    do: {[{b, located(held, s)} | rest], ordered?}
 
-  defp add(v, {b, s}, {[{last, _} | _] = entries, ordered?}),
-    do: {[{b, {v, s}} | entries], ordered? and b > last}
+  defp add({b, _s} = entry, {[{last, _} | _] = entries, ordered?}),
+    do: {[entry | entries], ordered? and b > last}
 
-  defp add(v, {b, s}, {[], ordered?}), do: {[{b, {v, s}}], ordered?}
+  defp add(entry, {[], ordered?}), do: {[entry], ordered?}
 
   @doc """
   Two located summaries of one bucket merged (`summary/2`): within one view they stay
