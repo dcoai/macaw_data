@@ -37,6 +37,7 @@ defmodule Macaw.Data.OperationsTest do
                  class: 1,
                  combine: 3,
                  finish: 3,
+                 keyed: 1,
                  prepare: 3,
                  reads: 0,
                  reduces: 0,

@@ -3,7 +3,7 @@ defmodule Macaw.Data.Operations.ReducersTest do
   # declares reduces/0, lttb by default, found in the registry finishing is given.
   use ExUnit.Case, async: true
 
-  alias Macaw.Data.{Delivery, Operations, Reduce, Schema, Table}
+  alias Macaw.Data.{Delivery, Operations, Schema, Table}
   alias Macaw.Data.Source.{Description, Finish, Request}
 
   @schema Schema.new!(%{t: %{type: :number, window: true}, v: %{type: :number}})
@@ -24,14 +24,19 @@ defmodule Macaw.Data.Operations.ReducersTest do
   defp ts(delivery), do: Enum.map(Delivery.rows(delivery), & &1.t)
 
   @tag verifies: "operations-reducers-named"
-  test "lttb is the default, and m4 reduces when named, as Reduce picks" do
+  test "lttb is the default, and m4 reduces when named, as the step picks" do
+    picks = fn node -> @rows |> then(&Operations.apply!(Operations.registry(), [node], &1)) end
     lttb = finish([])
-    assert ts(lttb) == @rows |> Reduce.lttb(20, &{&1.t, &1.v}) |> Enum.map(& &1.t)
+
+    assert ts(lttb) ==
+             Enum.map(Table.rows(picks.(%{op: "lttb", fields: [:t, :v], n: 20})), & &1.t)
+
     assert lttb.served.reduced_by == :runtime
     assert ts(finish(reduce: "lttb")) == ts(lttb)
+    assert length(ts(lttb)) <= 20
 
     m4 = finish(reduce: "m4")
-    assert ts(m4) == @rows |> Reduce.m4(5, &{&1.t, &1.v}) |> Enum.map(& &1.t)
+    assert ts(m4) == Enum.map(Table.rows(picks.(%{op: "m4", fields: [:t, :v], width: 5})), & &1.t)
     assert ts(finish(reduce: :m4)) == ts(m4)
     assert Table.size(m4 |> Delivery.table!()) <= 20
   end

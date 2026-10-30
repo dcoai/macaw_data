@@ -100,7 +100,14 @@ defmodule Macaw.Data.Transform do
   """
   @callback finish(node_map(), term(), map()) :: Table.t()
 
-  @optional_callbacks reduces: 0,
+  @doc """
+  The node's options a chunk's part depends on, when not all: what its step key holds in
+  place of the whole node. `m4` and `lttb` leave out their count, which only the merge reads.
+  """
+  @callback keyed(node_map()) :: map()
+
+  @optional_callbacks keyed: 1,
+                      reduces: 0,
                       prepare: 3,
                       class: 1,
                       reads: 0,

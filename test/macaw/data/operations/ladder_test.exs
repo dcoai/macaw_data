@@ -1,0 +1,311 @@
+defmodule Macaw.Data.Operations.LadderTest do
+  @moduledoc """
+  `m4` and `lttb` on the bucket ladder (spec/04 §4.4, §4.5, §4.5.1; macaw_data#9 §5, #22):
+  buckets `2^k` wide from origin 0 in the scale's space, levels with hysteresis, partials
+  that merge across chunk edges and fold into coarser levels, and `lttb` as MinMaxLTTB
+  held to the exact `Reduce.lttb/3` within its tolerance.
+  """
+  use ExUnit.Case, async: true
+  use ExUnitProperties
+
+  alias Macaw.Data.{Operations, Reduce, Table}
+  alias Macaw.Data.Operations.Step
+  alias Macaw.Data.Operations.Transforms.{Ladder, Lttb, M4}
+  alias Macaw.Data.Test.Storage
+
+  @registry Operations.registry()
+
+  defp checked(node) do
+    {:ok, [checked]} = Operations.validate(@registry, [node], %{})
+    checked
+  end
+
+  defp run(table, node, context \\ %{}), do: Operations.apply!(@registry, [node], table, context)
+
+  defp table(rows, type \\ :number) do
+    Table.new!([
+      {"t", type, Enum.map(rows, &elem(&1, 0))},
+      {"v", :number, Enum.map(rows, &elem(&1, 1))},
+      {"i", :number, Enum.to_list(0..(length(rows) - 1)//1)}
+    ])
+  end
+
+  defp wave(n), do: for(i <- 0..(n - 1), do: {i, :math.sin(i / 37) * 10 + rem(i * 7919, 13)})
+
+  describe "levels (spec/04 §4.5.1)" do
+    @tag verifies: "operations-ladder-levels"
+    test "the level is the coarsest whose bucket is at most the ideal width, kept within a factor of 2" do
+      assert Ladder.level(8.0, nil) == 3
+      assert Ladder.level(7.99, nil) == 2
+      assert Ladder.level(0.3, nil) == -2
+      assert Ladder.level(1.0e9, nil) == 29
+      assert Ladder.level(nil, nil) == 0
+      assert Ladder.level(nil, 4) == 4
+
+      # Hysteresis: 2^2 is within a factor of 2 of 7.99 and of 8.0; 2^5 is not.
+      assert Ladder.level(8.0, 2) == 2
+      assert Ladder.level(15.9, 3) == 3
+      assert Ladder.level(8.0, 5) == 3
+      assert Ladder.level(4.0, 3) == 3
+      assert Ladder.level(1.9, 3) == 0
+
+      assert Ladder.bucket(17, 3) == 2
+      assert Ladder.bucket(-1, 3) == -1
+      assert Ladder.bucket(17, -1) == 34
+      assert Ladder.bucket(2.75, -2) == 11
+    end
+
+    @tag verifies: "operations-ladder-levels"
+    test "a span oscillating around a power of two keeps one level, and unchanged chunks keep their keys" do
+      node = checked(%{op: "m4", fields: ["t", "v"], width: 10})
+      rows = wave(4_000)
+
+      # 10 columns over a span near 640: a quarter pixel near 16, level 4 at first (650).
+      frames =
+        for last <- [650, 630, 660, 625, 645, 638] do
+          rows |> Enum.take(last + 1) |> table() |> Storage.chunked(64)
+        end
+
+      {levels, keys} =
+        Enum.map_reduce(frames, nil, fn frame, previous ->
+          context = if previous, do: %{level: previous}, else: %{}
+          parts = Step.parts(M4, node, frame, context)
+          level = hd(parts).context.level
+          {{level, Enum.map(parts, & &1.key)}, level}
+        end)
+        |> elem(0)
+        |> Enum.unzip()
+
+      assert Enum.uniq(levels) == [4]
+
+      # Each frame's whole 64-row chunks keep the keys they had a frame before.
+      for [a, b] <- Enum.chunk_every(keys, 2, 1, :discard) do
+        common = min(length(a), length(b)) - 1
+        assert Enum.take(a, common) == Enum.take(b, common)
+      end
+
+      # Without the previous level, the frames would move between levels 4 and 3.
+      assert Ladder.level(650 / 40, nil) == 4
+      assert Ladder.level(630 / 40, nil) == 3
+    end
+
+    @tag verifies: "operations-ladder-levels"
+    test "a zoom within a level keeps every key, and a zoom out folds finer partials exactly" do
+      frame = wave(3_000) |> table() |> Storage.chunked(256)
+
+      keys = fn width ->
+        Enum.map(
+          Step.parts(M4, checked(%{op: "m4", fields: ["t", "v"], width: width}), frame, %{
+            level: 5
+          }),
+          & &1.key
+        )
+      end
+
+      assert keys.(20) == keys.(24)
+
+      bound = M4.bind(checked(%{op: "m4", fields: ["t", "v"], width: 20}), frame, %{})
+
+      for {chunk, first, count} = view <- Table.chunks(frame),
+          {from, to} <- [{2, 4}, {-1, 3}, {3, 3}] do
+        _ = {chunk, first, count}
+        fine = Ladder.partial(view, bound, from, "m4")
+        assert Ladder.coarsen(fine, to) == Ladder.partial(view, bound, to, "m4")
+      end
+
+      # Partials at two levels merge at the coarser.
+      [a, b | _] = Table.chunks(frame)
+
+      assert Ladder.combine(Ladder.partial(a, bound, 2, "m4"), Ladder.partial(b, bound, 4, "m4")) ==
+               Ladder.combine(
+                 Ladder.partial(a, bound, 4, "m4"),
+                 Ladder.partial(b, bound, 4, "m4")
+               )
+    end
+  end
+
+  describe "m4 on the ladder (spec/04 §4.5)" do
+    # Exact M4 over the columns each bucket's start lies in: a run's first, last, least and
+    # greatest rows per column, earliest on a tie, deduplicated, in input order.
+    defp shifted_m4(rows, bound, width) do
+      %{extent: {lo, hi}, level: k} = bound
+
+      column = fn s ->
+        s
+        |> Ladder.bucket(k)
+        |> Kernel.*(Ladder.pow2(k))
+        |> Kernel.-(lo)
+        |> Kernel./(hi - lo)
+        |> Kernel.*(width)
+        |> floor()
+        |> max(0)
+        |> min(width - 1)
+      end
+
+      rows
+      |> Enum.with_index()
+      |> Enum.group_by(fn {{s, _y}, _i} -> column.(s) end)
+      |> Enum.flat_map(fn {_c, members} ->
+        first = hd(members)
+        last = List.last(members)
+        low = Enum.min_by(members, fn {{_s, y}, _i} -> y end)
+        high = Enum.max_by(members, fn {{_s, y}, _i} -> y end)
+        Enum.map([first, last, low, high], &elem(&1, 1))
+      end)
+      |> Enum.uniq()
+      |> Enum.sort()
+    end
+
+    @tag verifies: "operations-m4-ladder"
+    test "linear, time and log: exact M4 over columns moved to the bucket edge, within a bucket" do
+      raw = wave(5_000)
+
+      for {scale, rows, type, space} <- [
+            {:linear, raw, :number, fn t -> t end},
+            {:time,
+             Enum.map(raw, fn {t, v} ->
+               {DateTime.add(~U[2026-01-01 00:00:00Z], t * 1_000, :millisecond), v}
+             end), :time, &DateTime.to_unix(&1, :microsecond)},
+            {:log, Enum.map(raw, fn {t, v} -> {t + 1, v} end), :number, &:math.log2/1}
+          ] do
+        input = table(rows, type)
+        node = checked(%{op: "m4", fields: ["t", "v"], width: 37})
+        bound = M4.bind(node, input, %{scale: scale})
+        {lo, hi} = bound.extent
+        assert Ladder.pow2(bound.level) <= (hi - lo) / 37 / 4
+
+        expected = shifted_m4(Enum.map(rows, fn {t, v} -> {space.(t), v} end), bound, 37)
+        kept = run(input, %{op: "m4", fields: ["t", "v"], width: 37}, %{scale: scale})
+        assert Table.column(kept, "i") == expected
+
+        for size <- [7, 1_000] do
+          assert Table.equal?(
+                   run(
+                     Storage.chunked(input, size),
+                     %{op: "m4", fields: ["t", "v"], width: 37},
+                     %{scale: scale}
+                   ),
+                   kept
+                 )
+        end
+      end
+    end
+
+    @tag verifies: "operations-m4-ladder"
+    test "where the buckets' edges are the pixels', it is Reduce.m4 itself, however chunked" do
+      rows = wave(1_025)
+      input = table(rows)
+
+      expected =
+        rows
+        |> Enum.with_index()
+        |> Reduce.m4(32, fn {{t, v}, _i} -> {t, v} end)
+        |> Enum.map(&elem(&1, 1))
+
+      for size <- [1, 7, 100, :one] do
+        kept = run(Storage.chunked(input, size), %{op: "m4", fields: ["t", "v"], width: 32})
+        assert Table.column(kept, "i") == expected
+      end
+    end
+  end
+
+  describe "lttb as MinMaxLTTB (spec/04 §4.4)" do
+    # The mean absolute error of a reduced line read at every input x, over the y extent.
+    defp error(rows, kept) do
+      {lo, hi} = rows |> Enum.map(&elem(&1, 1)) |> Enum.min_max()
+      segments = kept |> Enum.chunk_every(2, 1, :discard) |> List.to_tuple()
+
+      {sum, _} =
+        Enum.reduce(rows, {0, 0}, fn {x, y}, {sum, s} ->
+          s = advance(segments, s, x)
+          [{x0, y0}, {x1, y1}] = elem(segments, s)
+          at = if x1 == x0, do: y0, else: y0 + (y1 - y0) * (x - x0) / (x1 - x0)
+          {sum + abs(y - at), s}
+        end)
+
+      sum / length(rows) / (hi - lo)
+    end
+
+    defp advance(segments, s, x) do
+      [_, {x1, _}] = elem(segments, s)
+      if x > x1 and s + 1 < tuple_size(segments), do: advance(segments, s + 1, x), else: s
+    end
+
+    defp series_gen do
+      gen all(
+            kind <- member_of([:sine, :walk, :spikes]),
+            seed <- integer(1..10_000),
+            count <- integer(600..3_000)
+          ) do
+        :rand.seed(:exsss, {seed, seed, seed})
+
+        case kind do
+          :sine ->
+            for i <- 0..(count - 1), do: {i, :math.sin(i / 90) * 10 + :rand.uniform() * 3}
+
+          :walk ->
+            Enum.scan(0..(count - 1), {0, 0.0}, fn i, {_, y} -> {i, y + :rand.normal()} end)
+
+          :spikes ->
+            for i <- 0..(count - 1),
+                do: {i, if(:rand.uniform() < 0.01, do: 40.0, else: :rand.uniform())}
+        end
+      end
+    end
+
+    @tag verifies: "operations-lttb-minmax"
+    property "within twice the exact algorithm's error plus 0.005, at most n rows, ends kept" do
+      check all(rows <- series_gen(), n <- member_of([20, 60, 150]), max_runs: 25) do
+        input = table(rows)
+        kept = run(input, %{op: "lttb", fields: ["t", "v"], n: n})
+        picked = Enum.map(Table.column(kept, "i"), &Enum.at(rows, &1))
+        exact = Reduce.lttb(rows, n)
+
+        assert error(rows, picked) <= 2 * error(rows, exact) + 0.005
+        assert Table.size(kept) <= n
+        assert hd(picked) == hd(rows) and List.last(picked) == List.last(rows)
+
+        for size <- [7, 500] do
+          assert Table.equal?(
+                   run(Storage.chunked(input, size), %{op: "lttb", fields: ["t", "v"], n: n}),
+                   kept
+                 )
+        end
+      end
+    end
+
+    @tag verifies: "operations-lttb-minmax"
+    test "the same rows every run, and n or fewer rows come back whole" do
+      input = table(wave(2_000))
+      node = %{op: "lttb", fields: ["t", "v"], n: 100}
+      assert Table.equal?(run(input, node), run(input, node))
+      assert Table.size(run(input, node)) == 100
+
+      small = table(wave(40))
+      assert Table.equal?(run(small, %{node | n: 40}), small)
+    end
+  end
+
+  describe "gaps at chunk edges (spec/04 §4.5.1)" do
+    @tag verifies: "operations-ladder-gaps"
+    test "a gap on a chunk boundary survives m4 and lttb, as over one chunk" do
+      # Rows 100 and 101 are a gap: 100 ends a chunk of 101 rows, 101 starts the next.
+      rows = for {t, v} <- wave(400), do: {t, if(t in [100, 101], do: nil, else: v)}
+      input = table(rows)
+
+      for node <- [
+            %{op: "m4", fields: ["t", "v"], width: 20},
+            %{op: "lttb", fields: ["t", "v"], n: 30}
+          ] do
+        whole = run(Storage.chunked(input, :one), node)
+        gaps = for {nil, i} <- Enum.zip(Table.column(whole, "v"), Table.column(whole, "i")), do: i
+        assert gaps == [100]
+
+        for size <- [101, 100, 7, 1] do
+          assert Table.equal?(run(Storage.chunked(input, size), node), whole),
+                 "#{node.op} at #{size}"
+        end
+      end
+    end
+  end
+end

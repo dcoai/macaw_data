@@ -276,13 +276,14 @@ defmodule Macaw.Data.Operations.TransformsTest do
     end
 
     @tag verifies: "operations-lttb-shape"
-    test "lttb is Reduce.lttb/3 over the two columns, keeping whole rows" do
+    test "lttb keeps the ends and at most n whole rows of the two columns" do
       rows = wave(1_000)
       kept = run(%{op: "lttb", fields: [:t, :v], n: 50}, rows)
 
-      assert kept == Reduce.lttb(rows, 50, &{&1.t, &1.v})
       assert length(kept) == 50
+      assert hd(kept) == hd(rows) and List.last(kept) == List.last(rows)
       assert Enum.all?(kept, &(&1 in rows))
+      assert kept == Enum.filter(rows, &(&1 in kept))
       assert run(%{op: "lttb", fields: [:t, :v], n: 20}, wave(20)) == wave(20)
       agrees(%{op: "lttb", fields: [:t, :v], n: 10}, rows)
     end
@@ -300,13 +301,13 @@ defmodule Macaw.Data.Operations.TransformsTest do
     end
 
     @tag verifies: "operations-m4-columns"
-    test "m4 is Reduce.m4/3 over the two columns, every column's extremes kept" do
-      rows = wave(1_000)
+    test "m4 keeps every column's extremes where the buckets' edges are the pixels'" do
+      # t over [0, 960] in 30 columns: a pixel is 32 wide, a bucket 8, so their edges meet.
+      rows = wave(961)
       kept = run(%{op: "m4", fields: [:t, :v], width: 30}, rows)
       assert kept == Reduce.m4(rows, 30, &{&1.t, &1.v})
 
-      # Each of the 30 columns over the extent of t keeps its least and greatest reading.
-      column = fn row -> min(29, floor(row.t / 999 * 30)) end
+      column = fn row -> min(29, floor(row.t / 32)) end
       by_column = Enum.group_by(kept, column)
 
       for {c, members} <- Enum.group_by(rows, column) do
@@ -329,15 +330,16 @@ defmodule Macaw.Data.Operations.TransformsTest do
     end
 
     @tag verifies: ["operations-lttb-shape", "operations-m4-columns"]
-    test "a time column reads in seconds, as window reads one" do
+    test "a time column under a linear scale reads in seconds, as window reads one" do
       epoch = ~U[2026-01-01 00:00:00Z]
       timed = for %{t: t} = row <- wave(500), do: %{row | t: DateTime.add(epoch, t)}
       ids = fn rows -> Enum.map(rows, & &1.id) end
+      linear = %{scale: :linear}
 
-      assert ids.(run(%{op: "lttb", fields: [:t, :v], n: 40}, timed)) ==
+      assert ids.(run(%{op: "lttb", fields: [:t, :v], n: 40}, timed, linear)) ==
                ids.(run(%{op: "lttb", fields: [:t, :v], n: 40}, wave(500)))
 
-      assert ids.(run(%{op: "m4", fields: [:t, :v], width: 25}, timed)) ==
+      assert ids.(run(%{op: "m4", fields: [:t, :v], width: 25}, timed, linear)) ==
                ids.(run(%{op: "m4", fields: [:t, :v], width: 25}, wave(500)))
     end
 

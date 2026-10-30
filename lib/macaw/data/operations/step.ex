@@ -21,8 +21,9 @@ defmodule Macaw.Data.Operations.Step do
     rows at those indexes, every column gathered (`Macaw.Data.Table.Chunk.gather/5`).
 
   **The step key** of a chunk is the step's identity (the kernel's digest of its module
-  and checked node, as `Macaw.Data.Operations.step_digest/2`), the context as it resolved
-  for the chunk, and the run of the chunk the view reads when it is not the whole chunk.
+  and checked node, as `Macaw.Data.Operations.step_digest/2`, or of the options its parts
+  depend on when it names them, `keyed/1`), the context as it resolved for the chunk, and
+  the run of the chunk the view reads when it is not the whole chunk.
   So a key changes only when what the chunk's part depends on changes: `window` keys a
   chunk wholly inside it without `now`. A cache keys a part by
   `{Chunk.id/1, Chunk.version/1, step key}` (spec/01 §1.1.3); a gathered output chunk's id
@@ -62,7 +63,7 @@ defmodule Macaw.Data.Operations.Step do
     table = warmed(table)
     parts = parts(module, node, table, context)
     partials = Enum.map(parts, &chunk(module, node, &1))
-    merge(module, node, partials, table, Enum.map(parts, & &1.key))
+    merge(module, node, partials, table, Enum.map(parts, & &1.key), context)
   end
 
   @doc """
@@ -82,7 +83,8 @@ defmodule Macaw.Data.Operations.Step do
         do: module.bind(node, table, declared),
         else: declared
 
-    identity = Document.digest(%{"module" => module, "node" => node})
+    keyed = if function_exported?(module, :keyed, 1), do: module.keyed(node), else: node
+    identity = Document.digest(%{"module" => module, "node" => keyed})
 
     {parts, _at} =
       Enum.map_reduce(views, 0, fn {chunk, first, count} = view, at ->
@@ -133,10 +135,11 @@ defmodule Macaw.Data.Operations.Step do
     (`sorted/1`);
   - **a combine:** folded in chunk order by the step's `combine/3`, associative, so any
     grouping of the same partials gives the same table, then answered by its `finish/3`,
-    given the input and the output's step key: the step's identity over the parts' keys.
+    given the input, the output's step key (the step's identity over the parts' keys) and
+    the context it declares, as the parts were given it.
   """
-  @spec merge(module(), map(), [term()], Table.t(), [term()]) :: Table.t()
-  def merge(module, node, partials, %Table{} = input, keys \\ []) do
+  @spec merge(module(), map(), [term()], Table.t(), [term()], map()) :: Table.t()
+  def merge(module, node, partials, %Table{} = input, keys \\ [], context \\ %{}) do
     case module.class(node) do
       :row ->
         {:ok, table} =
@@ -152,7 +155,8 @@ defmodule Macaw.Data.Operations.Step do
           end
 
         identity = Document.digest(%{"module" => module, "node" => node})
-        module.finish(node, merged, %{input: input, key: {identity, keys}})
+        declared = Map.take(context, module.reads())
+        module.finish(node, merged, %{input: input, key: {identity, keys}, context: declared})
     end
   end
 

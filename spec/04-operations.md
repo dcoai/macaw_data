@@ -34,7 +34,7 @@ Each behavior is a module's declaration of what it reads and what it answers, so
 | `run(node, table, context) :: table` | the step: the table after it |
 | `reduces() :: {String.t(), pos_integer()}` *(optional)* | a **reducer**: the option holding the target count, and the rows each unit of it keeps at most (`lttb`: `{"n", 1}`; `m4`: `{"width", 4}`), so a budget can name it (§7) |
 | `prepare(nodes, table, context) :: term()` *(optional)* | computed once per design and shared by every mark that reads it (a force layout's positions), passed to `run/3` in the context under `prepared`; the drawer's, never called here |
-| `class/1`, `reads/0`, `bind/3`, `resolve/3`, `chunk/3` *(optional)* | a **column-native step**'s class, the context it reads and its part per chunk (§1.4) |
+| `class/1`, `reads/0`, `bind/3`, `resolve/3`, `chunk/3`, `keyed/1`, `combine/3`, `finish/3` *(optional)* | a **column-native step**'s class, the context it reads, its part per chunk and its merge (§1.4) |
 
 `run/3` is given **the node checked** (§3.1): its keys strings, each of the op's options present with its default filled in, an enum value its declared atom, a frame-bound value resolved to a number. `outputs/2` is given the same node. `outputs/2` holds for `run/3`: for every fixture of the op's tests, the columns `run/3` answers are, by name and type, the ones `outputs/2` names.
 
@@ -102,12 +102,13 @@ A column-native step declares, beside §1.1's callbacks (each optional, together
 | `bind(node, table, context) :: map()` *(optional)* | the declared context resolved over the whole input, once: `window`'s `now`, the newest reading when the caller gives none. Without it, the declared context as it is |
 | `resolve(node, view, bound) :: term()` | the context **as it resolves for one chunk**, from the bound context and the chunk's place (`:at`, the input's row its view starts at, and `:rows`, the input's count). It reads that chunk's columns alone |
 | `chunk(node, view, resolved) :: part` | the chunk's part |
+| `keyed(node) :: map()` *(optional)* | the node's options a chunk's part depends on, when not all: the step key holds them in place of the whole node (`m4` and `lttb` leave out their count, which only the merge reads) |
 
 A view is `{chunk, first, count}`, the run of a chunk the input reads (`Table.chunks/1`).
 
 - **Per row** (`:row`): `filter`, `take` and `window` without `latest`. Each chunk is worked by itself, and **the merge is concatenation**. A per-row step's part is a selection of its view's rows: `:all`, the view passed through unchanged, its chunk the input's; `:none`, dropped; `{:run, first, count}`, a run of it, cut without copying; or `{:rows, indexes}`, those rows, every column gathered into a new chunk by copying its slots (`Table.Chunk.gather/5`), whose id is `{input's id, step key}`. The output keeps the input's columns and the column it is known to be sorted by (`Table.sorted/1`).
-- **A combine** (`:combine`): `sum`; `aggregate` and `bin` with no `fn` or one with the combining form (§1.2: `count`, `sum`, `mean`, `min`, `max`, `extent`); and `window` with `latest`. Each chunk's part is a **partial**, and the step declares `combine(node, a, b)`, the partials of two runs merged, the first's chunks before the second's, and `finish(node, merged, %{input, key})`, its table from the merged partial (`nil` for an input of no chunks). `combine/3` is **associative**: the partials are merged in the input's chunk order, and any grouping of them, any tree, gives the same merged partial, so per-chunk partials may be kept and merged again, and any chunking gives `Table.equal?/2` results. Where a step's order matters (groups in order of first appearance, `latest`'s ties, `bin`'s readings) the merge keeps it: the first run's before the second's. A combine's output is one chunk over every input chunk (`Step.output/3`, `Table.Chunk.combine/3`), its key the step's identity over every part's key, or gathered rows named by the rows they hold (`latest`). An exact sum is what makes a floating-point sum combine: any grouping of the same readings gives the same bits (§5).
-- **The step key** of a chunk is the step's identity (`step_digest/2`'s, the kernel's digest of its module and its checked node), the context as it resolved for the chunk, and the run of the chunk the view reads when that is not the whole chunk. Keying on raw context would miss on every frame, so the key changes only when the chunk's part could: a cache keys a part by `{Chunk.id/1, Chunk.version/1, step key}`. `Step.parts/4` lists each chunk's view, resolved context and key, computing no part; `Step.chunk/3` computes one and `Step.merge/5` merges them, given the parts' keys; `Step.run/4` is the three.
+- **A combine** (`:combine`): `sum`; `m4` and `lttb` (§4.5.1); `aggregate` and `bin` with no `fn` or one with the combining form (§1.2: `count`, `sum`, `mean`, `min`, `max`, `extent`); and `window` with `latest`. Each chunk's part is a **partial**, and the step declares `combine(node, a, b)`, the partials of two runs merged, the first's chunks before the second's, and `finish(node, merged, %{input, key})`, its table from the merged partial (`nil` for an input of no chunks). `combine/3` is **associative**: the partials are merged in the input's chunk order, and any grouping of them, any tree, gives the same merged partial, so per-chunk partials may be kept and merged again, and any chunking gives `Table.equal?/2` results. Where a step's order matters (groups in order of first appearance, `latest`'s ties, `bin`'s readings) the merge keeps it: the first run's before the second's. A combine's output is one chunk over every input chunk (`Step.output/3`, `Table.Chunk.combine/3`), its key the step's identity over every part's key, or gathered rows named by the rows they hold (`latest`). An exact sum is what makes a floating-point sum combine: any grouping of the same readings gives the same bits (§5).
+- **The step key** of a chunk is the step's identity (`step_digest/2`'s, the kernel's digest of its module and its checked node, or of `keyed/1`'s options when the step names them), the context as it resolved for the chunk, and the run of the chunk the view reads when that is not the whole chunk. Keying on raw context would miss on every frame, so the key changes only when the chunk's part could: a cache keys a part by `{Chunk.id/1, Chunk.version/1, step key}`. `Step.parts/4` lists each chunk's view, resolved context and key, computing no part; `Step.chunk/3` computes one and `Step.merge/5` merges them, given the parts' keys; `Step.run/4` is the three.
 - **The chunking never changes a result:** the same rows chunked any way give `Table.equal?/2` results.
 
 ```test:operations-step-classes
@@ -200,6 +201,8 @@ The context is plain data, a map:
 | `schema` | the `Macaw.Data.Schema` of the table the pipeline reads, whose **declared** identity `window`'s `latest` groups by | `window` |
 | `sources` | named tables, for a step that reads a second one (a graph's nodes) | the drawer's |
 | `frame` | `%{width: w, height: h, center: [x, y]}`, the plot area | frame-bound options; the drawer's layouts |
+| `scale` | the `x` scale's kind, `:linear`, `:time` or `:log`: the space the bucket ladder is laid in | `m4`, `lttb` (§4.5.1) |
+| `level` | the ladder's level the previous run used, for its hysteresis | `m4`, `lttb` (§4.5.1) |
 | `projection`, `text`, `prepared` | what `needs/0` names, and `prepare/3`'s result | the drawer's |
 
 - **A need is met by its key.** A transform declaring `needs: [:frame]` runs only with `frame` in the context; otherwise its node is `{:needs, :frame}` at validation. A derived source has no frame, projection or text, so a member that needs one is never callable from a stored function (§6).
@@ -288,27 +291,55 @@ latest keeps each declared identity's newest row in the window, the later on a t
 
 ### 4.4 lttb {#operations-lttb}
 
-`fields` (`{:pair, :field}`, required: `[x, y]`, the two columns a line reads); `n` (`{:integer, 3}`, frame-bound, required). **Shape-preserving downsampling** by Largest-Triangle-Three-Buckets (Steinarsson 2013), `Macaw.Data.Reduce.lttb/3` over the rows with the accessor reading `{x, y}`:
-- the first row, the last, and `n − 2` rows between that keep the line's visual area;
-- input of `n` or fewer rows is returned unchanged. An `n` below 3 is refused, since a line needs its two ends and a point between to have a shape;
-- **gaps pass through.** A row whose `x` or `y` reads `nil` is a gap: the rows reduce run by run between the gaps, each run's share of `n` in proportion to its length, and each run of gap rows keeps its first row in place, so a line still breaks where the input broke;
-- an `x` reads as a number or as a time in seconds, as `window` reads one; a `y` as a number. Any other reading raises `ArgumentError` naming the step and the field;
+`fields` (`{:pair, :field}`, required: `[x, y]`, the two columns a line reads); `n` (`{:integer, 3}`, frame-bound, required). **Shape-preserving downsampling** by **MinMaxLTTB** (Van Der Donckt et al., 2023): the least and greatest row of each bucket of the ladder (§4.5.1) are preselected, and Largest-Triangle-Three-Buckets (Steinarsson 2013, `Macaw.Data.Reduce.lttb/3`) selects `n` rows from them. **This is a breaking change** from the exact algorithm over every row (macaw_data#9), recorded with its tolerance; the exact algorithm stays as the function `Macaw.Data.Reduce.lttb/3`, which visualize's sandbox (`lttb/2,3`) calls, and is the oracle the step is held to.
+- **The level** is the ladder's coarsest whose bucket is at most `span / (2n)`, `span` the extent of `x` in the scale's space: at least `2n` buckets, so at least `4n` candidates (a preselection ratio of 4). Each run's first and last rows are candidates too.
+- **The contract:** at most `n` rows when the rows have no gaps (with gaps, `n` is shared among the runs between them as `Reduce.lttb/3` shares it, and each run of gap rows keeps its first row in place, so a line still breaks where the input broke); the first and the last row kept; deterministic, the same rows under every chunking, inline or cached; input of `n` or fewer rows returned unchanged. An `n` below 3 is refused, since a line needs its two ends and a point between to have a shape.
+- **Faithful within a tolerance:** the mean absolute error of the reduced line, read by linear interpolation at every input row's `x` and divided by the extent of `y`, is at most twice `Reduce.lttb/3`'s with the same `n`, plus 0.005. Measured over 2,700 generated series (sines with noise, random walks, sparse spikes; `n` of 20, 60 and 150), the worst ratio was 1.27 for sines, 1.37 for walks and 1.56 for spikes at the smallest `n`.
+- an `x` reads in the scale's space (§4.5.1), a number or a time; a `y` as a number. Any other reading raises `ArgumentError` naming the step and the field;
 - **whole rows are kept,** every column of each, so a tooltip over a kept point reads the datum itself. O(n) in the rows.
 
-**Outputs:** the input's columns. **Reducer:** `{"n", 1}`.
+**Outputs:** the input's columns. **Reducer:** `{"n", 1}`. **Class:** a combine (§1.4): each chunk's partial is its buckets' extremes, partials merge bucket by bucket, and the selection runs in `finish/3`.
 
 ```test:operations-lttb-shape
-lttb keeps the ends and n - 2 rows between, whole, chosen as the reference algorithm chooses; n or fewer rows come back unchanged; gaps pass through with each run of gaps kept as its first row; time readings are seconds and a non-number y raises; n below 3 is refused
+lttb keeps the ends and at most n rows, whole; n or fewer rows come back unchanged; gaps pass through with each run of gaps kept as its first row; a time column under a linear scale reads in seconds and a non-number y raises; n below 3 is refused
+```
+
+```test:operations-lttb-minmax
+lttb is MinMaxLTTB: for generated series and several n, its mean interpolation error is within twice Reduce.lttb's plus 0.005, it keeps at most n rows, the first and the last, and it answers the same rows under every chunking
 ```
 
 ### 4.5 m4 {#operations-m4}
 
-`fields` (`{:pair, :field}`, required); `width` (`{:integer, 1}`, frame-bound, required). Per pixel column the **first, last, minimum and maximum** rows, `Macaw.Data.Reduce.m4/3` over the rows as `lttb` reads them, deduplicated and in input order. The columns split the extent of the defined `x` readings. When that is the drawn `x` domain, the reduced line **draws the same pixels as the unreduced one**: every column it crosses, with the same top, bottom, entry and exit, so a peak is never lost. It is the right choice where one must not be lost: an alert threshold, a heart-rate maximum. `width: "plot"` is what a design means nearly always; an integer is for one reduced for a size it knows. Gaps, readings, faults, whole rows and the cost are `lttb`'s.
+`fields` (`{:pair, :field}`, required); `width` (`{:integer, 1}`, frame-bound, required). Per pixel column the **first, last, minimum and maximum** rows, as `lttb` reads them, deduplicated and in input order. The columns split the extent of the `x` readings in the scale's space. When that is the drawn `x` domain, the reduced line **draws the pixels of the unreduced one** to within a bucket at each column boundary: every column it crosses, with its top, bottom, entry and exit, so a peak is never lost. It is the right choice where one must not be lost: an alert threshold, a heart-rate maximum. `width: "plot"` is what a design means nearly always; an integer is for one reduced for a size it knows. Gaps, readings, faults, whole rows and the cost are `lttb`'s.
 
-**Outputs:** the input's columns. **Reducer:** `{"width", 4}`.
+- **On the ladder** (§4.5.1): the level is the coarsest whose bucket is at most a quarter of a pixel (`span / width / 4`). Each chunk's partial is its buckets' first, last, least and greatest rows; the merge folds each bucket into the pixel column its start lies in.
+- **Accuracy:** the answer is exactly M4 over pixel columns whose boundaries are moved to a bucket edge, each at most one bucket away: at most a quarter of a pixel, half a pixel under hysteresis. Where the buckets' edges are the pixels' edges it is `Macaw.Data.Reduce.m4/3`'s answer exactly. This is a change from M4 over the rows themselves, within that tolerance.
+
+**Outputs:** the input's columns. **Reducer:** `{"width", 4}`. **Class:** a combine (§1.4).
 
 ```test:operations-m4-columns
-m4 keeps each column's first, last, minimum and maximum rows, deduplicated in order, so every extreme survives; gaps, readings and faults are lttb's; width below 1 is refused
+m4 keeps each column's first, last, minimum and maximum rows, deduplicated in order, so every extreme survives within a bucket of its column; gaps, readings and faults are lttb's; width below 1 is refused
+```
+
+```test:operations-m4-ladder
+on linear, time and log scales, m4 is exact M4 over pixel columns whose boundaries move to the bucket edge at most one bucket away, and Reduce.m4 itself where the bucket edges are the pixel edges; a bucket straddling a chunk edge merges to the one-chunk answer
+```
+
+#### 4.5.1 The bucket ladder {#operations-ladder}
+
+`m4` and `lttb` reduce on **one absolute ladder of buckets** (macaw_data#9 §5, `Macaw.Data.Operations.Transforms.Ladder`), so a chunk's partial depends on its rows, the scale's kind and the level alone, never on the data first read, the extent or a restart:
+- **The scale's space** is the context's `scale` (§3.2), which each step declares it reads: `:linear`, `x` as a number or a time in seconds; `:time`, a time in microseconds since the Unix epoch (a number read as seconds); `:log`, `log2` of an `x` above 0, any other raising `ArgumentError` naming the step. Without one, `:time` over a `:time` column and `:linear` otherwise. On a log scale, buckets in log space have even pixel widths.
+- **A bucket** at level `k` (any integer, negative too) is `2^k` wide from origin 0: `s` lies in bucket `floor(s / 2^k)`, computed exactly.
+- **The level** is the coarsest whose bucket is at most the step's ideal width, from the span (the extent of `x` in the space, read at the ends of a sorted column, else scanned) and its count. **Hysteresis:** the previous level, the context's `level` (§3.2), is kept while its bucket is within a factor of 2 of the ideal width, so a span drifting near a power of two keeps one level and its partials. The level a run used is in each part's resolved context (`Step.parts/4`), for the caller to pass back.
+- **A zoom within a level** changes no partial and no step key: the extent and the pixel width enter only the merge. **A zoom out** folds finer partials into the coarser level (`Ladder.coarsen/2`) exactly as computing them there would; partials at two levels merge at the coarser. Only a zoom in computes again.
+- **Chunk edges** needn't align with buckets: a bucket straddling one gets a partial from each chunk, and the merge combines them. **Gaps** split the rows into runs; a run of gap rows is one gap kept as its first row, and a gap on a chunk boundary is kept, the merge joining runs and gaps across the edge.
+
+```test:operations-ladder-levels
+the level is the coarsest whose bucket is at most the ideal width; with the previous level given, a span oscillating around a power of two keeps one level and every unchanged chunk keeps its step key; a zoom within a level keeps every key, and a zoom out folds finer partials into the coarser level's exactly
+```
+
+```test:operations-ladder-gaps
+a gap on a chunk boundary survives m4 and lttb, which answer under every chunking as over one chunk
 ```
 
 ### 4.6 sort {#operations-sort}
