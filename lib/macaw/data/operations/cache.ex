@@ -57,49 +57,68 @@ defmodule Macaw.Data.Operations.Cache do
   @doc """
   The step `module` (a column-native one, `Step.step?/1`) run over `table` with the parts
   `cache` holds, and the cache holding this run's parts. The table equals
-  `Step.run(module, node, table, context)`'s.
+  `Step.run(module, node, table, context)`'s. With `parallel: true` in the context, the
+  parts it computes run as `Step.run/4`'s would (spec/04 §1.6).
   """
   @spec run(t(), module(), map(), Table.t(), map()) :: {Table.t(), t()}
   def run(%__MODULE__{} = cache, module, node, %Table{} = table, context) do
     table = Step.warmed(table)
     parts = Step.parts(module, node, table, context)
+    found = Enum.map(parts, &found(module, node, &1, cache.parts))
 
-    {partials, {held, last}} =
-      Enum.map_reduce(parts, {cache.parts, %{reused: 0, updated: 0, computed: 0}}, fn part, acc ->
-        part(module, node, part, acc)
-      end)
+    missing = for {:compute, part} <- found, do: part
+    computed = Step.chunks(module, node, missing, Step.parallel?(table, context))
+
+    {partials, {held, last, []}} =
+      Enum.map_reduce(
+        found,
+        {cache.parts, %{reused: 0, updated: 0, computed: 0}, computed},
+        &fill/2
+      )
 
     output = Step.merge(module, node, partials, table, Enum.map(parts, & &1.key), context)
     {output, %__MODULE__{parts: held, last: last}}
   end
 
-  defp part(module, node, %{view: {chunk, _first, _count}, key: key} = part, {held, last}) do
+  # How a part is come by: held under its key, updated by inverse from its base's part
+  # where that is exact, or to compute. A chunk with no version is computed and not held.
+  defp found(module, node, %{view: {chunk, _first, _count}, key: key} = part, held) do
     id = Chunk.id(chunk)
+    version = Chunk.version(chunk)
+    base = Chunk.base_version(chunk)
 
-    case Chunk.version(chunk) do
-      nil ->
-        {Step.chunk(module, node, part), {held, bump(last, :computed)}}
+    case held do
+      _ when version == nil ->
+        {:compute, part}
 
-      version ->
-        case held do
-          %{{^id, ^version, ^key} => partial} ->
-            {partial, {held, bump(last, :reused)}}
+      %{{^id, ^version, ^key} => partial} ->
+        {:reused, partial}
 
-          _ ->
-            {partial, how} = fresh(module, node, part, held, id, Chunk.base_version(chunk))
-            {partial, {Map.put(held, {id, version, key}, partial), bump(last, how)}}
+      %{{^id, ^base, ^key} => partial} ->
+        case Step.update(module, node, part, partial) do
+          {:ok, updated} -> {:updated, {id, version, key}, updated}
+          :recompute -> {:compute, part}
         end
+
+      _ ->
+        {:compute, part}
     end
   end
 
-  # An inverse update from the base's part where it is held and exact, else computed.
-  defp fresh(module, node, %{key: key} = part, held, id, base) do
-    with %{{^id, ^base, ^key} => partial} <- held,
-         {:ok, updated} <- Step.update(module, node, part, partial) do
-      {updated, :updated}
-    else
-      _ -> {Step.chunk(module, node, part), :computed}
-    end
+  defp fill({:reused, partial}, {held, last, computed}),
+    do: {partial, {held, bump(last, :reused), computed}}
+
+  defp fill({:updated, key, partial}, {held, last, computed}),
+    do: {partial, {Map.put(held, key, partial), bump(last, :updated), computed}}
+
+  defp fill({:compute, %{view: {chunk, _, _}, key: key}}, {held, last, [partial | computed]}) do
+    held =
+      case Chunk.version(chunk) do
+        nil -> held
+        version -> Map.put(held, {Chunk.id(chunk), version, key}, partial)
+      end
+
+    {partial, {held, bump(last, :computed), computed}}
   end
 
   defp bump(last, how), do: Map.update!(last, how, &(&1 + 1))

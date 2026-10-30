@@ -92,7 +92,9 @@ defmodule Macaw.Data.Operations.CacheTest do
             send(self(), {:again, again, cache})
           end)
 
-        assert hashed == []
+        # Only this pattern counts: another async test's global trace pattern may also match
+        # calls made here (#37).
+        assert Enum.filter(hashed, &(&1 == {Macaw.Data.Table.Digest, :digest})) == []
         assert_received {:again, again, cache}
         assert Table.equal?(again, full)
         assert cache.last == %{reused: 3, updated: 0, computed: 0}

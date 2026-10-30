@@ -183,6 +183,23 @@ a float sum, a mean, min, max, m4 and lttb recompute a changed chunk rather than
 prune keeps the parts of the chunks the tables hold, at their version or base version, and drops a chunk's that left the window or a version no chunk has
 ```
 
+### 1.6 Execution: inline by default, parallel on request {#operations-parallel}
+
+**A step runs its chunks inline by default** (macaw_data#9 §7): a caller such as a frame task already runs many charts at once, and parallel work inside one step would compete with them.
+
+- **`parallel: true`** in the context (§3.2) asks `Step.run/4` and `Cache.run/5` to work the chunks' parts across the schedulers, one task a part (`Step.chunks/4`). It is a per-call choice: the caller knows its own concurrency. It is no step's declared context, so it never reaches a step's key.
+- **Above a size threshold only.** A run goes parallel when asked and its input holds at least two chunks and `Step.parallel_rows/0` rows: two canonical chunks' worth (16,384). Below it, a process per chunk costs more than the chunk's work, so the run is inline. The threshold is fixed, not a setting (`Step.parallel?/2`).
+- **The merge has a fixed shape.** Inline or parallel, the parts reach the merge in chunk order, and the merge folds them in that order, one tree whatever ran them. Floating-point merges in another order would differ in the last bits, breaking both identical results and the derivation digest's precondition (01 §1.1.3). So **a parallel run is bit-identical to the inline run**, and the chunk size never changes a result (§1.4).
+- **Set wrong, it only slows down:** the results are the same.
+
+```test:operations-parallel-identical
+for every column-native table operation over generated rows of several chunks, a parallel run and an inline run give identical tables, the same values bit for bit, including floating-point sums and means, and a cached run asked for parallel equals both
+```
+
+```test:operations-parallel-threshold
+asked for parallel, a run above parallel_rows/0 with two chunks or more works its parts in other processes, in chunk order; below the threshold, with one chunk, or not asked, every part is worked in the caller's process
+```
+
 ## 2. Packages and the registry {#operations-registry}
 
 **A package is a module with `__members__/0`**, the list of its modules that implement a behavior of this file or of any other Macaw behavior (macaw_compose spec/12 §1). Which behavior a member implements is read from its own `@behaviour` declarations, so a package author maintains one list. `Macaw.Data.Operations` is `macaw_data`'s own package: the twelve table operations of §4 and the thirteen statistics of §5.
@@ -255,6 +272,7 @@ The context is plain data, a map:
 | `frame` | `%{width: w, height: h, center: [x, y]}`, the plot area | frame-bound options; the drawer's layouts |
 | `scale` | the `x` scale's kind, `:linear`, `:time` or `:log`: the space the bucket ladder is laid in | `m4`, `lttb` (§4.5.1) |
 | `level` | the ladder's level the previous run used, for its hysteresis | `m4`, `lttb` (§4.5.1) |
+| `parallel` | `true` to work a step's chunks across the schedulers, above a size threshold; inline when absent | `Step.run/4`, `Cache.run/5` (§1.6), never a step |
 | `projection`, `text`, `prepared` | what `needs/0` names, and `prepare/3`'s result | the drawer's |
 
 - **A need is met by its key.** A transform declaring `needs: [:frame]` runs only with `frame` in the context; otherwise its node is `{:needs, :frame}` at validation. A derived source has no frame, projection or text, so a member that needs one is never callable from a stored function (§6).

@@ -62,8 +62,49 @@ defmodule Macaw.Data.Operations.Step do
   def run(module, node, %Table{} = table, context) when is_map(context) do
     table = warmed(table)
     parts = parts(module, node, table, context)
-    partials = Enum.map(parts, &chunk(module, node, &1))
+    partials = chunks(module, node, parts, parallel?(table, context))
     merge(module, node, partials, table, Enum.map(parts, & &1.key), context)
+  end
+
+  @doc """
+  The rows at or above which a run asked for parallel chunks runs them in parallel
+  (spec/04 §1.6): two canonical chunks' worth, `2 × Table.chunk_rows/0`. Fixed, not a
+  setting; below it a process per chunk costs more than the chunk's work.
+  """
+  @spec parallel_rows() :: pos_integer()
+  def parallel_rows, do: 2 * Table.chunk_rows()
+
+  @doc """
+  Whether a run over `table` works its chunks in parallel (spec/04 §1.6): only when the
+  caller asks, `parallel: true` in the context, and the input holds at least two chunks
+  and `parallel_rows/0` rows. Inline otherwise, the default, since a caller such as a
+  frame task already runs many steps at once.
+  """
+  @spec parallel?(Table.t(), map()) :: boolean()
+  def parallel?(%Table{} = table, context) when is_map(context) do
+    Map.get(context, :parallel) == true and length(Table.chunks(table)) >= 2 and
+      Table.size(table) >= parallel_rows()
+  end
+
+  @doc """
+  Each part's `chunk/3`, in the parts' order: inline, or with `parallel` across the
+  schedulers, one task a part, ordered. Either way the merge receives the same partials
+  in the same order, so a run's result is the same bits inline or parallel (spec/04
+  §1.6).
+  """
+  @spec chunks(module(), map(), [part()], boolean()) :: [term()]
+  def chunks(module, node, parts, parallel)
+
+  def chunks(module, node, parts, false), do: Enum.map(parts, &chunk(module, node, &1))
+
+  def chunks(module, node, parts, true) do
+    parts
+    |> Task.async_stream(&chunk(module, node, &1),
+      ordered: true,
+      timeout: :infinity,
+      max_concurrency: System.schedulers_online()
+    )
+    |> Enum.map(fn {:ok, partial} -> partial end)
   end
 
   @doc """
