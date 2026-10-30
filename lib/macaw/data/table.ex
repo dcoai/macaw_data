@@ -5,14 +5,19 @@ defmodule Macaw.Data.Table do
 
   A table is named columns of declared types, every column the same length:
 
-  | Type | Holds | Stored as |
+  | Type | Holds | Stored as (Arrow's form) |
   |---|---|---|
-  | `:number` | integers and floats | one packed binary: signed 64-bit integers when every value is an integer that fits, else 64-bit floats |
-  | `:time` | `DateTime`s | one packed binary of signed 64-bit microseconds since the Unix epoch, UTC |
-  | `:category`, `:text`, `:color`, `:point`, `:term` | any value | a list |
+  | `:number` | integers and floats | int64 when every value is an integer that fits; float64 when every one is a float; both, float64 and a bitmap of the integers (`macaw.integral`); both with an integer beyond ±2^53, a dense union of int64 and float64; an integer beyond int64, a list |
+  | `:time` | `DateTime`s, `NaiveDateTime`s or `Date`s, one kind a column | all UTC, `timestamp[us, UTC]`; other zones, UTC microseconds and a dictionary of whole zones (`macaw.zoned`); naive, `timestamp[us]`; dates, `date32`; the precision kept; kinds mixed, a list |
+  | `:text` | any value | strings, utf8: int32 offsets and one data buffer (Arrow binary when one is not valid UTF-8); anything else, a list |
+  | `:category` | any value, an atom held as its string | strings and atoms, one dictionary of strings, any booleans beside it in side bitmaps; booleans alone, a bitmap; mixed types, a list |
+  | `:color` | color terms (`Macaw.Data.Schema.color?/1`) | a list |
+  | `:point`, `:term` | any value; a point is `{longitude, latitude}` | a list |
 
-  **A missing value is `nil`,** in every type. A packed column keeps a validity bitmap
-  beside its binary, so a gap stays a gap: absence is never zero (spec/01 §3).
+  **Packing never changes a value:** every column reads back values `==` to those given,
+  but that a category's atom reads back as its string, in every form. **A missing value is `nil`,** in
+  every type. A packed column keeps a validity bitmap beside its buffers, least-significant
+  bit first as Arrow numbers bits, so a gap stays a gap: absence is never zero (spec/01 §3).
 
   **The packed columns live off the process heap.** A binary over 64 bytes is
   reference-counted, so a garbage collection never copies it: a table of a million numbers
@@ -30,6 +35,7 @@ defmodule Macaw.Data.Table do
   """
 
   alias Macaw.Data.Schema
+  alias Macaw.Data.Table.Column
 
   @compile {:no_warn_undefined, [Table, Nx]}
 
@@ -37,7 +43,6 @@ defmodule Macaw.Data.Table do
   defstruct [:names, :columns, :size]
 
   @types [:number, :time, :category, :text, :color, :point, :term]
-  @s64 -0x8000000000000000..0x7FFFFFFFFFFFFFFF
 
   @typedoc "A column name, as the source spells it."
   @type name :: atom() | String.t()
@@ -55,14 +60,10 @@ defmodule Macaw.Data.Table do
   """
   @type source :: [row()] | %{name() => [term()]} | [{name(), [term()]}] | struct()
 
-  @typedoc "One column: its type, its storage and, when packed, its validity bitmap."
-  @type column ::
-          {:s64 | :f64 | :us, binary(), bitstring()} | {:list, [term()]}
-
   @typedoc "A table."
   @type t :: %__MODULE__{
           names: [name()],
-          columns: %{name() => {type(), column()}},
+          columns: %{name() => {type(), tuple()}},
           size: non_neg_integer()
         }
 
@@ -78,9 +79,10 @@ defmodule Macaw.Data.Table do
   `{:ok, table}`, or every fault: `{[name], {:enum, types}}` for an unknown type,
   `{[name, i], {:type, type}}` for a value its type does not hold, `{[name], {:length, n}}`
   for a column whose length is not the first column's `n`, `{[name], :duplicate}` for a
-  name given twice. A number column holds numbers; a time column `DateTime`s; a point
-  column `{longitude, latitude}` pairs of numbers; the others any value. `nil` is missing
-  in every type.
+  name given twice. A number column holds numbers; a time column `DateTime`s,
+  `NaiveDateTime`s or `Date`s; a color column color terms (`Macaw.Data.Schema.color?/1`);
+  a point column `{longitude, latitude}` pairs of numbers; the others any value. `nil` is
+  missing in every type.
   """
   @spec new([{name(), type(), [term()]}]) :: {:ok, t()} | {:error, [{list(), term()}, ...]}
   def new(columns) when is_list(columns) do
@@ -105,7 +107,7 @@ defmodule Macaw.Data.Table do
             {built, [{[name], {:length, size}} | faults]}
 
           true ->
-            case column(type, values, name) do
+            case Column.pack(type, values, name) do
               {:ok, col} -> {[{name, {type, col}} | built], faults}
               {:error, column_faults} -> {built, column_faults ++ faults}
             end
@@ -180,60 +182,6 @@ defmodule Macaw.Data.Table do
 
   defp to_datetime(other), do: other
 
-  defp column(:number, values, name) do
-    case faults(values, name, &is_number/1, :number) do
-      [] ->
-        valid = validity(values)
-
-        if Enum.all?(values, &(is_nil(&1) or (is_integer(&1) and &1 in @s64))),
-          do: {:ok, {:s64, pack(values, &<<&1::signed-little-64>>, <<0::64>>), valid}},
-          else: {:ok, {:f64, pack(values, &<<&1 / 1::float-little-64>>, <<0::64>>), valid}}
-
-      faults ->
-        {:error, faults}
-    end
-  end
-
-  defp column(:time, values, name) do
-    case faults(values, name, &match?(%DateTime{}, &1), :time) do
-      [] ->
-        us = &<<to_us(&1)::signed-little-64>>
-        {:ok, {:us, pack(values, us, <<0::64>>), validity(values)}}
-
-      faults ->
-        {:error, faults}
-    end
-  end
-
-  defp column(:point, values, name) do
-    point? = &match?({lon, lat} when is_number(lon) and is_number(lat), &1)
-
-    case faults(values, name, point?, :point) do
-      [] -> {:ok, {:list, values}}
-      faults -> {:error, faults}
-    end
-  end
-
-  defp column(_type, values, _name), do: {:ok, {:list, values}}
-
-  defp faults(values, name, ok?, type) do
-    if Enum.all?(values, &(&1 == nil or ok?.(&1))),
-      do: [],
-      else:
-        for(
-          {v, i} <- Enum.with_index(values),
-          v != nil,
-          not ok?.(v),
-          do: {[name, i], {:type, type}}
-        )
-  end
-
-  defp pack(values, encode, zero),
-    do: values |> Enum.map(&if(is_nil(&1), do: zero, else: encode.(&1))) |> IO.iodata_to_binary()
-
-  defp validity(values),
-    do: for(v <- values, into: <<>>, do: <<if(is_nil(v), do: 0, else: 1)::1>>)
-
   # -- reading ----------------------------------------------------------------------------
 
   @doc "The number of rows."
@@ -255,69 +203,16 @@ defmodule Macaw.Data.Table do
 
   @doc """
   The values of column `name`, in order, `nil` where a value is missing; `nil` for a name
-  the table does not have. A number column of integers reads back integers; of floats, or
-  of both, floats. A time column reads back `DateTime`s in UTC at microsecond precision.
+  the table does not have. Every value is `==` to the one given, integer or float, a time
+  in its own zone at its own precision, but that a category's atom reads back as the
+  string that spells it.
   """
   @spec column(t(), name()) :: [term()] | nil
-  def column(%__MODULE__{columns: columns}, name) do
+  def column(%__MODULE__{columns: columns} = table, name) do
     case columns do
-      %{^name => {_type, col}} -> values(col)
+      %{^name => {_type, col}} -> Column.values(col, table.size)
       _ -> nil
     end
-  end
-
-  defp values({:list, list}), do: list
-  defp values({:s64, bin, valid}), do: unpack(bin, valid, fn <<n::signed-little-64>> -> n end)
-  defp values({:f64, bin, valid}), do: unpack(bin, valid, fn <<f::float-little-64>> -> f end)
-
-  defp values({:us, bin, valid}),
-    do: unpack(bin, valid, fn <<us::signed-little-64>> -> from_us(us) end)
-
-  # A time column's microseconds since the Unix epoch, both ways, built from the date's
-  # fields rather than through `DateTime.to_unix/2` and `from_unix!/2`: a fifth of the
-  # work per value (macaw#185). `:calendar` counts days from year 0, so a time before it,
-  # and a `DateTime` not in UTC, take `DateTime`'s own way; the two agree everywhere.
-  @epoch_days :calendar.date_to_gregorian_days(1970, 1, 1)
-  @day_us 86_400_000_000
-  @year_zero_us -@epoch_days * @day_us
-
-  defp to_us(%DateTime{calendar: Calendar.ISO, utc_offset: 0, std_offset: 0, year: y} = t)
-       when y >= 0 do
-    {us, _precision} = t.microsecond
-    days = :calendar.date_to_gregorian_days(y, t.month, t.day) - @epoch_days
-    (days * 86_400 + t.hour * 3600 + t.minute * 60 + t.second) * 1_000_000 + us
-  end
-
-  defp to_us(%DateTime{} = t), do: DateTime.to_unix(t, :microsecond)
-
-  defp from_us(us) when us < @year_zero_us, do: DateTime.from_unix!(us, :microsecond)
-
-  defp from_us(us) do
-    days = Integer.floor_div(us, @day_us)
-    in_day = us - days * @day_us
-    {year, month, day} = :calendar.gregorian_days_to_date(@epoch_days + days)
-    seconds = div(in_day, 1_000_000)
-
-    %DateTime{
-      year: year,
-      month: month,
-      day: day,
-      hour: div(seconds, 3600),
-      minute: rem(div(seconds, 60), 60),
-      second: rem(seconds, 60),
-      microsecond: {rem(in_day, 1_000_000), 6},
-      std_offset: 0,
-      utc_offset: 0,
-      zone_abbr: "UTC",
-      time_zone: "Etc/UTC",
-      calendar: Calendar.ISO
-    }
-  end
-
-  defp unpack(bin, valid, decode) do
-    words = for <<w::binary-size(8) <- bin>>, do: w
-    bits = for <<b::1 <- valid>>, do: b
-    Enum.zip_with(words, bits, fn w, b -> if b == 1, do: decode.(w) end)
   end
 
   @doc "The rows, one map per row keyed by every column name, `nil` where missing."
@@ -365,7 +260,7 @@ defmodule Macaw.Data.Table do
   def row(%__MODULE__{size: size}, i) when i >= size, do: nil
 
   def row(%__MODULE__{names: names} = table, i) when is_integer(i) and i >= 0,
-    do: Map.new(names, &{&1, Enum.at(column(table, &1), i)})
+    do: Map.new(names, &{&1, hd(column(slice(table, i, 1), &1))})
 
   @doc """
   The rows `start` to `start + count - 1`, as a table of the same columns: a packed
@@ -378,13 +273,8 @@ defmodule Macaw.Data.Table do
     n = min(count, size - first)
 
     columns =
-      Map.new(table.columns, fn
-        {name, {type, {:list, list}}} ->
-          {name, {type, {:list, Enum.slice(list, first, n)}}}
-
-        {name, {type, {kind, bin, valid}}} ->
-          <<_::bitstring-size(^first), bits::bitstring-size(^n), _::bitstring>> = valid
-          {name, {type, {kind, binary_part(bin, first * 8, n * 8), bits}}}
+      Map.new(table.columns, fn {name, {type, col}} ->
+        {name, {type, Column.slice(col, first, n)}}
       end)
 
     %__MODULE__{table | columns: columns, size: n}

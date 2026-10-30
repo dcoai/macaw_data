@@ -34,7 +34,7 @@ defmodule Macaw.Data.Operations.SeriesTest do
       expected =
         for s <- series, p <- s.points do
           Map.merge(p.data, %{
-            "key" => s.key,
+            "key" => Atom.to_string(s.key),
             "series" => s.index,
             "value" => p.value,
             "y0" => p.y0,
@@ -42,8 +42,9 @@ defmodule Macaw.Data.Operations.SeriesTest do
           })
         end
 
+      # A category reads back as the string that spells it (macaw_data#16).
       assert rows == expected
-      assert rows |> Enum.map(& &1["key"]) |> Enum.uniq() == [:a, :b, :c]
+      assert rows |> Enum.map(& &1["key"]) |> Enum.uniq() == ["a", "b", "c"]
       agrees(%{op: "stack", fields: [:a, :b, :c]}, @rows)
     end
 
@@ -62,28 +63,31 @@ defmodule Macaw.Data.Operations.SeriesTest do
       # Peaks: a at the last row, b at the first, c at the first; b and c precede a.
       appearance = run(%{op: "stack", fields: [:a, :b, :c], order: "appearance"}, @rows)
       by_key = appearance |> Enum.map(&{&1["key"], &1["series"]}) |> Enum.uniq() |> Map.new()
-      assert by_key == %{b: 0, c: 1, a: 2}
+      # A category reads back as the string that spells it (macaw_data#16).
+      assert by_key == %{"b" => 0, "c" => 1, "a" => 2}
     end
 
     @tag verifies: "operations-stack-orders"
     test "takes a fixed key order through to the stack, read by spelling" do
       rows = run(%{op: "stack", fields: [:a, :b, :c], order: %{keys: ["c", :x, "a"]}}, @rows)
       by_key = rows |> Enum.map(&{&1["key"], &1["series"]}) |> Enum.uniq() |> Map.new()
-      assert by_key == %{c: 0, a: 1, b: 2}
+      # A category reads back as the string that spells it (macaw_data#16).
+      assert by_key == %{"c" => 0, "a" => 1, "b" => 2}
 
       # The bottom series is c from zero in every row, whatever the sums.
-      for %{"key" => :c} = row <- rows, do: assert(row["y0"] == 0)
+      for %{"key" => "c"} = row <- rows, do: assert(row["y0"] == 0)
     end
 
     @tag verifies: "operations-stack-orders"
     test "a nil reading is zero; a reading that is not a number raises naming the step" do
       rows = run(%{op: "stack", fields: [:a, :b]}, [%{a: 1, b: nil}, %{a: nil, b: 2}])
 
+      # A category reads back as the string that spells it (macaw_data#16).
       assert Enum.map(rows, &{&1["key"], &1["y0"], &1["y1"]}) == [
-               {:a, 0, 1},
-               {:a, 0, 0},
-               {:b, 1, 1},
-               {:b, 0, 2}
+               {"a", 0, 1},
+               {"a", 0, 0},
+               {"b", 1, 1},
+               {"b", 0, 2}
              ]
 
       assert_raise ArgumentError,

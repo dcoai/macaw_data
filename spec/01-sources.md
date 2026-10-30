@@ -16,24 +16,75 @@ A **source** is anything a component's slot reads. One contract serves feeds, qu
 
 **`Macaw.Data.Table` is columnar typed data,** the currency of derived sources and components, and the form a delivery packs into for a reader that wants columns (§3). A table is named columns of declared types, every column the same length. Its design is visualize#916's (closed when this step absorbed it): rows as lists of maps cost a garbage collection that copies every row, and packed columns don't.
 
-| Type | Holds | Stored as |
-|---|---|---|
-| `:number` | integers and floats | one packed binary: signed 64-bit integers when every value is an integer that fits, else 64-bit floats |
-| `:time` | `DateTime`s | one packed binary of signed 64-bit microseconds since the Unix epoch, UTC |
-| `:category`, `:text`, `:color`, `:point`, `:term` | any value; a point is `{longitude, latitude}` | a list |
+| Type | Holds |
+|---|---|
+| `:number` | integers and floats |
+| `:time` | `DateTime`s, `NaiveDateTime`s or `Date`s |
+| `:text` | any value; text is strings |
+| `:category` | any value; a category is a string, an atom spelling one, or a boolean |
+| `:color` | color terms, literal or typed (§1.7) |
+| `:point` | `{longitude, latitude}` pairs of numbers |
+| `:term` | any value |
 
-- **A missing value is `nil`,** in every type. A packed column keeps a validity bitmap beside its binary, so a gap stays a gap and reads back as `nil`, never as 0 (§3).
-- **`new/1`** builds a table from `{name, type, values}` columns and reports every fault at once: a type not in the list (`{:enum, types}`), a value its type does not hold (`{[name, i], {:type, type}}`), a column of another length than the first (`{:length, n}`), a name given twice (`:duplicate`). `new!/1` raises naming them.
-- **Reading back:** `column/2` is a column's values in order. A number column of integers reads back integers; of floats, or of both, floats, and an integer too large for 64 bits makes its column floats. A time column reads back `DateTime`s in UTC at microsecond precision. `rows/1` is the row view: one map per row keyed by every column name. `row/2` is one row, `nil` past the end; `names/1`, `size/1` and `column_type/2` describe the table.
-- **`slice/3`** is a run of rows as a table of the same columns; a packed column's binary is sliced, not copied.
+**Packing never changes a value.** A column is stored in the narrowest form that holds exactly what it was given, laid out as the [Arrow columnar format](https://arrow.apache.org/docs/format/Columnar.html) lays it out, so a column reaches Arrow JS, Explorer, DuckDB or Parquet with at most a copy. Every value reads back `==` to the one given, with one exception by design: a category's atom reads back as the string that spells it. A column whose values no packed form holds exactly is kept as its list of values, the `:term` form, whatever its declared type; its type does not change. The forms (macaw#188 D5, #16):
+
+| Type | Values | Stored as | Arrow's form |
+|---|---|---|---|
+| `:number` | every one an integer in int64 | little-endian int64 values | `int64` |
+| | every one a float | little-endian float64 values | `float64` |
+| | both, every integer within ±2^53 | float64 values and an integral bitmap, a bit set where the value was an integer | extension `macaw.integral`, a struct of `value: float64` (first) and `integral: bool` |
+| | both, an integer beyond ±2^53 | a dense union: an int8 type id per value (0 for int64, 1 for float64), an int32 offset per value into that child, and the two children | `dense_union<int64 = 0, float64 = 1>`; a missing value is a missing slot of the int64 child, since a union has no validity bitmap of its own |
+| | an integer beyond int64 | the list | (none) |
+| `:time` | `DateTime`s, every one UTC (`Etc/UTC`, `UTC`, both offsets 0) | int64 microseconds since the Unix epoch | `timestamp[us, UTC]` |
+| | `DateTime`s in any other zone | the same UTC microseconds, an int32 code per value, and the column's dictionary of whole zones `{time_zone, zone_abbr, utc_offset, std_offset}` in the order they first appear | extension `macaw.zoned` over a struct whose first field is `instant: timestamp[us, UTC]` and whose second is `zone`, the codes into a dictionary of structs of `time_zone: utf8`, `zone_abbr: utf8`, `utc_offset: int32`, `std_offset: int32` |
+| | `NaiveDateTime`s | int64 wall-clock microseconds since 1970-01-01 00:00:00 | `timestamp[us]`, no zone |
+| | `Date`s | int32 days since 1970-01-01 | `date32` |
+| | kinds mixed, or a calendar other than ISO | the list | (none) |
+| `:text` | strings, each valid UTF-8 (`String.valid?/1`) | n + 1 int32 offsets and one data buffer of the strings' bytes, value i the bytes from offset i to offset i + 1 | `utf8` |
+| | binaries, one not valid UTF-8 | the same offsets and data | `binary` |
+| | anything else, or more than 2^31 - 1 bytes | the list | (none) |
+| `:category` | strings (valid UTF-8) and atoms, with or without booleans | an int32 code per value into a dictionary that is itself a text column of the distinct strings, in the order they first appear; an atom and the string that spells it (`Operations.same?/2`) are one code. Booleans beside them take two side bitmaps, which slots hold a boolean (their kind) and its value | `dictionary<int32, utf8>`; with booleans, extension `macaw.category` over a struct of that dictionary (first, missing at a boolean's slot) and `boolean: bool` (missing elsewhere) |
+| | booleans only | a bitmap of the values | `bool` |
+| | any other value (strings beside numbers), or a string not valid UTF-8 | the list, each atom as its string | (none) |
+| `:color`, `:point`, `:term` | any | the list | (none) |
+
+- **Faithful zones without a time-zone database.** A `DateTime` holds its zone's name, abbreviation and both offsets, and `==` compares them all. Offsets change within one zone (Denver is MST in winter, MDT in summer), and macaw_data has no time-zone database, so a zone name on the column could not rebuild the values. A zoned column stores each whole zone once in its dictionary: one named zone is about two entries, standard and daylight time. Any Arrow reader of the struct's first field reads the correct instants.
+- **Precision.** A time's precision (the second element of its `microsecond`) is on the column when every value shares it, else in a side buffer of one byte per value. In Arrow's form it is the field's metadata `macaw.precision` when uniform; else a `precision: uint8` field, the last of `macaw.zoned`'s struct, or, for a UTC or naive column, of an extension `macaw.precise` over a struct of `instant` (first) and `precision`. So `~U[2026-01-01 00:00:00Z]` and `~U[2026-01-01 00:00:00.000000Z]` stay distinct.
+- **Category values read back as strings** by `rows/1`, `get/2` and `column/2`, in every form: the rule is the `:category` type's, not its encoding's. An atom other than `nil`, `true` and `false` is held as the string that spells it, in the list too, and those three stay themselves. So `[:ok, true, "warn"]` reads back `["ok", true, "warn"]` whichever form holds it.
+- **Text is Arrow `utf8` only when it is valid UTF-8,** every string checked by itself (two halves of one character are each invalid, though their bytes together are not). A text column holding a binary that is not is Arrow `binary`, the same layout; a category column holding one is kept as its list.
+- **A missing value is `nil`,** in every type. A packed column keeps a **validity bitmap** beside its buffers, so a gap stays a gap and reads back as `nil`, never as 0 (§3). A bitmap is **least-significant-bit first,** as Arrow numbers bits: value i is bit (i rem 8) of byte (i div 8), and the padding bits of the last byte are 0. A missing value's slot in a values buffer holds zeros, which Arrow leaves unspecified, and takes no bytes of a text column's data.
+- **`new/1`** builds a table from `{name, type, values}` columns and reports every fault at once: a type not in the list (`{:enum, types}`), a value its type does not hold (`{[name, i], {:type, type}}`: a number column's non-number, a time column's non-time, a color column's value that is not a color term, `Schema.color?/1`, a point column's non-point), a column of another length than the first (`{:length, n}`), a name given twice (`:duplicate`). `new!/1` raises naming them.
+- **Reading back:** `column/2` is a column's values in order. `rows/1` is the row view: one map per row keyed by every column name. `row/2` is one row, `nil` past the end; `names/1`, `size/1` and `column_type/2` describe the table.
+- **`slice/3`** is a run of rows as a table of the same columns; a packed column's buffers are sliced, not copied, and its bitmaps shifted to start at the slice. A text column's offsets keep pointing into its parent's data, and a dictionary column keeps its parent's dictionary, as Arrow's slices do.
 - **The packed columns live off the process heap:** a binary over 64 bytes is reference-counted, so a collection never copies it, and a table's cost to its process does not grow with its rows.
+- **One chunk today.** A table is one chunk of each column; a zoned column's and a category column's dictionary are the column's. Chunked tables are #9's.
 
 ```test:table-new
-new/1 builds named typed columns and refuses an unknown type, a value of the wrong type, a column of another length and a duplicate name, all at once, ordered by path
+new/1 builds named typed columns and refuses an unknown type, a value of the wrong type, a column of another length and a duplicate name, all at once, ordered by path; a string in a color column is refused
 ```
 
 ```test:table-packed
-number and time columns are packed binaries with a validity bitmap; integers read back integers, mixed columns floats, a too-large integer makes floats, times read back in UTC to the microsecond, and a gap reads back nil
+number and time columns are packed with a validity bitmap; a gap reads back nil, never 0
+```
+
+```test:table-numbers
+an integer column is int64 and a float column float64; a mixed column within ±2^53 reads back as given through the integral bitmap, one with 2^60 through the dense union, and 2^70 keeps the column a list
+```
+
+```test:table-times
+an all-UTC column is a plain UTC timestamp; one named zone across a daylight-saving change has two zone entries; mixed zones, mixed precision, naive times and dates read back == as given, with no time-zone database; mixed kinds keep the list
+```
+
+```test:table-text
+a text column is offsets and one data buffer, Arrow binary when a value is not valid UTF-8; a category column is codes and a dictionary, an atom and its string one code read back as the string, booleans beside names in side bitmaps, booleans and nil kept, a mixed-type or non-UTF-8 column a list whose atoms read back as strings, the same values reading back the same through either form
+```
+
+```test:table-arrow
+validity bitmaps, int64 and float64 values, a text column's offsets and data, and a dictionary column's codes and dictionary equal fixtures written from the Arrow columnar format, byte for byte
+```
+
+```test:table-faithful
+for generated columns of each type with gaps, new/1 and from/2 then rows/1 and column/2 read back values == to those given, categories as strings
 ```
 
 ```test:table-off-heap
@@ -52,7 +103,7 @@ slice/3 is the rows from start, count of them, for generated tables and bounds; 
 - a list of row maps, a map or keyword list of equal-length columns, an `Nx.Tensor`, or anything implementing `Table.Reader` (Explorer's frames among them), through `rows/1`;
 - columns are named by every key of every row, in term order, a row without the key missing there;
 - each column's type is the one `types:` gives, else the one `column_types/1` infers, else `:term`;
-- a time column's values become `DateTime`s at the edge: a `Date` at midnight UTC, a `NaiveDateTime` as UTC, an ISO 8601 string parsed.
+- a time column's values become `DateTime`s at the edge: a `Date` at midnight UTC, a `NaiveDateTime` as UTC, an ISO 8601 string parsed; a `DateTime` keeps its zone, and every value its precision. `new/1` takes `NaiveDateTime`s and `Date`s as themselves.
 
 The `table` package and Nx are optional dependencies: without them lists and column maps still work, and a struct source or a tensor raises `UndefinedFunctionError` where it is read.
 

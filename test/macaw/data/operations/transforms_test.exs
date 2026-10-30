@@ -176,11 +176,12 @@ defmodule Macaw.Data.Operations.TransformsTest do
       iso = for i <- 0..4, do: %{t: DateTime.to_iso8601(at.(i * 60))}
       assert length(run(%{op: "window", field: :t, from: [1, :minute]}, iso)) == 2
 
-      # A Date is a DateTime at midnight UTC once the table reads it (spec/01 §1.1).
+      # A Date is a DateTime at midnight UTC once the table reads it (spec/01 §1.1), at
+      # the Date's own precision: packing keeps it (macaw_data#16).
       dates = for i <- 0..4, do: %{t: Date.add(~D[2026-01-01], i)}
 
       assert run(%{op: "window", field: :t, from: [1, :day]}, dates) |> ts() ==
-               [~U[2026-01-04 00:00:00.000000Z], ~U[2026-01-05 00:00:00.000000Z]]
+               [~U[2026-01-04 00:00:00Z], ~U[2026-01-05 00:00:00Z]]
 
       # The reading itself, before any table: each form in seconds.
       assert Transforms.seconds!(~D[1970-01-02], :t, "window") == 86_400.0
@@ -369,7 +370,8 @@ defmodule Macaw.Data.Operations.TransformsTest do
                      ])
                    end
 
-      assert_raise ArgumentError, ~r/^transform "m4": :t reads :soon, which is not a time/, fn ->
+      # A category reads back as the string that spells it (macaw_data#16).
+      assert_raise ArgumentError, ~r/^transform "m4": :t reads "soon", which is not a time/, fn ->
         run(%{op: "m4", fields: [:t, :v], width: 3}, [%{t: :soon, v: 1}])
       end
     end
@@ -399,17 +401,18 @@ defmodule Macaw.Data.Operations.TransformsTest do
     test "turns wide columns into long rows, skipping listed columns the rows lack" do
       wide = [%{hour: 0, cpu: 1, mem: 2}, %{hour: 1, cpu: 3}, %{hour: 2, mem: nil, cpu: 5}]
 
+      # A category reads back as the string that spells it (macaw_data#16).
       assert run(%{op: "fold", fields: [:cpu, :mem, :disk]}, wide) == [
-               %{:hour => 0, "key" => :cpu, "value" => 1},
-               %{:hour => 0, "key" => :mem, "value" => 2},
-               %{:hour => 1, "key" => :cpu, "value" => 3},
-               %{:hour => 2, "key" => :cpu, "value" => 5}
+               %{:hour => 0, "key" => "cpu", "value" => 1},
+               %{:hour => 0, "key" => "mem", "value" => 2},
+               %{:hour => 1, "key" => "cpu", "value" => 3},
+               %{:hour => 2, "key" => "cpu", "value" => 5}
              ]
 
       # The order within a row is the author's; as names the two columns.
       assert run(%{op: "fold", fields: [:mem, :cpu], as: [:series, :v]}, Enum.take(wide, 1)) == [
-               %{hour: 0, series: :mem, v: 2},
-               %{hour: 0, series: :cpu, v: 1}
+               %{hour: 0, series: "mem", v: 2},
+               %{hour: 0, series: "cpu", v: 1}
              ]
 
       assert_raise ArgumentError, "step 1, as: is a pair, each a column name", fn ->
@@ -467,10 +470,11 @@ defmodule Macaw.Data.Operations.TransformsTest do
                },
                rows
              ) == [
-               %{:host => "a", :role => :web, "p100" => 10.0},
-               %{:host => "b", :role => :db, "p100" => 30.0},
-               %{:host => "a", :role => :db, "p100" => 50.0},
-               %{:host => nil, :role => :web, "p100" => 7.0}
+               # A category reads back as the string that spells it (macaw_data#16).
+               %{:host => "a", :role => "web", "p100" => 10.0},
+               %{:host => "b", :role => "db", "p100" => 30.0},
+               %{:host => "a", :role => "db", "p100" => 50.0},
+               %{:host => nil, :role => "web", "p100" => 7.0}
              ]
 
       assert run(%{op: "aggregate", field: :ms, fn: "count"}, rows) == [%{"count" => 4}]

@@ -307,7 +307,8 @@ defmodule Macaw.Data.TableTest do
       assert Table.size(table) == 2
       assert Table.column_type(table, "v") == :number
       assert Table.column_type(table, "nope") == nil
-      assert Table.column(table, "k") == [:a, :b]
+      # A category reads back as the string that spells it (macaw_data#16).
+      assert Table.column(table, "k") == ["a", "b"]
       assert Table.column(table, "nope") == nil
       assert Table.types() == [:number, :time, :category, :text, :color, :point, :term]
 
@@ -317,10 +318,12 @@ defmodule Macaw.Data.TableTest do
                {"w", :number, [1, 2, 3]},
                {"v", :text, ["a", "b"]},
                {"z", :money, [1, 2]},
-               {"p", :point, [{1, 2}, {:a, 2}]}
+               {"p", :point, [{1, 2}, {:a, 2}]},
+               {"c", :color, ["#fff", {:color, "good"}]}
              ]) ==
                {:error,
                 [
+                  {["c", 0], {:type, :color}},
                   {["p", 1], {:type, :point}},
                   {["t"], {:length, 2}},
                   {["v"], :duplicate},
@@ -362,24 +365,21 @@ defmodule Macaw.Data.TableTest do
           {:t, :time, [~U[2024-01-01 00:00:00.000001Z], nil, ~U[1969-12-31 23:59:59Z]]}
         ])
 
-      assert {:number, {:s64, bin, valid}} = table.columns.i
-      assert byte_size(bin) == 24 and valid == <<1::1, 0::1, 1::1>>
-      assert {:number, {:f64, _, _}} = table.columns.f
-      assert {:time, {:us, _, _}} = table.columns.t
+      # The bitmap is least-significant-bit first: values 0 and 2 present, 0b101.
+      assert {:number, {:int64, bin, valid}} = table.columns.i
+      assert byte_size(bin) == 24 and valid == <<0b101>>
+      assert {:number, {:integral, _, <<0b101>>, <<0b100>>}} = table.columns.f
+      assert {:time, {:utc, _, <<0b101>>, _precision}} = table.columns.t
 
-      # Integers read back integers; a column of both, floats; never 0 for a gap.
-      assert Table.column(table, :i) == [1, nil, -3]
-      assert Table.column(table, :f) == [1.5, nil, 2.0]
+      # Each value reads back as given, integer or float; never 0 for a gap.
+      assert Table.column(table, :i) === [1, nil, -3]
+      assert Table.column(table, :f) === [1.5, nil, 2]
 
       assert Table.column(table, :t) == [
                ~U[2024-01-01 00:00:00.000001Z],
                nil,
-               DateTime.from_unix!(-1_000_000, :microsecond)
+               ~U[1969-12-31 23:59:59Z]
              ]
-
-      # An integer beyond 64 bits keeps its value, as a float column.
-      big = Table.new!([{:n, :number, [2 ** 70, 1]}])
-      assert {:number, {:f64, _, _}} = big.columns.n
     end
 
     @tag verifies: "table-off-heap"
@@ -388,7 +388,7 @@ defmodule Macaw.Data.TableTest do
       large = Table.new!([{"v", :number, Enum.map(1..1_000_000, &(&1 * 1.0))}])
 
       assert :erts_debug.size(large) == :erts_debug.size(small)
-      assert {:number, {:f64, bin, _}} = large.columns["v"]
+      assert {:number, {:float64, bin, _}} = large.columns["v"]
       assert byte_size(bin) == 8_000_000
       # Over 64 bytes, a binary is reference-counted, off the process heap.
       assert :binary.referenced_byte_size(bin) == 8_000_000
@@ -408,15 +408,23 @@ defmodule Macaw.Data.TableTest do
       assert Map.new(Table.names(table), &{&1, Table.column_type(table, &1)}) ==
                %{t: :time, v: :number, k: :category, s: :text}
 
+      # Each time at its own precision, as packing keeps it (macaw_data#16).
       assert Table.column(table, :t) == [
-               ~U[2024-01-01 00:00:00.000000Z],
-               ~U[2024-01-02 00:00:00.000000Z],
-               ~U[2024-01-03 12:00:00.000000Z]
+               ~U[2024-01-01 00:00:00Z],
+               ~U[2024-01-02 00:00:00Z],
+               ~U[2024-01-03 12:00:00Z]
              ]
 
-      {:ok, typed} = Table.from(rows, types: %{s: :color, k: :term})
-      assert Table.column_type(typed, :s) == :color
+      # A category reads back as the string that spells it (macaw_data#16).
+      assert Table.column(table, :k) == ["a", "b", nil]
+
+      {:ok, typed} = Table.from(rows, types: %{s: :term, k: :term})
+      assert Table.column_type(typed, :s) == :term
       assert Table.column_type(typed, :k) == :term
+      assert Table.column(typed, :k) == [:a, :b, nil]
+
+      # A string is never a color.
+      assert {:error, [{[:s, 0], {:type, :color}} | _]} = Table.from(rows, types: %{s: :color})
 
       # A mixed column is a term column; a table passes through.
       {:ok, mixed} = Table.from([%{m: 1}, %{m: "x"}])
@@ -489,7 +497,7 @@ defmodule Macaw.Data.TableTest do
       assert Table.row(table, 0) == %{"v" => 1.0}
       assert Table.row(table, 100) == nil
 
-      %{columns: %{"v" => {:number, {:f64, bin, _}}}} = Table.slice(table, 10, 20)
+      %{columns: %{"v" => {:number, {:float64, bin, _}}}} = Table.slice(table, 10, 20)
       assert byte_size(bin) == 160
       assert :binary.referenced_byte_size(bin) == 800
     end

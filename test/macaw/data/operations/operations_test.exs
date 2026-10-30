@@ -397,7 +397,8 @@ defmodule Macaw.Data.OperationsTest do
       schema = Macaw.Data.Schema.new!(%{v: %{type: :number}})
       context = %{now: ~U[2026-10-27 12:00:00Z], schema: schema}
       {:ok, table} = Operations.apply(registry(), [%{op: "stamp"}], [%{v: 1}], context)
-      assert rows(table) == [%{:v => 1, "now" => ~U[2026-10-27 12:00:00.000000Z], "fields" => 1}]
+      # As given, to its precision: packing keeps it (macaw_data#16).
+      assert rows(table) == [%{:v => 1, "now" => ~U[2026-10-27 12:00:00Z], "fields" => 1}]
     end
   end
 end
