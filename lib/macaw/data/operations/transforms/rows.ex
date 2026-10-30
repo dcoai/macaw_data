@@ -129,8 +129,8 @@ defmodule Macaw.Data.Operations.Transforms.Sort do
   """
   @behaviour Macaw.Data.Transform
 
-  alias Macaw.Data.Operations.{Option, Transforms}
-  alias Macaw.Data.Table
+  alias Macaw.Data.{Operations, Table}
+  alias Macaw.Data.Operations.{Option, Step, Transforms}
 
   @impl true
   def name, do: "sort"
@@ -155,13 +155,41 @@ defmodule Macaw.Data.Operations.Transforms.Sort do
   def outputs(_node, columns), do: columns
 
   @impl true
-  def run(%{"field" => field, "order" => order} = node, table, _context) do
+  def run(node, table, context), do: Step.run(__MODULE__, node, table, context)
+
+  # A global step (spec/04 §1.4): each chunk's part is its readings of the field; the
+  # merge sorts every row of every chunk stably and gathers them across the chunks.
+  @impl true
+  def class(_node), do: :global
+
+  @impl true
+  def reads, do: []
+
+  @impl true
+  def bind(%{"field" => field}, table, _context),
+    do: %{name: Transforms.name_in(Table.names(table), field)}
+
+  @impl true
+  def resolve(_node, _view, %{name: name}), do: name
+
+  @impl true
+  def chunk(_node, view, name), do: Transforms.view_values(view, name)
+
+  @impl true
+  def finish(%{"order" => order} = node, partials, %{input: input, key: key}) do
     direction = if order == :descending, do: :desc, else: :asc
 
-    table
-    |> Table.rows()
-    |> Enum.sort_by(&Table.get(&1, field), direction)
-    |> Transforms.answer(__MODULE__, node, table)
+    picks =
+      partials
+      |> Enum.with_index()
+      |> Enum.flat_map(fn {readings, v} ->
+        readings |> Enum.with_index() |> Enum.map(fn {reading, i} -> {reading, {v, i}} end)
+      end)
+      |> Enum.sort_by(&elem(&1, 0), direction)
+      |> Enum.map(&elem(&1, 1))
+
+    columns = outputs(node, Operations.columns(input))
+    Step.gather(input, picks, columns, %{}, key)
   end
 end
 
@@ -174,7 +202,7 @@ defmodule Macaw.Data.Operations.Transforms.Fold do
   """
   @behaviour Macaw.Data.Transform
 
-  alias Macaw.Data.Operations.{Option, Transforms}
+  alias Macaw.Data.Operations.{Option, Step, Transforms}
   alias Macaw.Data.Table
 
   @impl true
@@ -209,17 +237,40 @@ defmodule Macaw.Data.Operations.Transforms.Fold do
   end
 
   @impl true
-  def run(%{"fields" => fields, "as" => [key, value]} = node, table, _context) do
-    folded = MapSet.new(fields, &Transforms.spell/1)
+  def run(node, table, context), do: Step.run(__MODULE__, node, table, context)
 
-    rows =
-      for row <- Table.rows(table), field <- fields, (reading = Table.get(row, field)) != nil do
-        row
-        |> Map.reject(fn {k, _v} -> MapSet.member?(folded, Transforms.spell(k)) end)
-        |> Map.put(key, field)
-        |> Map.put(value, reading)
-      end
+  # A per-row reshape (spec/04 §1.4): each chunk's rows repeated once per listed column
+  # each holds, the carried columns gathered at the repeated indexes and the key and
+  # value columns added.
+  @impl true
+  def class(_node), do: :row
 
-    Transforms.answer(rows, __MODULE__, node, table)
+  @impl true
+  def reads, do: []
+
+  @impl true
+  def bind(%{"fields" => fields}, table, _context) do
+    names = Table.names(table)
+    %{fields: for(field <- fields, name = Transforms.name_in(names, field), do: {field, name})}
+  end
+
+  @impl true
+  def resolve(_node, _view, %{fields: fields}), do: fields
+
+  @impl true
+  def chunk(%{"as" => [key, value]}, view, fields) do
+    columns =
+      for {field, name} <- fields, do: {field, List.to_tuple(Transforms.view_values(view, name))}
+
+    {_chunk, _first, count} = view
+
+    picked =
+      for i <- 0..(count - 1)//1,
+          {field, readings} <- columns,
+          (reading = elem(readings, i)) != nil,
+          do: {i, field, reading}
+
+    {:reshape, Enum.map(picked, &elem(&1, 0)),
+     %{key => Enum.map(picked, &elem(&1, 1)), value => Enum.map(picked, &elem(&1, 2))}}
   end
 end

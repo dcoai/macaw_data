@@ -2,8 +2,9 @@ defmodule Macaw.Data.Operations.Transforms do
   @moduledoc """
   The table operations of `macaw_data`'s package (spec/04 §4), each a transform
   (`Macaw.Data.Transform`) ported from visualize's `Chart.Transform.Data`, and what they
-  share: reading a column by either spelling of its name, a reading as seconds, and
-  answering rows as the table `outputs/2` names.
+  share: finding a column by either spelling of its name, reading a chunk's view of one,
+  a reading as seconds, and a per-row selection. Each is a column-native step
+  (`Macaw.Data.Operations.Step`, spec/04 §1.4); none reads rows.
 
   | Op | Options (`*` required) |
   |---|---|
@@ -20,7 +21,7 @@ defmodule Macaw.Data.Operations.Transforms do
   | `spectrum` | `field*`, `time`, `every`, `samples`, `window`, `detrend`, `as` |
   """
 
-  alias Macaw.Data.{Operations, Table}
+  alias Macaw.Data.Table
   alias Macaw.Data.Operations.Option
 
   @doc "The modules of the table operations, in spec/04 §4's order."
@@ -43,12 +44,6 @@ defmodule Macaw.Data.Operations.Transforms do
   end
 
   @doc false
-  # The rows a step derived, as the table its outputs name over the input's columns.
-  @spec answer([map()], module(), map(), Table.t()) :: Table.t()
-  def answer(rows, module, node, table),
-    do: Operations.table(rows, module.outputs(node, Operations.columns(table)))
-
-  @doc false
   # Columns with `added` put last, any column spelling an added name dropped first.
   @spec put_columns(Macaw.Data.Transform.columns(), Macaw.Data.Transform.columns()) ::
           Macaw.Data.Transform.columns()
@@ -64,17 +59,6 @@ defmodule Macaw.Data.Operations.Transforms do
     Enum.find_value(columns, :term, fn {column, type} ->
       if spell(column) == spell(name), do: type
     end)
-  end
-
-  @doc false
-  # The values of the column spelled `name`, read from the table's own storage, a packed
-  # column without building a row list; all nil when the table has none.
-  @spec column(Table.t(), Table.name()) :: [term()]
-  def column(table, name) do
-    case Enum.find(Table.names(table), &(spell(&1) == spell(name))) do
-      nil -> List.duplicate(nil, Table.size(table))
-      found -> Table.column(table, found)
-    end
   end
 
   @doc false
@@ -141,20 +125,6 @@ defmodule Macaw.Data.Operations.Transforms do
           "transform #{inspect(op)}: #{inspect(field)} reads #{inspect(value)}, which is not " <>
             "#{kind} (spec/04 §4)"
   end
-
-  @doc false
-  # The `{x, y}` a downsampling reads from a row: x a number or a time in seconds, y a
-  # number, and nil either way a gap (spec/04 §4.4).
-  @spec point_reader(String.t(), [Table.name()]) :: (map() -> {term(), term()})
-  def point_reader(op, [x, y]) do
-    fn row ->
-      {reading(Table.get(row, x), x, op, &seconds!/3),
-       reading(Table.get(row, y), y, op, &number!/3)}
-    end
-  end
-
-  defp reading(nil, _field, _op, _read), do: nil
-  defp reading(value, field, op, read), do: read.(value, field, op)
 
   @doc false
   @spec number!(term(), Table.name(), String.t()) :: number()

@@ -136,6 +136,13 @@ defmodule Macaw.Data.Stack do
   def generate(%__MODULE__{} = stack, data),
     do: generate_rows(stack, Macaw.Data.Table.rows(data))
 
+  @doc """
+  As `generate/2`, over a list of data each given to the value function as it is: no
+  source read as rows. The `stack` step stacks row places so (spec/04 §4.8).
+  """
+  @spec series(t(), [term()]) :: [series()]
+  def series(%__MODULE__{} = stack, data) when is_list(data), do: generate_rows(stack, data)
+
   defp generate_rows(%__MODULE__{keys: []}, _data), do: []
   defp generate_rows(%__MODULE__{}, []), do: []
 

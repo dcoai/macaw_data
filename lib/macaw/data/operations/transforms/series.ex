@@ -45,17 +45,13 @@ defmodule Macaw.Data.Operations.Transforms.Bin do
   end
 
   @impl true
-  def run(node, table, context) do
-    case class(node) do
-      :combine -> Step.run(__MODULE__, node, table, context)
-      :global -> run_whole(node, table)
-    end
-  end
+  def run(node, table, context), do: Step.run(__MODULE__, node, table, context)
 
   # A combine (spec/04 §1.4) counting, or reducing by an aggregate with the combining form:
   # the bins are bound over the whole input's extent once, each chunk's readings are
-  # binned into per-bin states, and the states merge. With any other aggregate, run whole
-  # until spec/04 §1.4's global steps take it.
+  # binned into per-bin states, and the states merge. With any other aggregate (median,
+  # quantile, distinct, …), a global step: each chunk's readings binned, and every bin's
+  # readings reduced at once in the merge.
   @impl true
   def class(%{"fn" => nil}), do: :combine
   def class(%{"fn" => aggregate}), do: Aggregate.group_class(aggregate)
@@ -128,7 +124,14 @@ defmodule Macaw.Data.Operations.Transforms.Bin do
   end
 
   @impl true
-  def finish(node, merged, %{input: input, key: key}) do
+  def finish(node, partial, %{input: input, key: key}) do
+    merged =
+      case {class(node), partial} do
+        {:global, []} -> nil
+        {:global, [first | rest]} -> Enum.reduce(rest, first, &combine(node, &2, &1))
+        {:combine, merged} -> merged
+      end
+
     {edges, merged} = merged || {{}, %{}}
     {first, _step} = bin_state(node)
     value = bin_value(node)
@@ -137,7 +140,8 @@ defmodule Macaw.Data.Operations.Transforms.Bin do
       for i <- 0..(tuple_size(edges) - 1)//1 do
         {x0, x1} = elem(edges, i)
         {state, values} = Map.get(merged, i, {first, []})
-        {x0, x1, value.(state), Enum.reverse(values)}
+        values = Enum.reverse(values)
+        {x0, x1, value.(state, values), values}
       end
 
     columns = outputs(node, Operations.columns(input))
@@ -178,73 +182,47 @@ defmodule Macaw.Data.Operations.Transforms.Bin do
     end) || if(last >= 0 and value == elem(elem(edges, last), 1), do: last)
   end
 
-  # A bin's state: its first state and the state after one more reading.
+  # A bin's state: its first state and the state after one more reading; none for an
+  # aggregate without the combining form, whose bins keep their readings alone.
   defp bin_state(%{"fn" => nil}), do: {0, fn n, _value -> n + 1 end}
 
   defp bin_state(%{"fn" => aggregate} = node) do
-    options = options(node, aggregate)
-    {aggregate.init(options), &aggregate.step(&1, &2, options)}
+    case Aggregate.group_class(aggregate) do
+      :combine ->
+        options = options(node, aggregate)
+        {aggregate.init(options), &aggregate.step(&1, &2, options)}
+
+      :global ->
+        {nil, fn nil, _value -> nil end}
+    end
   end
 
   defp bin_merge(%{"fn" => nil}), do: &(&1 + &2)
 
   defp bin_merge(%{"fn" => aggregate} = node) do
-    options = options(node, aggregate)
-    &aggregate.merge(&1, &2, options)
+    case Aggregate.group_class(aggregate) do
+      :combine ->
+        options = options(node, aggregate)
+        &aggregate.merge(&1, &2, options)
+
+      :global ->
+        fn nil, nil -> nil end
+    end
   end
 
-  defp bin_value(%{"fn" => nil}), do: & &1
+  # A bin's value: its count, its state finished, or its readings reduced at once.
+  defp bin_value(%{"fn" => nil}), do: fn n, _values -> n end
 
   defp bin_value(%{"fn" => aggregate} = node) do
     options = options(node, aggregate)
-    &aggregate.finish(&1, options)
+
+    case Aggregate.group_class(aggregate) do
+      :combine -> fn state, _values -> aggregate.finish(state, options) end
+      :global -> fn nil, values -> aggregate.reduce(values, options) end
+    end
   end
 
   defp options(node, aggregate), do: Map.take(node, Enum.map(aggregate.options(), &elem(&1, 0)))
-
-  # A bin's rows with an aggregate that does not combine: every reading read at once.
-  defp run_whole(%{"field" => field, "thresholds" => thresholds, "as" => as} = node, table) do
-    values =
-      table
-      |> Transforms.column(field)
-      |> Enum.reject(&is_nil/1)
-      |> Enum.map(&Transforms.number!(&1, field, name()))
-
-    reduce = reducer(node)
-
-    values
-    |> bins(thresholds)
-    |> Enum.map(fn bin ->
-      %{"x0" => bin.x0, "x1" => bin.x1, "y0" => 0, "values" => bin.values}
-      |> Map.put(as, reduce.(bin.values))
-    end)
-    |> Operations.table(outputs(node, Operations.columns(table)))
-  end
-
-  defp reducer(%{"fn" => aggregate} = node) do
-    options = options(node, aggregate)
-    &aggregate.reduce(&1, options)
-  end
-
-  # visualize's `Visualize.Data.bin/2`: the bins over the extent, each holding its readings
-  # in input order.
-  defp bins([], _thresholds), do: []
-
-  defp bins(values, thresholds) do
-    edges = edges(Enum.min_max(values), thresholds)
-    last = tuple_size(edges) - 1
-
-    bins = for {x0, x1} <- Tuple.to_list(edges), do: %{x0: x0, x1: x1, values: []}
-
-    values
-    |> Enum.reduce(bins, fn value, bins ->
-      case bin_of(edges, value, last) do
-        nil -> bins
-        index -> List.update_at(bins, index, &%{&1 | values: [value | &1.values]})
-      end
-    end)
-    |> Enum.map(&%{&1 | values: Enum.reverse(&1.values)})
-  end
 end
 
 defmodule Macaw.Data.Operations.Transforms.Stack do
@@ -256,8 +234,8 @@ defmodule Macaw.Data.Operations.Transforms.Stack do
   """
   @behaviour Macaw.Data.Transform
 
-  alias Macaw.Data.Operations.{Option, Transforms}
-  alias Macaw.Data.Table
+  alias Macaw.Data.{Operations, Table}
+  alias Macaw.Data.Operations.{Option, Step, Transforms}
 
   @orders [:none, :ascending, :descending, :inside_out, :reverse, :appearance]
   @offsets [:none, :expand, :silhouette, :wiggle, :diverging]
@@ -294,59 +272,105 @@ defmodule Macaw.Data.Operations.Transforms.Stack do
   end
 
   @impl true
-  def run(%{"fields" => fields, "order" => order, "offset" => offset} = node, table, _context) do
-    rows = Table.rows(table)
+  def run(node, table, context), do: Step.run(__MODULE__, node, table, context)
 
-    Enum.each(rows, fn row ->
-      Enum.each(fields, fn field ->
-        reading = Table.get(row, field)
-        if reading != nil, do: Transforms.number!(reading, field, name())
+  # A global step and a reshape (spec/04 §1.4): each chunk's part is its readings of the
+  # series; the offsets are stacked across every row, and the datum's columns gathered at
+  # repeated indexes, one row per series per datum, beside the added ones.
+  @impl true
+  def class(_node), do: :global
+
+  @impl true
+  def reads, do: []
+
+  @impl true
+  def bind(%{"fields" => fields}, table, _context) do
+    names = Table.names(table)
+    %{fields: Enum.map(fields, &{&1, Transforms.name_in(names, &1)})}
+  end
+
+  @impl true
+  def resolve(_node, _view, %{fields: fields}), do: fields
+
+  @impl true
+  def chunk(_node, view, fields) do
+    for {field, name} <- fields do
+      view
+      |> Transforms.view_values(name)
+      |> Enum.map(fn
+        nil -> nil
+        reading -> Transforms.number!(reading, field, name())
       end)
-    end)
+    end
+  end
 
-    {keys, order} = order(order, fields, rows)
+  @impl true
+  def finish(%{"fields" => fields, "order" => order, "offset" => offset} = node, partials, at) do
+    %{input: input, key: key} = at
+    sizes = Enum.map(partials, fn [first | _] -> length(first) end)
+    readings = Enum.zip_with([List.duplicate([], length(fields)) | partials], &Enum.concat/1)
+    by_field = fields |> Enum.zip(Enum.map(readings, &List.to_tuple/1)) |> Map.new()
+    count = Enum.sum(sizes)
+    {keys, order} = order(order, fields, by_field, count)
 
     series =
       Macaw.Data.Stack.new()
       |> Macaw.Data.Stack.keys(keys)
+      |> Macaw.Data.Stack.value(fn j, field -> elem(by_field[field], j) || 0 end)
       |> Macaw.Data.Stack.order(order)
       |> Macaw.Data.Stack.offset(offset)
-      |> Macaw.Data.Stack.generate(rows)
+      |> Macaw.Data.Stack.series(Enum.to_list(0..(count - 1)//1))
 
     by_key = Map.new(series, &{&1.key, &1})
+    places = places(sizes)
 
     stacked =
-      for key <- fields, s = Map.get(by_key, key), s != nil, point <- s.points do
-        Map.merge(point.data, %{
-          "key" => key,
-          "series" => s.index,
-          "value" => point.value,
-          "y0" => point.y0,
-          "y1" => point.y1
-        })
-      end
+      for key <- fields,
+          s = Map.get(by_key, key),
+          s != nil,
+          point <- s.points,
+          do: {elem(places, point.data), key, s.index, point}
 
-    Transforms.answer(stacked, __MODULE__, node, table)
+    added = %{
+      "key" => Enum.map(stacked, &elem(&1, 1)),
+      "series" => Enum.map(stacked, &elem(&1, 2)),
+      "value" => Enum.map(stacked, &elem(&1, 3).value),
+      "y0" => Enum.map(stacked, &elem(&1, 3).y0),
+      "y1" => Enum.map(stacked, &elem(&1, 3).y1)
+    }
+
+    columns = outputs(node, Operations.columns(input))
+    Step.gather(input, Enum.map(stacked, &elem(&1, 0)), columns, added, key)
   end
 
-  defp order(:inside_out, fields, _rows), do: {fields, :insideout}
+  # Each row of the input as `{view, row}`, by its place.
+  defp places(sizes) do
+    sizes
+    |> Enum.with_index()
+    |> Enum.flat_map(fn {n, v} -> for i <- 0..(n - 1)//1, do: {v, i} end)
+    |> List.to_tuple()
+  end
+
+  defp order(:inside_out, fields, _by_field, _count), do: {fields, :insideout}
 
   # d3's stackOrderAppearance: series in ascending order of the index of their peak.
-  defp order(:appearance, fields, rows), do: {Enum.sort_by(fields, &peak(rows, &1)), :none}
+  defp order(:appearance, fields, by_field, count),
+    do: {Enum.sort_by(fields, &peak(by_field[&1], count)), :none}
 
   # A fixed order names the keys by spelling; the stack matches them as `fields` spells them.
-  defp order({:keys, listed}, fields, _rows) do
+  defp order({:keys, listed}, fields, _by_field, _count) do
     spelled = Map.new(fields, &{Transforms.spell(&1), &1})
     {fields, {:keys, for(key <- listed, field = spelled[Transforms.spell(key)], do: field)}}
   end
 
-  defp order(order, fields, _rows), do: {fields, order}
+  defp order(order, fields, _by_field, _count), do: {fields, order}
 
-  defp peak(rows, key) do
-    rows
-    |> Enum.map(&(Table.get(&1, key) || 0))
-    |> Enum.with_index()
-    |> Enum.max_by(fn {v, _i} -> v end, fn -> {0, 0} end)
+  defp peak(_readings, 0), do: 0
+
+  defp peak(readings, count) do
+    0..(count - 1)
+    |> Enum.map(&{elem(readings, &1) || 0, &1})
+    |> Enum.max_by(fn {v, _i} -> v end)
     |> elem(1)
   end
 end
@@ -361,8 +385,8 @@ defmodule Macaw.Data.Operations.Transforms.Spectrum do
   """
   @behaviour Macaw.Data.Transform
 
-  alias Macaw.Data.{FFT, Operations, Table}
-  alias Macaw.Data.Operations.{Option, Transforms}
+  alias Macaw.Data.{FFT, Table}
+  alias Macaw.Data.Operations.{Option, Step, Transforms}
 
   @impl true
   def name, do: "spectrum"
@@ -396,10 +420,43 @@ defmodule Macaw.Data.Operations.Transforms.Spectrum do
   end
 
   @impl true
-  def run(%{"field" => field} = node, table, _context) do
+  def run(node, table, context), do: Step.run(__MODULE__, node, table, context)
+
+  # A global step (spec/04 §1.4): each chunk's part is its readings of the field and the
+  # time column; the FFT runs over the newest samples of every chunk.
+  @impl true
+  def class(_node), do: :global
+
+  @impl true
+  def reads, do: []
+
+  @impl true
+  def bind(%{"field" => field, "time" => time}, table, _context) do
+    names = Table.names(table)
+    %{field: Transforms.name_in(names, field), time: time && Transforms.name_in(names, time)}
+  end
+
+  @impl true
+  def resolve(_node, _view, bound), do: bound
+
+  @impl true
+  def chunk(_node, view, %{field: field, time: time}) do
+    times = if time, do: Transforms.view_values(view, time), else: nil
+    {Transforms.view_values(view, field), times}
+  end
+
+  @impl true
+  def finish(node, partials, %{input: input, key: key}) do
     {frequency, magnitude, phase} = names(node["as"])
-    sampled = Enum.filter(Table.rows(table), &is_number(Table.get(&1, field)))
-    every = node["every"] || median_gap(sampled, node["time"]) || 1
+    readings = Enum.flat_map(partials, &elem(&1, 0))
+
+    times =
+      if node["time"],
+        do: Enum.flat_map(partials, &(elem(&1, 1) || List.duplicate(nil, length(elem(&1, 0))))),
+        else: List.duplicate(nil, length(readings))
+
+    sampled = for {v, t} <- Enum.zip(readings, times), is_number(v), do: {v, t}
+    every = node["every"] || median_gap(Enum.map(sampled, &elem(&1, 1)), node["time"]) || 1
 
     options =
       Enum.reject(
@@ -407,14 +464,13 @@ defmodule Macaw.Data.Operations.Transforms.Spectrum do
         fn {_key, value} -> value == nil end
       )
 
-    sampled
-    |> Enum.map(&Table.get(&1, field))
-    |> FFT.spectrum(every, options)
-    |> Enum.map(fn line ->
-      row = %{frequency => line.frequency, magnitude => line.magnitude}
-      if phase, do: Map.put(row, phase, line.phase), else: row
-    end)
-    |> Operations.table(outputs(node, Operations.columns(table)))
+    lines = sampled |> Enum.map(&elem(&1, 0)) |> FFT.spectrum(every, options)
+
+    columns =
+      [{frequency, Enum.map(lines, & &1.frequency)}, {magnitude, Enum.map(lines, & &1.magnitude)}] ++
+        if(phase, do: [{phase, Enum.map(lines, & &1.phase)}], else: [])
+
+    Step.output(input, key, for({name, values} <- columns, do: {name, :number, values}))
   end
 
   defp names([frequency, magnitude]), do: {frequency, magnitude, nil}
@@ -428,12 +484,11 @@ defmodule Macaw.Data.Operations.Transforms.Spectrum do
 
   # The median positive gap between consecutive readings of the time column: instants in
   # seconds, numbers as they are; nil without a column or with no positive gap.
-  defp median_gap(_rows, nil), do: nil
+  defp median_gap(_times, nil), do: nil
 
-  defp median_gap(rows, time) do
+  defp median_gap(times, _time) do
     gaps =
-      rows
-      |> Enum.map(&Table.get(&1, time))
+      times
       |> Enum.reject(&is_nil/1)
       |> Enum.chunk_every(2, 1, :discard)
       |> Enum.map(fn [a, b] -> gap(a, b) end)

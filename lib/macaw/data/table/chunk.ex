@@ -361,6 +361,50 @@ defmodule Macaw.Data.Table.Chunk do
     }
   end
 
+  @doc """
+  A reshaping per-row step's output chunk (spec/04 §1.4, §4.7): the rows at `indexes` of
+  the run of `count` rows from `first` of `input`, repeats allowed, under `header`
+  (`{name, type}` in order): a column of `added` (a map from name to its values) packed
+  from them, any other gathered from the input's column of that name by copying its
+  slots. Named as `gather/5` names its chunk; nothing hashed.
+  """
+  @spec reshape(
+          t(),
+          non_neg_integer(),
+          non_neg_integer(),
+          [non_neg_integer()],
+          term(),
+          list(),
+          map()
+        ) ::
+          t()
+  def reshape(%__MODULE__{} = input, first, count, indexes, step_key, header, added) do
+    view = view_columns(input, first, count)
+    size = length(indexes)
+
+    columns =
+      Map.new(header, fn {name, type} ->
+        case added do
+          %{^name => values} ->
+            {:ok, col} = Column.piece(type, values, name, 0)
+            {name, col}
+
+          _ ->
+            {name, Column.gather(Map.fetch!(view, name), indexes)}
+        end
+      end)
+
+    %__MODULE__{
+      size: size,
+      columns: columns,
+      id: {input.id, step_key},
+      digest: nil,
+      derivation: Document.digest({[version(input)], step_key}),
+      base_rows: size,
+      header: header
+    }
+  end
+
   # Every column's storage for the run, the chunk read through its delta once.
   defp view_columns(%__MODULE__{delta: nil, fetch: nil, columns: columns}, first, count),
     do: Map.new(columns, fn {name, col} -> {name, Column.slice(col, first, count)} end)

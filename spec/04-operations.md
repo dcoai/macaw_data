@@ -108,7 +108,9 @@ A view is `{chunk, first, count}`, the run of a chunk the input reads (`Table.ch
 
 - **Per row** (`:row`): `filter`, `take` and `window` without `latest`. Each chunk is worked by itself, and **the merge is concatenation**. A per-row step's part is a selection of its view's rows: `:all`, the view passed through unchanged, its chunk the input's; `:none`, dropped; `{:run, first, count}`, a run of it, cut without copying; or `{:rows, indexes}`, those rows, every column gathered into a new chunk by copying its slots (`Table.Chunk.gather/5`), whose id is `{input's id, step key}`. The output keeps the input's columns and the column it is known to be sorted by (`Table.sorted/1`).
 - **A combine** (`:combine`): `sum`; `m4` and `lttb` (§4.5.1); `aggregate` and `bin` with no `fn` or one with the combining form (§1.2: `count`, `sum`, `mean`, `min`, `max`, `extent`); and `window` with `latest`. Each chunk's part is a **partial**, and the step declares `combine(node, a, b)`, the partials of two runs merged, the first's chunks before the second's, and `finish(node, merged, %{input, key})`, its table from the merged partial (`nil` for an input of no chunks). `combine/3` is **associative**: the partials are merged in the input's chunk order, and any grouping of them, any tree, gives the same merged partial, so per-chunk partials may be kept and merged again, and any chunking gives `Table.equal?/2` results. Where a step's order matters (groups in order of first appearance, `latest`'s ties, `bin`'s readings) the merge keeps it: the first run's before the second's. A combine's output is one chunk over every input chunk (`Step.output/3`, `Table.Chunk.combine/3`), its key the step's identity over every part's key, or gathered rows named by the rows they hold (`latest`). An exact sum is what makes a floating-point sum combine: any grouping of the same readings gives the same bits (§5).
-- **The step key** of a chunk is the step's identity (`step_digest/2`'s, the kernel's digest of its module and its checked node, or of `keyed/1`'s options when the step names them), the context as it resolved for the chunk, and the run of the chunk the view reads when that is not the whole chunk. Keying on raw context would miss on every frame, so the key changes only when the chunk's part could: a cache keys a part by `{Chunk.id/1, Chunk.version/1, step key}`. `Step.parts/4` lists each chunk's view, resolved context and key, computing no part; `Step.chunk/3` computes one and `Step.merge/5` merges them, given the parts' keys; `Step.run/4` is the three.
+- **Global** (`:global`): `sort`, `stack`, `spectrum`, and `aggregate` and `bin` with an `fn` that has no combining form (`median`, `quantile`, `distinct`, `variance`, `deviation`, `slope`, `delta`). Each chunk's part is what the step reads of it (its readings, the group keys); the merge is stated by the step: `finish(node, partials, %{input, key, context})`, given every partial in chunk order, runs over the whole input. **A global output's id is its step key over its inputs:** one chunk over every input chunk (`Step.output/3`, `Table.Chunk.combine/3`), named by the step's identity over the parts' keys and the inputs' ids and versions, so the same input gives the same id run after run, and a step after a global step still caches. Rows a global step keeps are **gathered across the chunks** (`Step.gather/5`): each value read back and packed again, so a dictionary is the output's own and codes are remapped across chunks, a cost the step counts.
+- **Reshapes:** `fold` is per row, its part `{:reshape, indexes, added}`: the view's rows at `indexes`, repeats allowed, its carried columns gathered at them by copying slots and its added columns packed from their values (`Table.Chunk.reshape/7`), under the step's `outputs/2`. `stack` gathers across chunks with repeated indexes, one row per series per datum, and adds its columns. With these, **no step transposes**.
+- **The step key** of a chunk is the step's identity (`step_digest/2`'s, the kernel's digest of its module and its checked node, or of `keyed/1`'s options when the step names them), the context as it resolved for the chunk, and the run of the chunk the view reads when that is not the whole chunk. Keying on raw context would miss on every frame, so the key changes only when the chunk's part could: a cache keys a part by `{Chunk.id/1, Chunk.version/1, step key}`. `Step.parts/4` lists each chunk's view, resolved context and key, computing no part; `Step.chunk/3` computes one and `Step.merge/6` merges them, given the parts' keys and the context; `Step.run/4` is the three.
 - **The chunking never changes a result:** the same rows chunked any way give `Table.equal?/2` results.
 
 ```test:operations-step-classes
@@ -117,6 +119,18 @@ every column-native step declares its class and the context it reads, and only t
 
 ```test:operations-step-combine
 for generated rows over about 40 seeds, sum, aggregate with count, sum, mean, min and max by groups, bin counting and reducing, and window with latest give equal? results under every chunking and every grouping of their partials merged in chunk order, equal to the rows' answer; a float sum is the same bits whatever the grouping
+```
+
+```test:operations-step-global
+for generated rows over about 40 seeds, sort, fold, stack, spectrum, and aggregate and bin with median, quantile and distinct give equal? results under every chunking, equal to the rows' answer
+```
+
+```test:operations-step-global-cache
+a global step's output chunk is named by its step key over its inputs, the same run after run and another when an input changes, so the next step's keys hold; a category column whose chunks have different dictionaries is sorted across them with every value read back as given
+```
+
+```test:operations-step-no-transpose
+a chain through every table operation calls neither Table.rows/1 nor Operations.table/2
 ```
 
 ```test:operations-step-chunking
@@ -344,7 +358,7 @@ a gap on a chunk boundary survives m4 and lttb, which answer under every chunkin
 
 ### 4.6 sort {#operations-sort}
 
-`field` (`:field`, required); `order` (`{:enum, [:ascending, :descending]}`, `:ascending`). The rows **stably** sorted by the reading of `field` under `Enum.sort_by/3`'s term ordering, in that direction. **Outputs:** the input's columns.
+`field` (`:field`, required); `order` (`{:enum, [:ascending, :descending]}`, `:ascending`). The rows **stably** sorted by the reading of `field` under `Enum.sort_by/3`'s term ordering, in that direction. **Outputs:** the input's columns. **Class:** global (§1.4): each chunk's readings of `field`, then every row sorted and gathered across the chunks.
 
 ```test:operations-sort-stable
 sort orders rows by the field ascending or descending under term order, keeping equal readings in their input order
@@ -359,7 +373,7 @@ sort orders rows by the field ascending or descending under term order, keeping 
 - the folded column's name goes under the first name of `as`, as the node spells it, and its value under the second;
 - rows come in input order, and within a row the columns in the order `fields` lists them, so the series order is the author's.
 
-**Outputs:** the input's columns without the folded ones, then `as`'s two: the key a `:category`, the value the folded columns' type when they share one, else `:term`.
+**Outputs:** the input's columns without the folded ones, then `as`'s two: the key a `:category`, the value the folded columns' type when they share one, else `:term`. **Class:** a per-row reshape (§1.4): each chunk's rows gathered with repeated indexes, the key and value columns added.
 
 ```test:operations-fold-long
 fold makes one row per input row per listed column it has, in row then field order, carrying the other columns, skipping a missing column and a nil reading, under the as names
@@ -392,7 +406,7 @@ Every order but `keys` is computed from the rows the step is given, so over a st
 every offset's work is linear in the rows, four times the rows under five times the work; every offset over twenty thousand rows answers in a stored function within the runner's default bounds
 ```
 
-**Rows:** one per series in `fields` order, per datum in data order: the datum's columns plus `key` (the series' key), `series` (its stacking position, 0 the bottom), `value`, `y0` and `y1`, the names visualize's marks read. **Outputs:** the input's columns, then `key` (`:category`), `series`, `value`, `y0` and `y1` (`:number`).
+**Rows:** one per series in `fields` order, per datum in data order: the datum's columns plus `key` (the series' key), `series` (its stacking position, 0 the bottom), `value`, `y0` and `y1`, the names visualize's marks read. **Outputs:** the input's columns, then `key` (`:category`), `series`, `value`, `y0` and `y1` (`:number`). **Class:** global and a reshape (§1.4): each chunk's readings of the series, the offsets stacked across every row, the datum's columns gathered with repeated indexes and the stack's columns added.
 
 ```test:operations-stack-orders
 every order and offset matches d3-shape's on the reference fixtures, keys fixed and the others computed from the rows; nil reads as zero and a non-number raises; each row carries the datum's columns and its key, series, value, y0 and y1
@@ -408,7 +422,7 @@ every order and offset matches d3-shape's on the reference fixtures, keys fixed 
 
 `as` holds the bin's count, or, with `fn`, the named aggregate of the bin's readings (`bin(field: "latency", fn: "median")`), an empty bin's being that aggregate's empty value (§5). No readings yield no rows; a reading that is not a number raises `ArgumentError` naming the step.
 
-**Outputs:** `x0`, `x1`, `y0` (`:number`), `as` (`:number`, or the aggregate's output type) and `values` (`:term`). **Class:** counting, or with an `fn` that has the combining form (§1.2), a combine (§1.4): the bins are bound over the whole input's extent once, each chunk's readings are binned into each bin's count or state and its readings in order, and the bins merge, states by the combining form and readings in chunk order. With any other `fn` (`median`, `quantile`, `distinct`, …) it reads every reading at once.
+**Outputs:** `x0`, `x1`, `y0` (`:number`), `as` (`:number`, or the aggregate's output type) and `values` (`:term`). **Class:** counting, or with an `fn` that has the combining form (§1.2), a combine (§1.4): the bins are bound over the whole input's extent once, each chunk's readings are binned into each bin's count or state and its readings in order, and the bins merge, states by the combining form and readings in chunk order. With any other `fn` (`median`, `quantile`, `distinct`, …) it is global (§1.4): each chunk's readings binned, and every bin's readings reduced at once in the merge.
 
 ```test:operations-bin-counts
 bin splits the extent into n equal bins or at the given thresholds, each reading in its half-open bin and the maximum in the last, counting by default or reducing each bin's readings by fn; no readings yield no rows
@@ -422,7 +436,7 @@ bin splits the extent into n equal bins or at the given thresholds, each reading
 
 `sum` is **`aggregate` with `fn: "sum"`**: `field`, `by` and `as` (`"sum"`), no `fn`. It is vocabulary a design writes, not an alias kept for compatibility, so it is never deprecated.
 
-**Outputs:** `by`'s columns with their input types, then `as` of the aggregate's output type. **Class:** `sum`, and `aggregate` with an `fn` that has the combining form (§1.2: `count`, `sum`, `mean`, `min`, `max`, `extent`), is a combine (§1.4): each chunk's groups in order of first appearance, each with its state, and two runs' groups merged, the first run's order first and each group's states by the combining form. With any other `fn` it reads every reading at once.
+**Outputs:** `by`'s columns with their input types, then `as` of the aggregate's output type. **Class:** `sum`, and `aggregate` with an `fn` that has the combining form (§1.2: `count`, `sum`, `mean`, `min`, `max`, `extent`), is a combine (§1.4): each chunk's groups in order of first appearance, each with its state, and two runs' groups merged, the first run's order first and each group's states by the combining form. With any other `fn` it is global (§1.4): each chunk's keys and readings, and every group's readings reduced at once in the merge.
 
 ```test:operations-group-rows
 aggregate makes one row per distinct by value in order of first appearance, or one row without by, holding the named aggregate of the group's non-nil readings; a pair field reads points; sum equals aggregate with fn sum
@@ -441,7 +455,7 @@ A time series to its **one-sided amplitude spectrum** by a radix-2 Cooley–Tuke
 
 Each row holds `as`'s names for the frequency and the magnitude, and a third name, when `as` gives one, for the phase. A single name is the frequency's, with the magnitude `"magnitude"`; a list of any other length raises `ArgumentError` naming the step.
 
-**Outputs:** the `as` names, `:number`.
+**Outputs:** the `as` names, `:number`. **Class:** global (§1.4): each chunk's readings of `field` and `time`, the transform over the newest samples of all of them.
 
 ```test:operations-spectrum-lines
 a sine's spectrum peaks at its frequency with its amplitude under every window; the interval is every, else the time column's median gap, else 1; samples default to the largest power of two and are refused when not one; detrend removes the DC leak; as names two or three columns

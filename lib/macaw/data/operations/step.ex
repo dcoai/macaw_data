@@ -110,10 +110,22 @@ defmodule Macaw.Data.Operations.Step do
   @spec chunk(module(), map(), part()) :: term()
   def chunk(module, node, %{view: view, context: context, key: key}) do
     case module.class(node) do
-      :row -> row_part(module.chunk(node, view, context), view, key)
+      :row -> row_part(module.chunk(node, view, context), view, key, module, node)
       _class -> module.chunk(node, view, context)
     end
   end
+
+  defp row_part({:reshape, [], _added}, _view, _key, _module, _node), do: []
+
+  # A reshape: the view's rows at `indexes`, repeats allowed, under the step's output
+  # columns, the added ones from their values and the others gathered from the input.
+  defp row_part({:reshape, indexes, added}, {chunk, first, count}, key, module, node) do
+    header = module.outputs(node, Chunk.header(chunk))
+    reshaped = Chunk.reshape(chunk, first, count, indexes, key, header, added)
+    [{reshaped, 0, length(indexes)}]
+  end
+
+  defp row_part(selection, view, key, _module, _node), do: row_part(selection, view, key)
 
   defp row_part(:all, view, _key), do: [view]
   defp row_part(:none, _view, _key), do: []
@@ -131,20 +143,23 @@ defmodule Macaw.Data.Operations.Step do
   The parts merged into the step's table, as its class says, given in the input's chunk
   order with their step keys (`parts/4`):
 
-  - **per row:** concatenated in order, under the input's columns and keeping its order
-    (`sorted/1`);
+  - **per row:** concatenated in order, under the step's output columns (`outputs/2`:
+    the input's, but for a reshape), keeping the input's order (`sorted/1`) while its
+    sorted column is kept;
   - **a combine:** folded in chunk order by the step's `combine/3`, associative, so any
     grouping of the same partials gives the same table, then answered by its `finish/3`,
     given the input, the output's step key (the step's identity over the parts' keys) and
-    the context it declares, as the parts were given it.
+    the context it declares, as the parts were given it;
+  - **global:** every partial, in chunk order, given to the step's `finish/3` with the
+    same.
   """
   @spec merge(module(), map(), [term()], Table.t(), [term()], map()) :: Table.t()
   def merge(module, node, partials, %Table{} = input, keys \\ [], context \\ %{}) do
     case module.class(node) do
       :row ->
-        {:ok, table} =
-          Table.from_chunks(header(input), Enum.concat(partials), sorted: Table.sorted(input))
-
+        header = module.outputs(node, header(input))
+        sorted = if List.keymember?(header, Table.sorted(input), 0), do: Table.sorted(input)
+        {:ok, table} = Table.from_chunks(header, Enum.concat(partials), sorted: sorted)
         table
 
       :combine ->
@@ -154,10 +169,58 @@ defmodule Macaw.Data.Operations.Step do
             [first | rest] -> Enum.reduce(rest, first, &module.combine(node, &2, &1))
           end
 
-        identity = Document.digest(%{"module" => module, "node" => node})
-        declared = Map.take(context, module.reads())
-        module.finish(node, merged, %{input: input, key: {identity, keys}, context: declared})
+        module.finish(node, merged, at(module, node, input, keys, context))
+
+      :global ->
+        module.finish(node, partials, at(module, node, input, keys, context))
     end
+  end
+
+  defp at(module, node, input, keys, context) do
+    identity = Document.digest(%{"module" => module, "node" => node})
+    %{input: input, key: {identity, keys}, context: Map.take(context, module.reads())}
+  end
+
+  @doc """
+  A global step's rows gathered across the input's chunks (spec/04 §1.4): `picks` are
+  `{view, row}` in output order, the view its place in `Table.chunks(input)`, repeats
+  allowed. The output's columns are `columns` (`{name, type}`), each a column of `added`
+  (a map from name to its values, in output order) or else the input's column of that
+  name, read once a view; one chunk named by `key` over the inputs (`output/3`). Every
+  value is read back and packed again, so a dictionary is the output's own: codes are
+  remapped across chunks.
+  """
+  @spec gather(
+          Table.t(),
+          [{non_neg_integer(), non_neg_integer()}],
+          [{Table.name(), Table.type()}],
+          map(),
+          term()
+        ) ::
+          Table.t()
+  def gather(%Table{} = input, picks, columns, added, key) do
+    views = input |> Table.chunks() |> List.to_tuple()
+
+    values =
+      for {name, type} <- columns do
+        case added do
+          %{^name => given} ->
+            {name, type, given}
+
+          _ ->
+            read =
+              views
+              |> Tuple.to_list()
+              |> Enum.map(fn {chunk, first, count} ->
+                chunk |> Chunk.values(name, first, count) |> List.to_tuple()
+              end)
+              |> List.to_tuple()
+
+            {name, type, Enum.map(picks, fn {v, i} -> elem(elem(read, v), i) end)}
+        end
+      end
+
+    output(input, key, values)
   end
 
   @doc """

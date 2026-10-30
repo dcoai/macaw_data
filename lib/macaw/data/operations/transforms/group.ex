@@ -44,10 +44,11 @@ defmodule Macaw.Data.Operations.Transforms.Aggregate do
   def outputs(node, columns), do: group_outputs(node, node["fn"], columns)
 
   @impl true
-  def run(node, table, context), do: run_group(__MODULE__, node, node["fn"], table, context)
+  def run(node, table, context), do: Step.run(__MODULE__, node, table, context)
 
-  # A combine (spec/04 §1.4) when the aggregate has the combining form; any other is
-  # run whole until spec/04 §1.4's global steps take it.
+  # A combine (spec/04 §1.4) when the aggregate has the combining form; with any other
+  # (median, quantile, distinct, …), a global step: each chunk's part is its keys and
+  # readings, and the merge reduces every group's readings at once.
   @impl true
   def class(node), do: group_class(node["fn"])
 
@@ -61,23 +62,25 @@ defmodule Macaw.Data.Operations.Transforms.Aggregate do
   def resolve(_node, _view, bound), do: bound
 
   @impl true
-  def chunk(node, view, bound), do: group_chunk(node, node["fn"], view, bound, name())
+  def chunk(node, view, bound) do
+    case class(node) do
+      :combine -> group_chunk(node, node["fn"], view, bound, name())
+      :global -> global_chunk(view, bound, name())
+    end
+  end
 
   @impl true
   def combine(node, a, b), do: group_combine(node["fn"], node, a, b)
 
   @impl true
-  def finish(node, merged, at), do: group_finish(node, node["fn"], merged, at)
-
-  # -- the grouping, a combine --------------------------------------------------------------
-
-  @doc false
-  def run_group(module, node, aggregate, table, context) do
-    case group_class(aggregate) do
-      :combine -> Step.run(module, node, table, context)
-      :global -> group(node, aggregate, table, module.name())
+  def finish(node, partial, at) do
+    case class(node) do
+      :combine -> group_finish(node, node["fn"], partial, at)
+      :global -> global_finish(node, node["fn"], partial, at)
     end
   end
+
+  # -- the grouping, a combine --------------------------------------------------------------
 
   @doc false
   def group_class(aggregate) do
@@ -179,50 +182,54 @@ defmodule Macaw.Data.Operations.Transforms.Aggregate do
   end
 
   @doc false
-  def group(%{"field" => field, "by" => by, "as" => as} = node, aggregate, table, op) do
-    options = Map.take(node, Enum.map(aggregate.options(), &elem(&1, 0)))
-    readings = readings(table, field, op)
+  # One chunk's keys and readings, in row order: a global grouping's part.
+  def global_chunk({_chunk, _first, count} = view, bound, op) do
+    keys =
+      case bound.by do
+        [] -> List.duplicate([], count)
+        by -> by |> Enum.map(&Transforms.view_values(view, &1)) |> Enum.zip_with(& &1)
+      end
+
+    {keys, view_readings(view, bound.field, op)}
+  end
+
+  @doc false
+  # Every chunk's keys and readings: one row a group in order of first appearance, its
+  # readings reduced at once, `nil`s dropped.
+  def global_finish(%{"by" => by} = node, aggregate, partials, %{input: input, key: key}) do
+    options = options(node, aggregate)
     by_names = by_list(by)
-    keys = by_names |> Enum.map(&Transforms.column(table, &1)) |> Enum.zip_with(& &1)
-    keys = if by_names == [], do: List.duplicate([], length(readings)), else: keys
 
     {order, groups} =
-      keys
-      |> Enum.zip(readings)
-      |> Enum.reduce({[], %{}}, fn {key, reading}, {order, groups} ->
-        order = if Map.has_key?(groups, key), do: order, else: [key | order]
-        {order, Map.update(groups, key, [reading], &[reading | &1])}
+      partials
+      |> Enum.flat_map(fn {keys, readings} -> Enum.zip(keys, readings) end)
+      |> Enum.reduce({[], %{}}, fn {k, reading}, {order, groups} ->
+        order = if Map.has_key?(groups, k), do: order, else: [k | order]
+        {order, Map.update(groups, k, [reading], &[reading | &1])}
       end)
 
     order = if order == [] and by_names == [], do: [[]], else: Enum.reverse(order)
 
-    rows =
-      for key <- order do
-        values = groups |> Map.get(key, []) |> Enum.reverse() |> Enum.reject(&is_nil/1)
-
-        by_names
-        |> Enum.zip(key)
-        |> Map.new()
-        |> Map.put(as || aggregate.name(), aggregate.reduce(values, options))
+    values =
+      for k <- order do
+        groups
+        |> Map.get(k, [])
+        |> Enum.reverse()
+        |> Enum.reject(&is_nil/1)
+        |> aggregate.reduce(options)
       end
 
-    Operations.table(rows, group_outputs(node, aggregate, Operations.columns(table)))
+    columns = group_outputs(node, aggregate, Operations.columns(input))
+
+    keyed =
+      Enum.with_index(by_names, fn _name, i -> Enum.map(order, &Enum.at(&1, i)) end) ++ [values]
+
+    Step.output(input, key, Enum.zip_with(columns, keyed, fn {n, t}, v -> {n, t, v} end))
   end
 
   defp by_list(nil), do: []
   defp by_list(by) when is_list(by), do: by
   defp by_list(by), do: [by]
-
-  # A column's readings, or each row's point [x, y], nil where either is nil.
-  defp readings(table, [x, y], op) do
-    Enum.zip_with(Transforms.column(table, x), Transforms.column(table, y), fn
-      nil, _y -> nil
-      _x, nil -> nil
-      x_reading, y_reading -> [Transforms.seconds!(x_reading, x, op), y_reading]
-    end)
-  end
-
-  defp readings(table, field, _op), do: Transforms.column(table, field)
 end
 
 defmodule Macaw.Data.Operations.Transforms.Sum do
@@ -233,7 +240,7 @@ defmodule Macaw.Data.Operations.Transforms.Sum do
   @behaviour Macaw.Data.Transform
 
   alias Macaw.Data.Operations.Aggregates
-  alias Macaw.Data.Operations.Option
+  alias Macaw.Data.Operations.{Option, Step}
   alias Macaw.Data.Operations.Transforms.Aggregate
 
   @impl true
@@ -255,8 +262,7 @@ defmodule Macaw.Data.Operations.Transforms.Sum do
   def outputs(node, columns), do: Aggregate.group_outputs(node, Aggregates.Sum, columns)
 
   @impl true
-  def run(node, table, context),
-    do: Aggregate.run_group(__MODULE__, node, Aggregates.Sum, table, context)
+  def run(node, table, context), do: Step.run(__MODULE__, node, table, context)
 
   # A combine (spec/04 §1.4): each chunk's groups summed exactly, the sums merged.
   @impl true
