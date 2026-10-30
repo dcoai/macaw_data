@@ -386,12 +386,13 @@ describer/1 answers a named source's schema, no_source for an unknown name, and 
 
 ### 2.1 The description {#sources-description}
 
-`%Macaw.Data.Source.Description{schema, params, supports, viewer_independent, lateness}`, built by `new/1`, which reports every fault at once by path:
+`%Macaw.Data.Source.Description{schema, params, supports, viewer_independent, lateness, idle_after}`, built by `new/1`, which reports every fault at once by path:
 - **`schema`**, required, a `Macaw.Data.Schema` (§1.2).
 - **`params`**: the parameters the source takes, by name, each a parameter (§2.2); `%{}` by default. A name is a non-empty string.
 - **`supports`**: the capabilities it honors, distinct, among `:window`, `:box`, `:region`, `:latest`, `:budget`, `:push` and `:as_of`; `[]` by default. **Every capability is optional:** Macaw finishes a window, box, region, latest or budget the source did not honor, and reports it (§2.4). (visualize.md C1, D-140.)
 - **`viewer_independent`**: `true` declares that the source answers every viewer the same. It only allows pooling across viewers (§6), which fetches with the anonymous viewer, so a wrong declaration shows everyone the anonymous answer and never one person's rows to another. The conformance kit checks it by asking two viewers. `false` by default.
 - **`lateness`**: a hard bound on how late a change may be, for a source that refuses changes past some age (§4.4); `nil` by default, accepting a change of any age.
+- **`idle_after`**: milliseconds the source may deliver nothing before a derived source's watermark leaves it out ([02 §8.6](02-derived.md#derived-engine-watermarks)), a positive integer; `nil` by default, never idle.
 
 There is no other key: the earlier `reveals`, a declaration of what a result tells about the viewer for a page's privacy note, was removed (the owner's decision, 2026-10-27): a page notice of what it shows had no use case, and viewer dependence is what `viewer_independent` and the kit already check.
 

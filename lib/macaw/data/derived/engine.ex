@@ -30,7 +30,7 @@ defmodule Macaw.Data.Derived.Engine do
   variable is an input, spec/02 §2.3) and with sources in place of feeds.
   """
 
-  alias Macaw.Data.{Delivery, Derived, Operations, Schema}
+  alias Macaw.Data.{Delivery, Derived, Operations, Schema, Window}
   alias Macaw.Data.Derived.{Context, Output, Sandbox}
   alias Macaw.Data.Derived.Sandbox.Cache
   alias Macaw.Data.Derived.Sandbox.Names, as: Spelling
@@ -50,6 +50,8 @@ defmodule Macaw.Data.Derived.Engine do
             faults: %{},
             runs: %{},
             seen: %{},
+            delivered_at: %{},
+            idle_after: %{},
             source_schemas: %{},
             checked: %{},
             marked: MapSet.new(),
@@ -85,8 +87,10 @@ defmodule Macaw.Data.Derived.Engine do
   of the sources the derived sources may read, `[]`), `functions:` (the registry, `%{}`,
   default closed), `packages:` (the packages of operations a stored function may reach
   besides `macaw_data`'s own, `[]`, default closed, spec/04 §6.1), `debounce:`
-  (milliseconds, `250`), and `max_reductions:`, `timeout:` and `max_heap:` (each call's
-  bounds, tighten-only).
+  (milliseconds, `250`), `idle_after:` (by source name, the milliseconds after which a
+  source that has delivered nothing is left out of a watermark, each its description's
+  `idle_after`, spec/02 §8.6; `%{}`), and `max_reductions:`, `timeout:` and `max_heap:`
+  (each call's bounds, tighten-only).
   """
   @spec new(%{list() => Derived.t()}, keyword()) :: {:ok, t()} | {:error, [error(), ...]}
   def new(derived, opts) when is_map(derived) do
@@ -96,6 +100,7 @@ defmodule Macaw.Data.Derived.Engine do
         functions: %{},
         packages: [],
         debounce: 250,
+        idle_after: %{},
         max_reductions: 100_000_000,
         timeout: 30_000,
         max_heap: 10_000_000
@@ -125,6 +130,7 @@ defmodule Macaw.Data.Derived.Engine do
           inputs: inputs,
           functions: functions,
           debounce: opts[:debounce],
+          idle_after: Map.new(opts[:idle_after], fn {name, ms} -> {Names.name(name), ms} end),
           run_opts: run_opts,
           operations: Operations.registry(opts[:packages])
         }
@@ -296,7 +302,12 @@ defmodule Macaw.Data.Derived.Engine do
       if delivery == Map.get(engine.seen, name) do
         engine
       else
-        %{engine | seen: Map.put(engine.seen, name, delivery)} |> mark({:source, name}, now)
+        %{
+          engine
+          | seen: Map.put(engine.seen, name, delivery),
+            delivered_at: Map.put(engine.delivered_at, name, now)
+        }
+        |> mark({:source, name}, now)
       end
     end)
   end
@@ -353,7 +364,7 @@ defmodule Macaw.Data.Derived.Engine do
       engine = %{engine | runs: Map.update(engine.runs, path, 1, &(&1 + 1))}
 
       case call(source, fun, inputs, context(engine, path, source, inputs), engine.run_opts) do
-        {:ok, rows} -> answered(engine, path, source, rows, now)
+        {:ok, rows} -> answered(engine, path, source, rows, watermark(engine, path, now), now)
         {:error, kind, detail} -> fault(engine, path, kind, detail)
       end
     else
@@ -450,12 +461,21 @@ defmodule Macaw.Data.Derived.Engine do
 
   # -- answers and faults (spec/02 §8.3) ---------------------------------------------------
 
-  defp answered(engine, path, source, rows, now) do
+  defp answered(engine, path, source, rows, watermark, now) do
     case Derived.conform(source, rows) do
       {:ok, rows} ->
         previous = engine.outputs[path]
-        changed? = previous == nil or Delivery.rows(previous) != rows
-        delivery = Delivery.new(rows, schema: Schema.version(source.schema))
+
+        # A change of the watermark alone is a changed answer (spec/02 §8.6).
+        changed? =
+          previous == nil or Delivery.rows(previous) != rows or
+            previous.served.complete_until != watermark
+
+        delivery =
+          Delivery.new(rows,
+            schema: Schema.version(source.schema),
+            served: [complete_until: watermark]
+          )
 
         engine = %{
           engine
@@ -469,6 +489,56 @@ defmodule Macaw.Data.Derived.Engine do
         fault(engine, path, :nonconforming, detail)
     end
   end
+
+  # -- watermarks (spec/02 §8.6) -----------------------------------------------------------
+
+  # The minimum of the inputs' complete_until, each capped by its request window's upper
+  # bound, an idle input left out unless every input is; `nil` when an input claims
+  # nothing or the claims can't be compared.
+  defp watermark(engine, path, now) do
+    claims =
+      for {_key, _name, ref, window} <- engine.inputs[path] do
+        {delivery, _schema} = input(engine, ref)
+        {capped(delivery.served.complete_until, window), idle?(engine, ref, now)}
+      end
+
+    claims
+    |> Enum.reject(fn {_claim, idle?} -> idle? end)
+    |> case do
+      [] -> claims
+      active -> active
+    end
+    |> Enum.map(&elem(&1, 0))
+    |> minimum()
+  end
+
+  defp capped(nil, _window), do: nil
+
+  defp capped(claim, %{window: [_from, to]}) when to != nil,
+    do: if(Window.position(to) < Window.position(claim), do: to, else: claim)
+
+  defp capped(claim, _window), do: claim
+
+  defp idle?(engine, {:source, name}, now) do
+    case {Map.fetch(engine.idle_after, name), Map.fetch(engine.delivered_at, name)} do
+      {{:ok, after_ms}, {:ok, at}} -> now - at >= after_ms
+      _never -> false
+    end
+  end
+
+  defp idle?(_engine, {:derived, _path}, _now), do: false
+
+  defp minimum(claims) do
+    kinds = claims |> Enum.map(&kind/1) |> Enum.uniq()
+
+    if nil in claims or length(kinds) != 1,
+      do: nil,
+      else: Enum.min_by(claims, &Window.position/1)
+  end
+
+  defp kind(claim) when is_number(claim), do: :number
+  defp kind(%module{}), do: module
+  defp kind(_other), do: :other
 
   # The last good output stays, and nothing is marked: the pulse stops here.
   defp fault(engine, path, kind, detail),

@@ -14,7 +14,10 @@ defmodule Macaw.Data.Source.Description do
   - `lateness`: a hard bound on how late a change may be, declared only by a source that
     refuses changes past some age (spec/01 §4.4): a `Duration` over a `:time` window
     field, a non-negative number in the field's units over a `:number` one; `nil` by
-    default, accepting a change of any age.
+    default, accepting a change of any age;
+  - `idle_after`: milliseconds the source may deliver nothing before a derived source's
+    watermark leaves it out (spec/02 §8.6), a positive integer; `nil` by default, never
+    idle.
 
   `new/1` builds one and reports every fault at once.
   """
@@ -24,7 +27,14 @@ defmodule Macaw.Data.Source.Description do
   @capabilities [:window, :box, :region, :latest, :budget, :push, :as_of]
 
   @enforce_keys [:schema]
-  defstruct [:schema, params: %{}, supports: [], viewer_independent: false, lateness: nil]
+  defstruct [
+    :schema,
+    params: %{},
+    supports: [],
+    viewer_independent: false,
+    lateness: nil,
+    idle_after: nil
+  ]
 
   @typedoc "A capability a source may honor."
   @type capability :: :window | :box | :region | :latest | :budget | :push | :as_of
@@ -34,7 +44,8 @@ defmodule Macaw.Data.Source.Description do
           params: %{String.t() => Parameter.t()},
           supports: [capability()],
           viewer_independent: boolean(),
-          lateness: Duration.t() | number() | nil
+          lateness: Duration.t() | number() | nil,
+          idle_after: pos_integer() | nil
         }
 
   @doc "The capabilities, in the order spec/01 §2.1 lists them."
@@ -114,6 +125,9 @@ defmodule Macaw.Data.Source.Description do
   defp field(:viewer_independent, _), do: [{[:viewer_independent], {:type, :boolean}}]
   # Judged against the schema's window field by `lateness/2`.
   defp field(:lateness, _), do: []
+  defp field(:idle_after, nil), do: []
+  defp field(:idle_after, ms) when is_integer(ms) and ms > 0, do: []
+  defp field(:idle_after, _), do: [{[:idle_after], {:type, :pos_integer}}]
   defp field(key, _), do: [{[key], :unknown_key}]
 
   # A hard bound in the window field's terms: a `Duration` back from a time, a

@@ -343,4 +343,103 @@ defmodule Macaw.Data.Derived.EngineTest do
              ]
     end
   end
+
+  describe "watermarks (spec/02 §8.6)" do
+    @tag verifies: "derived-watermarks"
+    test "a derived source's complete_until is the minimum of its inputs', idle inputs left out" do
+      sum = "fn %{a: a, b: b} -> [%{n: Enum.count(a) + Enum.count(b)}] end"
+      both = source(:both, [a: nil, b: nil], sum)
+      capped = source(:capped, [a: %{window: [0, 40]}], "fn %{a: a} -> [%{n: Enum.count(a)}] end")
+      next = source(:next, [both: nil], "fn %{both: [%{n: n}]} -> [%{n: n}] end")
+
+      {:ok, engine} =
+        Engine.new(%{["both"] => both, ["capped"] => capped, ["next"] => next},
+          sources: [:a, :b],
+          debounce: 0,
+          idle_after: %{b: 1_000}
+        )
+
+      at = fn cu, rows -> Delivery.new(rows, served: [complete_until: cu]) end
+      row = fn t -> %{t: t, host: "h", cpu: 1} end
+      schemas = %{a: @hosts, b: @hosts}
+      watermark = fn engine, path -> Engine.outputs(engine)[path].served.complete_until end
+
+      # The minimum of the inputs'; a request window's upper bound caps it; a derived
+      # input contributes its output's.
+      engine =
+        engine
+        |> Engine.push(%{a: at.(50, [row.(1)]), b: at.(30, [row.(2)])}, schemas, 0)
+        |> Engine.run(0)
+
+      assert watermark.(engine, ["both"]) == 30
+      assert watermark.(engine, ["capped"]) == 40
+      assert watermark.(engine, ["next"]) == 30
+
+      # A watermark-only change is a changed answer: the reader runs again.
+      runs = Engine.runs(engine)[["next"]]
+
+      engine =
+        engine
+        |> Engine.push(%{a: at.(50, [row.(1)]), b: at.(35, [row.(2)])}, schemas, 10)
+        |> Engine.run(10)
+
+      assert watermark.(engine, ["both"]) == 35
+      assert watermark.(engine, ["next"]) == 35
+      assert Engine.runs(engine)[["next"]] == runs + 1
+
+      # b has delivered nothing for idle_after: left out when a moves on; no clock read,
+      # only the now given.
+      engine =
+        engine
+        |> Engine.push(%{a: at.(60, [row.(1), row.(3)]), b: at.(35, [row.(2)])}, schemas, 1_010)
+        |> Engine.run(1_010)
+
+      assert watermark.(engine, ["both"]) == 60
+
+      # It rejoins on its next delivery.
+      engine =
+        engine
+        |> Engine.push(
+          %{a: at.(60, [row.(1), row.(3)]), b: at.(40, [row.(2), row.(4)])},
+          schemas,
+          1_020
+        )
+        |> Engine.run(1_020)
+
+      assert watermark.(engine, ["both"]) == 40
+
+      # An input with no claim leaves none.
+      engine =
+        engine
+        |> Engine.push(%{a: at.(nil, [row.(5)]), b: at.(40, [row.(2), row.(4)])}, schemas, 1_030)
+        |> Engine.run(1_030)
+
+      assert watermark.(engine, ["both"]) == nil
+
+      # Every input idle (a debounce longer than idle_after): none is left out.
+      {:ok, slow} =
+        Engine.new(%{["both"] => both},
+          sources: [:a, :b],
+          debounce: 200,
+          idle_after: %{a: 100, b: 100}
+        )
+
+      slow =
+        slow
+        |> Engine.push(%{a: at.(50, [row.(1)]), b: at.(30, [row.(2)])}, schemas, 0)
+        |> Engine.run(200)
+
+      assert watermark.(slow, ["both"]) == 30
+
+      # A description's idle_after is a positive integer of milliseconds.
+      alias Macaw.Data.Source.Description
+      assert {:ok, %{idle_after: 1_000}} = Description.new(schema: @hosts, idle_after: 1_000)
+      assert {:ok, %{idle_after: nil}} = Description.new(schema: @hosts)
+
+      for bad <- [0, -5, 1.5, "1s"] do
+        assert Description.new(schema: @hosts, idle_after: bad) ==
+                 {:error, [{[:idle_after], {:type, :pos_integer}}]}
+      end
+    end
+  end
 end

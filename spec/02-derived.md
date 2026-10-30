@@ -546,6 +546,7 @@ a failing source keeps its last good output, is down with its kind, and does not
 | `functions:` | `%{}` | the host functions' registry (§7), default closed |
 | `packages:` | `[]` | the packages of operations a stored function may reach besides `macaw_data`'s own ([04 §6.1](04-operations.md#operations-allowlist)), default closed |
 | `debounce:` | `250` | milliseconds a pulse waits for more changes |
+| `idle_after:` | `%{}` | by source name, the milliseconds after which a source that has delivered nothing is idle, each its description's `idle_after` (§8.6) |
 | `max_reductions:`, `timeout:`, `max_heap:` | §6.4's | each call's bounds, tighten-only |
 
 | Function | Contract |
@@ -583,8 +584,6 @@ a derived source's output passes the source conformance kit, describes its outpu
 
 ### 8.6 Watermarks {#derived-engine-watermarks}
 
-<!-- surfex: deferred dco-tek/macaw/macaw_data#15: derived watermarks and idle inputs -->
-
 **A derived source's `complete_until` is the minimum over its inputs'** ([01 §4.4](01-sources.md#sources-push-settled)), each mapped through its input's window (§2.2), and its output delivery states it in `served.complete_until`:
 - **The window maps it.** A request window's upper bound caps it, since the rows read lie at or before that bound and are settled when the input's claim reaches past it; `nil`, `last:` and a window open above leave it as it is.
 - **An input with no claim leaves the derived source with none:** the minimum over a provisional input is provisional. So do claims that can't be compared, a time and a number.
@@ -595,7 +594,7 @@ a derived source's output passes the source conformance kit, describes its outpu
 - **A source's description may declare `idle_after`** ([01 §2.1](01-sources.md#sources-description), `nil` by default), a positive integer of milliseconds: how long it may deliver nothing before a derived source's watermark leaves it out. Another value is `{[:idle_after], {:type, :pos_integer}}` from `Description.new/1`. The engine takes it by source name, `Engine.new/2`'s `idle_after:` option (`%{}` by default, §8.4).
 - **A source whose `idle_after:` is given** (the owner reads it from the source's description, since the engine sees deliveries, not descriptions) and that has delivered nothing new for that long is **idle**, and is left out of the minimum. A delivery is new when `push/4` is shown one that is not the one last seen.
 - **It rejoins on its next delivery.**
-- **When every input is idle,** none is left out: idleness never lets a watermark claim more than some input does.
+- **When every input is idle,** as when the debounce outlasts `idle_after`, none is left out: idleness never lets a watermark claim more than some input does.
 - **The engine judges idleness against the `now` it is given,** `push/4`'s and `run/2`'s, the owner's monotonic milliseconds: it never reads a clock.
 
 **Keeping fast and slow inputs in step is not needed.** A derived source recomputes whole windows (§8.2) and buffers nothing per input. It is revisited with incremental derived sources.
