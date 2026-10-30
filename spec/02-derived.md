@@ -580,3 +580,26 @@ So a derived source is another derived source's input and a slot's source alike,
 ```test:derived-output-kit
 a derived source's output passes the source conformance kit, describes its output schema, and fetches its last good output, or loading before the first
 ```
+
+### 8.6 Watermarks {#derived-engine-watermarks}
+
+<!-- surfex: deferred dco-tek/macaw/macaw_data#15: derived watermarks and idle inputs -->
+
+**A derived source's `complete_until` is the minimum over its inputs'** ([01 §4.4](01-sources.md#sources-push-settled)), each mapped through its input's window (§2.2), and its output delivery states it in `served.complete_until`:
+- **The window maps it.** A request window's upper bound caps it, since the rows read lie at or before that bound and are settled when the input's claim reaches past it; `nil`, `last:` and a window open above leave it as it is.
+- **An input with no claim leaves the derived source with none:** the minimum over a provisional input is provisional. So do claims that can't be compared, a time and a number.
+- **A change of the watermark alone is a changed answer,** marking the source's readers (§8.2) as a change of its rows does: their watermarks derive from it.
+- **An input that is a derived source** contributes its output's `complete_until`.
+
+**An idle input doesn't hold the minimum back** (Flink's idle sources):
+- **A source's description may declare `idle_after`** ([01 §2.1](01-sources.md#sources-description), `nil` by default), a positive integer of milliseconds: how long it may deliver nothing before a derived source's watermark leaves it out. Another value is `{[:idle_after], {:type, :pos_integer}}` from `Description.new/1`. The engine takes it by source name, `Engine.new/2`'s `idle_after:` option (`%{}` by default, §8.4).
+- **A source whose `idle_after:` is given** (the owner reads it from the source's description, since the engine sees deliveries, not descriptions) and that has delivered nothing new for that long is **idle**, and is left out of the minimum. A delivery is new when `push/4` is shown one that is not the one last seen.
+- **It rejoins on its next delivery.**
+- **When every input is idle,** none is left out: idleness never lets a watermark claim more than some input does.
+- **The engine judges idleness against the `now` it is given,** `push/4`'s and `run/2`'s, the owner's monotonic milliseconds: it never reads a clock.
+
+**Keeping fast and slow inputs in step is not needed.** A derived source recomputes whole windows (§8.2) and buffers nothing per input. It is revisited with incremental derived sources.
+
+```test:derived-watermarks
+a derived source's complete_until is the minimum of its inputs', capped by a request window's upper bound; an input with no claim leaves none; a watermark-only change marks the readers; an idle input is left out after idle_after and rejoins on its next delivery; every input idle leaves none out; no clock is read; a description's idle_after is a positive integer
+```

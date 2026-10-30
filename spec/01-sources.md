@@ -502,9 +502,36 @@ before/4 keeps [from, upper), an open bound open, a row with no time out; region
 times compare by kind; intersections, positions, the newer seam, applies and the instant and time predicates; nothing but a position is in a box
 ```
 
+### 2.5 The model: a relation that varies over time {#sources-model}
+
+**A source is a relation that varies over time.** Each value of it is a **Z-set**: rows, each with an integer weight, so a row held twice has weight 2 and identical rows are never one row (Budiu et al., DBSP, VLDB 2023; Flink's changelog row kinds). Every mechanism of this contract is a view of that one relation (Akidau et al., *Streaming Systems*, 2018, the stream/table duality):
+- **A delivery is a snapshot** (§3): the relation at what its `served` describes, a row of weight *n* delivered *n* times.
+- **A push is the changelog** (§4): each increment a Z-set of changes. An inserted row is +1, a retracted row −1, and an update is a retraction plus an insertion. A **range replacement** is a change too: everything held in a range retracted, the rows given inserted (§4.2).
+- **A full snapshot is the limit case of a range replacement:** the whole range, every identity. So a snapshot delivery (`fetch/2`) and a replacement are one idea, and a snapshot handed to a subscription replaces what it holds (§4.1).
+- **`Push.held/1` is the integral:** the sum of the changes so far, from the snapshot the subscription handed off from.
+- **`:as_of` reads the relation at a past time** (§2.3).
+- **A derived source maps relations to relations** ([02](02-derived.md#derived-model)): its function reads its inputs' relations and answers one, recomputed whole when an input changes ([02 §8.2](02-derived.md#derived-engine-pulse)).
+- **What is settled is the source's claim, about time, not rows** (§4.4): `complete_until` says below which value of the window field the source expects no further change. Everything after it is provisional; a change before it is still a change.
+
+So late rows, corrections, range replacements and caching are one story, not mechanisms settled case by case: a change of any age is a change to the relation, applied in the changelog's order, and what is settled is what the source says is.
+
+```test:model-integral
+the held relation is the integral of the changelog: for a generated changelog of insertions, retractions, moved rows, range replacements and duplicate rows, under any split into increments, any coalescing between drains and any repetition, the held rows equal the relation built directly, a resolution change and its refetch included
+```
+
+### 2.6 Where the relation is held {#sources-model-storage}
+
+<!-- surfex: deferred dco-tek/macaw/macaw_data#19: the chunked table, its deltas and Table.apply/2 are macaw_data#9's storage -->
+
+**`Push.held/1` is a chunked `Macaw.Data.Table`** (macaw_data#9), and an increment is applied to it by `Table.apply/2`, the one seam between this contract and the table's storage.
+- **A change that reaches a settled range lands in that range's delta,** in this changelog's form: row retractions matched as §4.2 matches them, range replacements as predicate deletes (applied on read, so a cold chunk needs no fetch), and insertions. The delta is applied when the range is read, and a lazy compaction folds it in (Kudu's delta stores; Delta Lake's and Iceberg's deletion vectors).
+- **The change event is the push.** A derived source receives the increment when it arrives, the same increment that went into the delta, replacements included. No other trigger exists.
+- **Compaction changes only the layout.** The contents before and after it are equal (`Table.equal?/2`), so it emits nothing, and it moves no watermark: a change before `complete_until` doesn't move it.
+- Until the chunked table lands, `held/1` is a `Macaw.Data.Delivery` whose rows are the relation, in the window field's order (§4).
+
 ## 3. Deliveries {#sources-delivery}
 
-**`Macaw.Data.Delivery` is one answer of a source:** its rows, and what it actually served, a handful of terms beside the rows, never per row. `%Delivery{rows, names, types, schema, served, origin}`:
+**`Macaw.Data.Delivery` is one answer of a source,** a snapshot of its relation (§2.5): its rows, and what it actually served, a handful of terms beside the rows, never per row. `%Delivery{rows, names, types, schema, served, origin}`:
 - **`rows`, the rows as the source gave them** (macaw#185): a list of row maps or tuples, a map or keyword list of columns, an `Nx.Tensor`, a `Table.Reader` source, or a `Macaw.Data.Table`, which passes as it is. **Nothing is packed or rewritten when a delivery is made:** a delivery is on the hottest path a live chart has, every tick of every chart reading it, and packing at the edge cost a reader of rows half a second for 50,000 rows (visualize#970), dropped tuple rows, and rewrote values a reader gave (an integer beside floats, a naive time, a sparse row). `new/2` checks only the shape, and raises `ArgumentError` for rows of no shape a source has.
 - **`names`**: the column names of tuple rows or a tensor, in order, or `nil`; **`types`**: column types for packing, `%{}` to infer them.
 - **Reading:**
@@ -556,17 +583,17 @@ a delivery names the schema's version, never the schema; its origin is the sourc
 
 ## 4. Push {#sources-push}
 
-Push is optional and declared (`:push` in `supports`). A pushing source implements `subscribe(source, pid)`, answering `{:ok, ref}`, and `unsubscribe(source, ref)` (§2); `Macaw.Data.Source.subscribe/2` answers `{:error, :no_push}` for a source that doesn't. It sends the subscriber two messages, both tagged with that reference (`Macaw.Data.Source.Push.schema_message/2`, `delivery_message/2`):
+**A push is the source's changelog** (§2.5). Push is optional and declared (`:push` in `supports`). A pushing source implements `subscribe(source, pid)`, answering `{:ok, ref}`, and `unsubscribe(source, ref)` (§2); `Macaw.Data.Source.subscribe/2` answers `{:error, :no_push}` for a source that doesn't. It sends the subscriber two messages, both tagged with that reference (`Macaw.Data.Source.Push.schema_message/2`, `delivery_message/2`):
 
 ```
 {:macaw_source, ref, {:schema, schema}}      first, and again whenever the schema changes
-{:macaw_source, ref, {:delivery, delivery}}  an increment: the rows new since the last
+{:macaw_source, ref, {:delivery, delivery}}  an increment: the changes since the last
 ```
 
-The subscriber holds a `Macaw.Data.Source.Push`, a value, not a process: `receive/2` takes each message, `:ignore` for one not under its reference; `drain/2` merges what is buffered; `held/1` is the delivery as it stands.
+The subscriber holds a `Macaw.Data.Source.Push`, a value, not a process: `receive/2` takes each message, `:ignore` for one not under its reference; `drain/2` applies what is buffered; `held/1` is the relation as it stands, the integral of the increments (§2.5).
 
 - **The handshake sends the schema first,** so an increment naming its version resolves from the cache without asking the source.
-- **A pushed delivery is an increment, merged by the window field.** Its rows after what is held are appended; its late rows, at or before that, are kept unless the very row is held already; the rows stay ordered by the window field, and the served window grows to cover them. A schema with no window field keeps the newest `limit` rows (100 000), marking the delivery `capped` when it drops any.
+- **An increment's rows are insertions, merged by the window field.** Its rows after what is held are appended; its late rows, at or before that, are kept unless the very row is held already; the rows stay ordered by the window field, and the served window grows to cover them. A schema with no window field keeps the newest `limit` rows (100 000), marking the delivery `capped` when it drops any.
 - **Pushes between two pulses are coalesced:** they buffer, and one `drain/2` merges them all in the order received, whatever the push rate.
 - **An unknown schema version falls back to `describe`,** asked once through `Macaw.Data.Schema.Cache.resolve/4` and cached. An increment whose version can't be resolved is dropped and its reason kept in `errors`.
 
@@ -586,6 +613,145 @@ increments merge by the window field, newer appended, late placed, a held row no
 
 ```test:push-coalesce
 fifty pushes buffer without a merge, and one drain merges them all in order
+```
+
+### 4.1 Numbering and the handoff {#sources-push-numbering}
+
+<!-- surfex: deferred dco-tek/macaw/macaw_data#12: increments numbered per subscription and the snapshot's handoff by position -->
+
+**Each increment carries a sequence number,** a positive integer, increasing by one per subscription from `1`. Idempotence and order are the increment's, never the row's:
+- **A repeated or older increment is dropped whole,** one at or below the position held, and counted in `ignored` (`:repeat`). Redelivery is harmless.
+- **Rows are not deduplicated.** Two identical rows are two rows of weight 1 (tally taps), so an increment's late row is held even when an identical row is held already: the merge's "unless the very row is held already" goes.
+- **Increments apply in the order of their numbers.** Retraction matching and replacement depend on what is held, so the changelog is not commutative.
+- **A gap is a lost message.** BEAM delivers messages between two processes in order, so an increment numbered past the next one means some never arrived. It is held back, unapplied; the gap is recorded in `errors` as `{:gap, from, to}`, the missing numbers; and `Push.refetch/1` answers it.
+
+**The messages carry the number and the position** (`Push.snapshot_message/2`, `increment_message/3`, in place of `delivery_message/2`):
+
+```
+{:macaw_source, ref, {:schema, schema}}            first, and again whenever the schema changes
+{:macaw_source, ref, {:snapshot, delivery}}        the relation, as of its served.position
+{:macaw_source, ref, {:increment, seq, delivery}}  the changelog's change numbered seq
+```
+
+**The snapshot hands off to the stream by position.** A snapshot taken for a subscription states the position it reflects in `served.position` (§3): the number of the last increment it includes, a non-negative integer, `0` for none; `nil` for any answer not taken for a subscription. A source sends one with `snapshot_message/2`, on subscribe or on resubscribe. A holder fetches one after a gap or a resolution mismatch, naming the subscription's reference in the request (`subscription:`, §2.3, `nil` by default), and hands it over with `Push.snapshot/2`.
+- **It replaces what is held,** as the full replacement it is (§2.5), and the position becomes its own.
+- **Increments at or before its position are dropped** (`:repeat`); later ones apply in order, those held back included.
+- **A snapshot older than the position held is dropped whole** (`:stale_snapshot`): it was taken before increments already applied. One that states no position is `{:snapshot, :no_position}` in `errors`, and not applied.
+- So **no increment is applied twice or lost** while a snapshot is in flight.
+- **Before any snapshot, the relation is empty at position `0`,** so a source that sends no snapshot numbers its first increment `1`, applied to nothing.
+- **`Push` is a value, so the holder refetches.** `Push.refetch/1` is `nil`, or why the holder must fetch a snapshot, kept until one is taken.
+
+**Nothing raises; everything is recorded.** `errors` lists each fault, in order, with its reason, the terms §4.1–§4.4 name; `ignored` counts what was dropped harmlessly, by reason (`%{repeat: n, stale_snapshot: n, unheld: n}`). A fault never fails the rest of its increment.
+
+The conformance kit's `:push` check (§9) holds a snapshot to stating its position, and the increments to numbers one past it, or from `1` with none, each one past the last.
+
+```test:push-numbered
+a redelivered or older increment is dropped whole and counted, increments arriving out of order apply in the order of their numbers, and two identical rows are both held
+```
+
+```test:push-gap
+a gap in the numbers is recorded with the missing numbers and answered with a refetch; the increments after it are held back, and apply after the snapshot that fills it
+```
+
+```test:push-handoff
+over generated interleavings of a snapshot and the stream, a snapshot's own position and stale snapshots, no increment is applied twice or lost: the held rows equal the snapshot's plus every later increment's
+```
+
+```test:delivery-position
+served holds a snapshot's position, nil by default, zero allowed; a negative or non-integer position is refused
+```
+
+```test:contract-request-subscription
+a request names the subscription it is a snapshot for, nil by default, and refuses one that is not a reference
+```
+
+### 4.2 Retractions and range replacements {#sources-push-changes}
+
+<!-- surfex: deferred dco-tek/macaw/macaw_data#13: retractions and range replacements in pushed increments -->
+
+**A pushed increment carries its changes beside its inserted rows** (§3): `retracted`, a list of row maps withdrawn, and `replace`, a list of range replacements, each `%{from, to, identities, rows}`; both `[]` by default, and a snapshot carries neither. `Delivery.new/2` checks their shapes: a row is a map, `identities` a list or `nil`, `rows` a list of maps, and no other key.
+
+**`retracted`: rows withdrawn from what is held.** Identity names an entity, not a row (§1.4): a series or a host. Several held rows can share an identity and an instant (tally taps, label sets collapsed into one entity, duplicate readings), so a retraction matches in steps:
+1. **By identity and the window-field value the row was held at:** its old value, when an edit moves the row. That locates the row, and in the chunked table its chunk (§2.6).
+2. **By the fields it names beyond those,** each equal to the held row's. A retraction may name only its identity and window fields; where several held rows remain, it names enough of them to choose.
+3. **The rows left must be one group of identical rows,** and one copy is retracted per unit of weight: a row retracted twice in one increment withdraws two copies, and two identical taps with one retracted leave one.
+- **With no identity declared,** a retraction matches by the whole row, one copy per unit of weight.
+- **What is recorded in `errors`,** never applied to a guessed row: a retraction of a row not held (`{:retract, :not_held, row}`); one whose identity is held only at another window value (`{:retract, :moved, row}`); one that can't tell distinct rows apart (`{:retract, :ambiguous, row}`).
+- **A thinned holding may lack rows.** Where what is held came from a delivery that was `capped` or reduced to a budget (`reduced_by` set), a retraction naming an unheld row, or one held only at another window value, is a no-op counted in `ignored` (`:unheld`), not an error. Against a complete holding it stays a recorded fault.
+
+**`replace`: a range replacement.** Each says that over `[from, to)` of the window field (`from: nil` from the start, `to: nil` open-ended), limited to `identities` (a list of identities as `Schema.identity/2` answers them, `nil` for every one), the relation is exactly `rows`.
+- **As a change,** it is a retraction of everything held in the range plus an insertion of `rows`. The receiver computes the retraction from what it holds, so the source never has to remember what it sent. A rollup rebuild ("from T onward, exactly these buckets") and retracting a post with months of backfill are each one replacement.
+- **Inside a replaced range, the replacement is the whole truth for that increment.** Any other row insertion or retraction in the same increment that falls inside it is `{:conflict, row}` in `errors`, and not applied; a replacement's own row outside its range or identities is `{:outside, row}`; a replacement overlapping another of the same increment is `{:overlap, range}`, and not applied.
+- **A row with no window value** lies inside only a range open at both ends. A schema with no window field takes only that range; any other is `{:replace, :no_window_field}`.
+- **A full snapshot is the limit case:** the whole range, every identity (§2.5).
+- **Downstream,** a derived source receives the replacement as it is: it is part of the changelog's vocabulary. A consumer that needs a plain Z-set computes it against its own held state.
+- **Changes to aggregated or thinned rows go through `replace`.** A source sends a changed bucket as a `replace` over that bucket's span, limited to its identity, which applies whatever the reader holds.
+
+**The order within an increment:**
+1. row retractions;
+2. range retractions;
+3. insertions: the replacements' rows and the increment's other rows.
+
+So an update, even one that moves a row, is one increment.
+
+```test:push-retract
+a retraction matches by identity and held window value, then by the fields it names, one copy per unit of weight: of two rows differing in one field exactly the named one, of two identical rows one; with no identity by the whole row; a row not held, one held only at another window value and one that can't tell rows apart are each recorded and change nothing
+```
+
+```test:push-replace
+a replacement equals the row retractions and insertions it stands for on any held state; limited to identities it leaves the others in the range; to nil covers everything from from; a conflicting change inside the range, a row outside it and an overlapping replacement are recorded and not applied; retractions apply before replacements, insertions last
+```
+
+```test:push-thinned
+after a capped or reduced delivery, a retraction of an unheld row is counted in ignored, not errors; against a complete holding it is an error
+```
+
+```test:delivery-changes
+a delivery carries retracted rows and range replacements, both empty by default; a retraction that is not a map, a replacement with an unknown key, a non-list of identities and non-map rows are each refused
+```
+
+### 4.3 One resolution per subscription {#sources-push-resolution}
+
+<!-- surfex: deferred dco-tek/macaw/macaw_data#13: increments merged only at the held resolution -->
+
+**An increment applies only to a held relation at the same resolution** (`served.resolution`, `nil` equal only to `nil`). A source keeps one resolution for a subscription, fixed when it starts.
+- **On a mismatch, nothing is merged.** The increment is `{:resolution, held, given}` in `errors`, `Push.refetch/1` answers the same, and the holder fetches a snapshot at the subscription's resolution (§4.1). The increment's number is consumed, so the snapshot hands off as any does.
+- **Nothing is ever merged across resolutions:** rows of one spacing applied to rows of another would silently corrupt the relation (metresis#525).
+
+```test:push-resolution
+an increment at another resolution than what is held is not merged, is recorded and is answered with a refetch; the snapshot that follows hands off by position and clears it
+```
+
+### 4.4 Settled ranges {#sources-push-settled}
+
+<!-- surfex: deferred dco-tek/macaw/macaw_data#14: complete_until and the optional lateness bound -->
+
+**`served.complete_until` is a watermark the source declares** (§3): a value of the window field, a time or a number, below which it expects no further change, or `nil` for no claim. It is an assertion the source makes on each delivery, not a setting.
+- **It means settled, not final.** It marks where changes are expected, and so which results downstream are provisional. A change before it is still accepted, unless a hard bound refuses it (below), and lands in that range's delta (§2.6).
+- **It never moves backwards within a subscription.** A later delivery, snapshot or increment, with a smaller value is `{:complete_until, :backwards, held, given}` in `errors`; the held claim is kept and the delivery's changes still apply. A new subscription, a new `Push`, starts afresh.
+- **`Push` carries it forward:** what is held states the latest claim.
+- **Perfect** when the source knows (a closed range), **heuristic** when it estimates (from its ingestion lag).
+- **No `complete_until`, no claim:** the source's data is all provisional. That is always correct, just never settled.
+
+**A description may declare `lateness`, a hard bound** (§2.1, `nil` by default), only for a source that really refuses changes past some age: a `Duration` over a `:time` window field, a non-negative number in the field's units over a `:number` one. Another value is `{[:lateness], {:type, :duration}}` or `{[:lateness], {:type, :number}}` from `Description.new/1`, and a `lateness` with no window field `{[:lateness], :no_window_field}`. The holder gives it to `Push.new/3` (`lateness:`).
+- **Where declared,** a change whose window value is older than `complete_until − lateness`, the claim held when the increment is applied, is refused: `{:late, row, bound}` in `errors`. A replacement whose range reaches before the bound (`from` earlier, or `nil`) is refused whole, `{:late, range, bound}`, never clipped.
+- **Where not declared, a change of any age is accepted.** metresis declares none.
+- **A snapshot is the relation itself,** and is never refused.
+
+**What it serves:** a chart draws the part after `complete_until` as provisional; the chunked table marks the chunks wholly before it settled (§2.6); its cold tier prefers settled chunks.
+
+(Watermarks: Akidau et al., *Streaming Systems*, 2018.)
+
+```test:push-settled
+complete_until is carried forward; a smaller one is recorded and the held claim kept while the changes apply; a new subscription starts afresh; with none there is no claim
+```
+
+```test:push-lateness
+a change of any age is accepted without lateness; past a declared bound a row is refused with its reason and a replacement reaching past it refused whole; a snapshot is never refused; a description's lateness is a duration over a time window field, a number over a number one, and refused with no window field
+```
+
+```test:delivery-complete-until
+served holds complete_until, a time or a number, nil by default; any other value is refused
 ```
 
 ## 5. Change notification {#sources-change}

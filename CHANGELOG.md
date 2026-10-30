@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Spec:** the source contract is one model, a relation that varies over time (#11, #10): a delivery is a snapshot, a push the changelog of Z-set increments, `Push.held/1` their integral, `:as_of` a past snapshot, a derived source a map from relations to relations (spec/01 §2.5). The deferred §2.6 and §4.1–§4.4, and spec/02 §8.6, specify what #12–#15 and macaw_data#9 build: numbered increments and the snapshot's handoff, retractions and range replacements, one resolution per subscription, settled ranges, and derived watermarks.
+
 ## v0.7.0 (2026-10-30)
 
 **Terms are the form** (dco-tek/macaw/macaw#188), macaw_data's part. A value's identity and validity are the BEAM term's own; JSON and Arrow are adapters at the edge. On macaw_layers 0.3.0. This release is breaking throughout; the guide below is what an adopter of 0.6.1 changes, and the entries after it are the detail.
