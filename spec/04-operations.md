@@ -167,6 +167,12 @@ take n: 100 reads only the chunks it returns, its work growing by a step a chunk
   A group's order of first appearance is kept: a group none of whose rows remain is gone, and the groups are ordered by where their first rows read. A group whose first row was removed has its next first row unknown without reading the chunk, so that chunk recomputes.
 - **Recompute otherwise:** a floating-point sum or mean, min and max, M4's extremes, `lttb`'s preselection and every other step recompute that one chunk, once per content digest. Subtraction drifts in floating point, which would break the property that every path gives the same result.
 
+**What a frame costs** (macaw_data#9 item 7). A synthetic frame loop modeled on visualize's (`Macaw.Data.Test.FrameLoop`) holds a live source's 50,000-row window, appends a canonical chunk's worth of readings a frame and trims the oldest, and runs a chart's steps over it: `take n: 100`, `filter`, a `window` then `m4` to 1,000 pixels, a `window` then `lttb` to 1,000 points, and `sum` by series. It runs two ways: recomputed in full, and per chunk through a cache. The default suite states the per-chunk recompute's cost as work, in reductions: its changed chunks cost at most a full run over one chunk's readings, and its whole frame, merges included, at most half the full recompute. A wall-clock run is `@tag :benchmark` (`mix test --only benchmark`) and gates nothing; its results, and the decision on native kernels they inform, are recorded on macaw_data#9. The real loop's number is visualize's to measure.
+
+```test:operations-cache-frame
+a synthetic frame loop at 50k rows with one new chunk's worth of readings a frame: every frame the per-chunk recompute equals the full recompute and computes only the changed chunks' parts; in reductions its changed chunks cost at most a full run over one chunk's readings, and its whole frame at most half the full recompute's
+```
+
 ```test:operations-cache-reuse
 a per-chunk run with cached parts equals a full run, for every combine, per-row and global step; a second run over the same table reuses every part and hashes no content; a rebuilt table of the same contents hits every part, and one with a chunk's contents changed computes that chunk alone; a chunk whose digest is pending is warmed before its key is read
 ```
