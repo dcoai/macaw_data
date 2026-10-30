@@ -15,12 +15,15 @@ defmodule Macaw.Data.Operations.Transforms.Ladder do
     from the span and its count, `floor(log2(ideal))`. **Hysteresis:** the previous level,
     given as `level:` in the context, is kept while its bucket is within a factor of 2 of
     the ideal width, so a span drifting near a power of two keeps one level.
-  - **A partial** is a run of rows' buckets: per bucket the first, the last, the least
-    and the greatest point, each `{ref, s, y}`, `ref` `{view, row}`; runs are split by
-    gaps (a row whose x or y is `nil`), each run of gap rows kept as its first. Partials
-    merge associatively in chunk order (a bucket straddling a chunk edge merges its two
-    summaries; a gap on a chunk edge stays one gap), and a finer partial folds into a
-    coarser level exactly (`coarsen/2`), so a zoom out reuses finer partials.
+  - **A partial** holds a piece a view, in chunk order: the view's runs of rows, split by
+    gaps (a row whose x or y is `nil`, each run of gap rows kept as its first), each run
+    its buckets **ascending by bucket**, per bucket the first, the last, the least and the
+    greatest point, each `{row, s, y}`. Partials merge associatively in chunk order by
+    concatenation (`combine/2`), so a merge costs the chunks, not the buckets; the chunk
+    edges are joined once, when the merged partial is read (`runs/1`): a bucket
+    straddling an edge merges its two summaries and a gap on an edge stays one gap. A
+    finer partial folds into a coarser level exactly (`coarsen/2`), so a zoom out reuses
+    finer partials.
   """
 
   alias Macaw.Data.Table
@@ -30,16 +33,35 @@ defmodule Macaw.Data.Operations.Transforms.Ladder do
   @kinds [:linear, :time, :log]
   @epoch_naive ~N[1970-01-01 00:00:00]
 
-  @typedoc "A point of a bucket: `{ref, s, y}`, `ref` `{view, row}` in input order."
-  @type point :: {{non_neg_integer(), non_neg_integer()}, number(), number()}
+  @typedoc "A row of a merged partial: `{view, row}`, in input order."
+  @type ref :: {non_neg_integer(), non_neg_integer()}
+
+  @typedoc """
+  A point of a bucket: `{row, s, y}` in a piece, `row` the row of its view; `{ref, s, y}`
+  as `runs/1` reads it.
+  """
+  @type point :: {non_neg_integer() | ref(), number(), number()}
 
   @typedoc "A bucket's first, last, least and greatest points."
   @type summary :: {point(), point(), point(), point()}
 
-  @typedoc "A partial: its level, the views its refs index, and its segments in order."
-  @type partial ::
-          {integer(), [Table.view()],
-           [{:run, %{integer() => summary()}} | {:gap, {non_neg_integer(), non_neg_integer()}}]}
+  @typedoc "A run's buckets, ascending by bucket, each once."
+  @type run :: [{integer(), summary()}]
+
+  @typedoc """
+  One view's segments in row order (its runs, and each run of gap rows as its first row),
+  under the view's index among the partial's views.
+  """
+  @type piece :: {non_neg_integer(), [{:run, run()} | {:gap, non_neg_integer()}]}
+
+  @typedoc """
+  A bucket's summary as `runs/1` reads it, `{view, summary}`: its points are rows of that
+  view, or, `view` `nil`, they carry their `{view, row}` (a bucket straddling a chunk edge).
+  """
+  @type located :: {non_neg_integer() | nil, summary()}
+
+  @typedoc "A partial: its level, the views its pieces index, and a piece a view, in order."
+  @type partial :: {integer(), [Table.view()], [piece()]}
 
   # -- binding ------------------------------------------------------------------------------
 
@@ -182,61 +204,75 @@ defmodule Macaw.Data.Operations.Transforms.Ladder do
   # -- partials -------------------------------------------------------------------------------
 
   @doc """
-  One view's partial at level `k`: its rows' buckets, run by run between gaps, the view
-  its points' refs name as view 0.
+  One view's partial at level `k`: its rows' buckets, run by run between gaps, as the one
+  piece of view 0. A run's buckets are ascending by bucket, each once.
   """
   @spec partial(Table.view(), map(), integer(), String.t()) :: partial()
   def partial(view, %{x_name: x_name, y_name: y_name} = bound, k, op) do
     xs = Transforms.view_values(view, x_name)
     ys = Transforms.view_values(view, y_name)
-    {k, [view], walk(xs, ys, 0, bound, k, op, nil, [])}
+    {k, [view], [{0, walk(xs, ys, 0, bound, k, op, nil, nil, [])}]}
   end
 
   # One pass over the rows. The open bucket, `{b, summary}`, is carried until a row lands
-  # in another, so rows in x order touch the run's map once a bucket.
-  defp walk([], [], _i, _bound, _k, _op, open, segments),
-    do: Enum.reverse(close(open, segments))
+  # in another; the run's closed buckets are kept newest first, `{entries, ordered?}`,
+  # `ordered?` while each bucket closed is above the one before (rows in x order), so a
+  # run in x order is reversed and any other made ascending through a map once.
+  defp walk([], [], _i, _bound, _k, _op, open, run, segments),
+    do: Enum.reverse(close_run(put_open(open, run), segments))
 
-  defp walk([x | xs], [y | ys], i, bound, k, op, open, segments) when x == nil or y == nil do
+  defp walk([x | xs], [y | ys], i, bound, k, op, open, run, segments)
+       when x == nil or y == nil do
     segments =
-      case close(open, segments) do
+      case close_run(put_open(open, run), segments) do
         [{:gap, _} | _] = segments -> segments
-        segments -> [{:gap, {0, i}} | segments]
+        segments -> [{:gap, i} | segments]
       end
 
-    walk(xs, ys, i + 1, bound, k, op, nil, segments)
+    walk(xs, ys, i + 1, bound, k, op, nil, nil, segments)
   end
 
-  defp walk([x | xs], [y | ys], i, bound, k, op, open, segments) do
+  defp walk([x | xs], [y | ys], i, bound, k, op, open, run, segments) do
     s = space(x, bound, op)
-    point = {{0, i}, s, Transforms.number!(y, bound.y, op)}
+    point = {i, s, Transforms.number!(y, bound.y, op)}
     b = bucket(s, k)
 
     case open do
       {^b, {first, _last, low, high}} ->
         low = if elem(point, 2) < elem(low, 2), do: point, else: low
         high = if elem(point, 2) > elem(high, 2), do: point, else: high
-        walk(xs, ys, i + 1, bound, k, op, {b, {first, point, low, high}}, segments)
+        walk(xs, ys, i + 1, bound, k, op, {b, {first, point, low, high}}, run, segments)
 
       _other_or_none ->
-        segments = put_open(open, segments)
-        walk(xs, ys, i + 1, bound, k, op, {b, {point, point, point, point}}, segments)
+        run = put_open(open, run)
+        walk(xs, ys, i + 1, bound, k, op, {b, {point, point, point, point}}, run, segments)
     end
   end
 
-  # The open bucket into the current run, a run started if the last segment is a gap.
-  defp put_open(nil, segments), do: segments
+  defp put_open(nil, run), do: run
+  defp put_open(entry, nil), do: {[entry], true}
 
-  defp put_open({b, summary}, [{:run, buckets} | rest]),
-    do: [{:run, Map.update(buckets, b, summary, &summary(&1, summary))} | rest]
+  defp put_open({b, _summary} = entry, {[{last, _} | _] = entries, ordered?}),
+    do: {[entry | entries], ordered? and b > last}
 
-  defp put_open({b, summary}, segments), do: [{:run, %{b => summary}} | segments]
+  defp close_run(nil, segments), do: segments
+  defp close_run({entries, true}, segments), do: [{:run, Enum.reverse(entries)} | segments]
 
-  defp close(open, segments), do: put_open(open, segments)
+  defp close_run({entries, false}, segments),
+    do: [{:run, ascending(entries, &summary/2)} | segments]
+
+  # Buckets in any order made ascending, each once, a bucket's summaries merged.
+  defp ascending(entries, merge) do
+    entries
+    |> Enum.reduce(%{}, fn {b, s}, acc -> Map.update(acc, b, s, &merge.(&1, s)) end)
+    |> Map.to_list()
+    |> List.keysort(0)
+  end
 
   @doc """
   Two summaries of one bucket merged: the first and last by input order, the least and
-  greatest by y, the earlier on a tie. Commutative and associative.
+  greatest by y, the earlier on a tie. Commutative and associative, whether the points'
+  refs are rows of one view or `{view, row}`.
   """
   @spec summary(summary(), summary()) :: summary()
   def summary({f1, l1, lo1, hi1}, {f2, l2, lo2, hi2}) do
@@ -254,74 +290,115 @@ defmodule Macaw.Data.Operations.Transforms.Ladder do
 
   @doc """
   Two partials merged, the first's chunks before the second's, at the coarser of their
-  levels: a run ending the first and a run starting the second are one run, their shared
-  buckets merged; a gap ending the first and one starting the second are one gap.
+  levels: the views and the pieces concatenated, the second's view indexes moved past the
+  first's. No bucket is read, so a combine costs the chunks, never the buckets; a run or
+  a gap continuing across the chunk edge, and a bucket straddling it, are joined once, by
+  `runs/1`. Any grouping of the same partials gives the same partial.
   """
   @spec combine(partial(), partial()) :: partial()
-  def combine({ka, views_a, segments_a}, {kb, views_b, segments_b}) do
+  def combine({ka, views_a, pieces_a}, {kb, views_b, pieces_b}) do
     k = max(ka, kb)
-    segments_a = coarsen_segments(segments_a, ka, k)
-    segments_b = segments_b |> coarsen_segments(kb, k) |> shift(length(views_a))
-    {k, views_a ++ views_b, join(segments_a, segments_b)}
+    by = length(views_a)
+    moved = for {v, segments} <- coarsen_pieces(pieces_b, kb, k), do: {v + by, segments}
+    {k, views_a ++ views_b, coarsen_pieces(pieces_a, ka, k) ++ moved}
   end
-
-  defp join(a, []), do: a
-  defp join([], b), do: b
-
-  defp join(a, [first | rest] = b) do
-    case {List.last(a), first} do
-      {{:run, x}, {:run, y}} ->
-        Enum.drop(a, -1) ++ [{:run, Map.merge(x, y, fn _b, s, t -> summary(s, t) end)} | rest]
-
-      {{:gap, _}, {:gap, _}} ->
-        a ++ rest
-
-      _ ->
-        a ++ b
-    end
-  end
-
-  defp shift(segments, 0), do: segments
-
-  defp shift(segments, by) do
-    Enum.map(segments, fn
-      {:gap, {v, i}} ->
-        {:gap, {v + by, i}}
-
-      {:run, buckets} ->
-        {:run,
-         Map.new(buckets, fn {b, {f, l, lo, hi}} ->
-           {b, {move(f, by), move(l, by), move(lo, by), move(hi, by)}}
-         end)}
-    end)
-  end
-
-  defp move({{v, i}, s, y}, by), do: {{v + by, i}, s, y}
 
   @doc """
   A partial folded into a level at or above its own: each bucket into the coarser bucket
-  holding it, exactly as computing the partial at that level would give it.
+  holding it, one pass a run, exactly as computing the partial at that level would give it.
   """
   @spec coarsen(partial(), integer()) :: partial()
-  def coarsen({k, views, segments}, to) when to >= k,
-    do: {to, views, coarsen_segments(segments, k, to)}
+  def coarsen({k, views, pieces}, to) when to >= k,
+    do: {to, views, coarsen_pieces(pieces, k, to)}
 
-  defp coarsen_segments(segments, k, k), do: segments
+  defp coarsen_pieces(pieces, k, k), do: pieces
 
-  defp coarsen_segments(segments, k, to) do
+  defp coarsen_pieces(pieces, k, to) do
     d = Integer.pow(2, to - k)
 
-    Enum.map(segments, fn
-      {:run, buckets} ->
-        {:run,
-         Enum.reduce(buckets, %{}, fn {b, s}, acc ->
-           Map.update(acc, Integer.floor_div(b, d), s, &summary(&1, s))
-         end)}
+    for {v, segments} <- pieces do
+      {v,
+       Enum.map(segments, fn
+         {:run, [{b, s} | rest]} -> {:run, fold_run(rest, d, Integer.floor_div(b, d), s, [])}
+         gap -> gap
+       end)}
+    end
+  end
 
-      gap ->
-        gap
+  # Ascending buckets into coarser ones, still ascending: a run of them sharing a coarser
+  # bucket is consecutive.
+  defp fold_run([], _d, c, s, acc), do: Enum.reverse([{c, s} | acc])
+
+  defp fold_run([{b, s} | rest], d, c, held, acc) do
+    case Integer.floor_div(b, d) do
+      ^c -> fold_run(rest, d, c, summary(held, s), acc)
+      next -> fold_run(rest, d, next, s, [{c, held} | acc])
+    end
+  end
+
+  @doc """
+  A merged partial read once, in input order: its gaps, `{:gap, {view, row}}`, and its
+  runs, `{:run, buckets}`, each run's buckets `{b, located}` ascending, each once (a
+  `t:located/0` summary). A run ending one piece and one starting the next are one run, a
+  bucket they share merged; a gap ending one and one starting the next are one gap, the
+  first. Buckets out of order across pieces (an x not sorted) are merged through a map.
+  No point is copied but a bucket's that straddles a chunk edge.
+  """
+  @spec runs(partial()) :: [{:gap, ref()} | {:run, [{integer(), located()}]}]
+  def runs({_k, _views, pieces}) do
+    pieces
+    |> Enum.reduce([], fn {v, segments}, acc -> Enum.reduce(segments, acc, &join(&1, v, &2)) end)
+    |> Enum.reduce([], fn
+      {:run, frags}, out -> [{:run, run_buckets(frags)} | out]
+      gap, out -> [gap | out]
     end)
   end
+
+  # Segments joined newest first; a run's fragments, `{view, buckets}`, newest first too.
+  defp join({:run, run}, v, [{:run, frags} | acc]), do: [{:run, [{v, run} | frags]} | acc]
+  defp join({:run, run}, v, acc), do: [{:run, [{v, run}]} | acc]
+  defp join({:gap, _row}, _v, [{:gap, _} | _] = acc), do: acc
+  defp join({:gap, row}, v, acc), do: [{:gap, {v, row}} | acc]
+
+  defp run_buckets([{v, run}]), do: for({b, s} <- run, do: {b, {v, s}})
+
+  defp run_buckets(frags) do
+    {entries, ordered?} =
+      frags
+      |> Enum.reverse()
+      |> Enum.reduce({[], true}, fn {v, run}, acc -> Enum.reduce(run, acc, &add(v, &1, &2)) end)
+
+    if ordered?, do: Enum.reverse(entries), else: ascending(entries, &located/2)
+  end
+
+  defp add(v, {b, s}, {[{b, held} | rest], ordered?}),
+    do: {[{b, located(held, {v, s})} | rest], ordered?}
+
+  defp add(v, {b, s}, {[{last, _} | _] = entries, ordered?}),
+    do: {[{b, {v, s}} | entries], ordered? and b > last}
+
+  defp add(v, {b, s}, {[], ordered?}), do: {[{b, {v, s}}], ordered?}
+
+  @doc """
+  Two located summaries of one bucket merged (`summary/2`): within one view they stay
+  that view's rows; across two, every point is given its `{view, row}`.
+  """
+  @spec located(located(), located()) :: located()
+  def located({v, a}, {v, b}), do: {v, summary(a, b)}
+  def located({va, a}, {vb, b}), do: {nil, summary(points(va, a), points(vb, b))}
+
+  defp points(nil, summary), do: summary
+  defp points(v, {f, l, lo, hi}), do: {point(v, f), point(v, l), point(v, lo), point(v, hi)}
+
+  @doc "A located point with its ref `{view, row}`, given its summary's view (`nil`: it has it)."
+  @spec point(non_neg_integer() | nil, point()) :: {ref(), number(), number()}
+  def point(nil, point), do: point
+  def point(v, {i, s, y}), do: {{v, i}, s, y}
+
+  @doc "A located point's ref, `{view, row}`, given its summary's view (`nil`: it has it)."
+  @spec ref(non_neg_integer() | nil, point()) :: ref()
+  def ref(nil, {ref, _s, _y}), do: ref
+  def ref(v, {i, _s, _y}), do: {v, i}
 
   @doc """
   The rows at `refs` (`{view, row}`, any order) gathered from their views, in input order,
@@ -330,13 +407,18 @@ defmodule Macaw.Data.Operations.Transforms.Ladder do
   @spec gather([Table.view()], [{non_neg_integer(), non_neg_integer()}], Table.t(), term()) ::
           Table.t()
   def gather(views, refs, input, key) do
-    by_view = refs |> Enum.uniq() |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
+    # Sorted once, each once (a natural merge sort, so refs nearly in order cost about a
+    # pass), then split by view.
+    by_view =
+      refs
+      |> :lists.usort()
+      |> Enum.chunk_by(&elem(&1, 0))
+      |> Map.new(fn [{v, _} | _] = refs -> {v, Enum.map(refs, &elem(&1, 1))} end)
 
     kept =
       for {{chunk, first, count}, v} <- Enum.with_index(views),
           rows = by_view[v],
           rows != nil do
-        rows = Enum.sort(rows)
         {Chunk.gather(chunk, first, count, rows, {key, rows}), 0, length(rows)}
       end
 

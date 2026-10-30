@@ -11,7 +11,7 @@ defmodule Macaw.Data.Operations.LadderTest do
   alias Macaw.Data.{Operations, Reduce, Table}
   alias Macaw.Data.Operations.Step
   alias Macaw.Data.Operations.Transforms.{Ladder, Lttb, M4}
-  alias Macaw.Data.Test.Storage
+  alias Macaw.Data.Test.{Storage, Work}
 
   @registry Operations.registry()
 
@@ -283,6 +283,83 @@ defmodule Macaw.Data.Operations.LadderTest do
 
       small = table(wave(40))
       assert Table.equal?(run(small, %{node | n: 40}), small)
+    end
+  end
+
+  describe "merging partials (spec/04 §4.5.1; #39)" do
+    @tag verifies: "operations-ladder-merge"
+    test "a combine costs the chunks, not the buckets, and every grouping gives one partial" do
+      frame = wave(4_000) |> table() |> Storage.chunked(2_000)
+      [a, b] = Table.chunks(frame)
+      bound = M4.bind(checked(%{op: "m4", fields: ["t", "v"], width: 20}), frame, %{})
+
+      # Level 10: two or three buckets a chunk, bucket 1 straddling the edge (rows 1999 and
+      # 2000); level 0: 2,000 a chunk.
+      cost = fn k ->
+        pa = Ladder.partial(a, bound, k, "m4")
+        pb = Ladder.partial(b, bound, k, "m4")
+        {reductions, _} = Work.reductions(fn -> Ladder.combine(pa, pb) end)
+        reductions
+      end
+
+      few = cost.(10)
+      many = cost.(0)
+      assert abs(many - few) <= 20, "ten buckets #{few}, thousands #{many}"
+
+      # Any tree over the same partials gives the same merged partial, so a cache may hold
+      # merges of any grouping.
+      seven = wave(3_000) |> table() |> Storage.chunked(431)
+
+      for module <- [M4, Lttb] do
+        node =
+          if module == M4,
+            do: checked(%{op: "m4", fields: ["t", "v"], width: 20}),
+            else: checked(%{op: "lttb", fields: ["t", "v"], n: 50})
+
+        bound = module.bind(node, seven, %{})
+        partials = for view <- Table.chunks(seven), do: Ladder.partial(view, bound, 2, "m4")
+        [first | rest] = partials
+        left = Enum.reduce(rest, first, &Ladder.combine(&2, &1))
+        right = partials |> Enum.reverse() |> Enum.reduce(&Ladder.combine/2)
+        {front, back} = Enum.split(partials, 3)
+
+        middle =
+          Ladder.combine(
+            Enum.reduce(front, &Ladder.combine(&2, &1)),
+            Enum.reduce(back, &Ladder.combine(&2, &1))
+          )
+
+        assert left == right and left == middle
+      end
+    end
+
+    @tag verifies: "operations-ladder-merge"
+    property "rows whose x is out of order answer m4 and lttb as over one chunk" do
+      check all(
+              seed <- integer(1..10_000),
+              count <- integer(50..600),
+              size <- member_of([1, 7, 64, 211]),
+              max_runs: 30
+            ) do
+        :rand.seed(:exsss, {seed, seed, seed})
+        # A shuffled x with repeats, and an occasional gap.
+        rows =
+          for _ <- 1..count do
+            t = :rand.uniform(count)
+            v = if :rand.uniform() < 0.03, do: nil, else: :rand.normal() * 10
+            {t, v}
+          end
+
+        input = table(rows)
+
+        for node <- [
+              %{op: "m4", fields: ["t", "v"], width: 13},
+              %{op: "lttb", fields: ["t", "v"], n: 17}
+            ] do
+          whole = run(Storage.chunked(input, :one), node)
+          assert Table.equal?(run(Storage.chunked(input, size), node), whole), "#{node.op}"
+        end
+      end
     end
   end
 

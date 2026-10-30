@@ -374,7 +374,7 @@ latest keeps each declared identity's newest row in the window, the later on a t
 - an `x` reads in the scale's space (§4.5.1), a number or a time; a `y` as a number. Any other reading raises `ArgumentError` naming the step and the field;
 - **whole rows are kept,** every column of each, so a tooltip over a kept point reads the datum itself. O(n) in the rows.
 
-**Outputs:** the input's columns. **Reducer:** `{"n", 1}`. **Class:** a combine (§1.4): each chunk's partial is its buckets' extremes, partials merge bucket by bucket, and the selection runs in `finish/3`.
+**Outputs:** the input's columns. **Reducer:** `{"n", 1}`. **Class:** a combine (§1.4): each chunk's partial is its buckets' extremes, partials merge by concatenation (§4.5.1), and the selection runs in `finish/3`, over the candidates in one pass.
 
 ```test:operations-lttb-shape
 lttb keeps the ends and at most n rows, whole; n or fewer rows come back unchanged; gaps pass through with each run of gaps kept as its first row; a time column under a linear scale reads in seconds and a non-number y raises; n below 3 is refused
@@ -409,9 +409,14 @@ on linear, time and log scales, m4 is exact M4 over pixel columns whose boundari
 - **The level** is the coarsest whose bucket is at most the step's ideal width, from the span (the extent of `x` in the space, read at the ends of a sorted column, else scanned) and its count. **Hysteresis:** the previous level, the context's `level` (§3.2), is kept while its bucket is within a factor of 2 of the ideal width, so a span drifting near a power of two keeps one level and its partials. The level a run used is in each part's resolved context (`Step.parts/4`), for the caller to pass back.
 - **A zoom within a level** changes no partial and no step key: the extent and the pixel width enter only the merge. **A zoom out** folds finer partials into the coarser level (`Ladder.coarsen/2`) exactly as computing them there would; partials at two levels merge at the coarser. Only a zoom in computes again.
 - **Chunk edges** needn't align with buckets: a bucket straddling one gets a partial from each chunk, and the merge combines them. **Gaps** split the rows into runs; a run of gap rows is one gap kept as its first row, and a gap on a chunk boundary is kept, the merge joining runs and gaps across the edge.
+- **A partial is ordered, and a merge costs the chunks, not the buckets** (macaw_data#39). A partial holds a piece per view, in chunk order: the view's runs and gaps in row order, each run's buckets **ascending by bucket**, each once, every point's ref its row within the view. `combine/2` concatenates the two partials' views and pieces, the second's view indexes moved past the first's, and reads no bucket, so it costs a constant per chunk whatever the buckets each holds; any grouping of the same partials gives the same partial. Since a source's table is sorted by its window field, adjacent chunks share at most the boundary bucket, so the chunk edges are joined **once, when the merged partial is read** (`Ladder.runs/1`): a run continuing across an edge is one run, the bucket it straddles has its two summaries merged, and two gaps meeting at an edge are one gap. Rows whose `x` is not in order still answer exactly: a chunk's run is made ascending when it is computed, and runs whose buckets overlap across chunks are merged bucket by bucket when read. `coarsen/2` is one pass over each run. `finish/3` reads the merged buckets once: `m4` folds them into pixel columns in order (a bucket's column never falls as the bucket rises), and `lttb` takes its candidates in input order, sorting only rows out of order.
 
 ```test:operations-ladder-levels
 the level is the coarsest whose bucket is at most the ideal width; with the previous level given, a span oscillating around a power of two keeps one level and every unchanged chunk keeps its step key; a zoom within a level keeps every key, and a zoom out folds finer partials into the coarser level's exactly
+```
+
+```test:operations-ladder-merge
+combining two chunks' partials costs the same reductions whether each holds ten buckets or thousands, and every grouping of a table's partials gives the same merged partial; rows whose x is out of order, chunked any way, give m4 and lttb the one-chunk answer
 ```
 
 ```test:operations-ladder-gaps

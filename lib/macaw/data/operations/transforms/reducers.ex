@@ -91,10 +91,12 @@ defmodule Macaw.Data.Operations.Transforms.Lttb do
         Ladder.gather([], [], input, key)
 
       true ->
-        {_k, views, segments} = Ladder.coarsen(merged, max(elem(merged, 0), bound.level))
+        {_k, views, _pieces} =
+          merged = Ladder.coarsen(merged, max(elem(merged, 0), bound.level))
 
         refs =
-          segments
+          merged
+          |> Ladder.runs()
           |> Enum.flat_map(&candidates/1)
           |> Reduce.lttb(n, fn {_ref, s, y} -> {s, y} end)
           |> Enum.map(&elem(&1, 0))
@@ -103,19 +105,47 @@ defmodule Macaw.Data.Operations.Transforms.Lttb do
     end
   end
 
-  # A segment's candidates in input order: a gap as itself; a run's first and last points
-  # and each bucket's least and greatest.
+  # A segment's candidates in input order, each once: a gap as itself; a run's first and
+  # last points and each bucket's least and greatest. One pass over the ascending buckets;
+  # when the rows are in x order the candidates already are in input order, and any
+  # other run's are sorted.
   defp candidates({:gap, ref}), do: [{ref, nil, nil}]
 
-  defp candidates({:run, buckets}) do
-    summaries = Map.values(buckets)
-    first = summaries |> Enum.map(&elem(&1, 0)) |> Enum.min_by(&elem(&1, 0))
-    last = summaries |> Enum.map(&elem(&1, 1)) |> Enum.max_by(&elem(&1, 0))
+  defp candidates({:run, [{_b, {v, {first, last, _lo, _hi}}} | _] = buckets}) do
+    start = {Ladder.point(v, first), Ladder.point(v, last), [], true}
 
-    [first, last | Enum.flat_map(summaries, fn {_f, _l, lo, hi} -> [lo, hi] end)]
-    |> Enum.uniq_by(&elem(&1, 0))
-    |> Enum.sort_by(&elem(&1, 0))
+    {first, last, held, ordered?} =
+      Enum.reduce(buckets, start, fn {_b, {v, {f, l, lo, hi}}}, {first, last, held, ordered?} ->
+        {a, z} = if elem(lo, 0) <= elem(hi, 0), do: {lo, hi}, else: {hi, lo}
+        {held, ordered?} = push(Ladder.point(v, z), push(Ladder.point(v, a), {held, ordered?}))
+        {earliest(first, v, f), latest(last, v, l), held, ordered?}
+      end)
+
+    if ordered? do
+      # The run's first is at or before every candidate, its last at or after.
+      [first | push(last, {held, true}) |> elem(0) |> Enum.reverse()] |> drop_repeat()
+    else
+      [first, last | held] |> Enum.uniq_by(&elem(&1, 0)) |> Enum.sort_by(&elem(&1, 0))
+    end
   end
+
+  defp push({ref, _, _}, {[{ref, _, _} | _], _ordered?} = held), do: held
+
+  defp push({ref, _, _} = point, {[{before, _, _} | _] = held, ordered?}),
+    do: {[point | held], ordered? and ref > before}
+
+  defp push(point, {[], ordered?}), do: {[point], ordered?}
+
+  defp drop_repeat([{ref, _, _}, {ref, _, _} = point | rest]), do: [point | rest]
+  defp drop_repeat(points), do: points
+
+  # The earlier (later) of a point with its ref and a located one, copying it only when
+  # it is.
+  defp earliest({r, _, _} = held, v, point),
+    do: if(r <= Ladder.ref(v, point), do: held, else: Ladder.point(v, point))
+
+  defp latest({r, _, _} = held, v, point),
+    do: if(r >= Ladder.ref(v, point), do: held, else: Ladder.point(v, point))
 end
 
 defmodule Macaw.Data.Operations.Transforms.M4 do
@@ -200,31 +230,46 @@ defmodule Macaw.Data.Operations.Transforms.M4 do
 
   def finish(%{"width" => width} = node, merged, %{input: input, key: key} = at) do
     bound = bind(node, input, at.context)
-    {k, views, segments} = Ladder.coarsen(merged, max(elem(merged, 0), bound.level))
+    {k, views, _pieces} = merged = Ladder.coarsen(merged, max(elem(merged, 0), bound.level))
     column = column_of(bound.extent, width, k)
 
     refs =
-      Enum.flat_map(segments, fn
-        {:gap, ref} ->
-          [ref]
-
-        {:run, buckets} ->
-          buckets
-          |> Enum.group_by(fn {b, _summary} -> column.(b) end, &elem(&1, 1))
-          |> Enum.flat_map(fn {_column, summaries} ->
-            {first, last, low, high} = Enum.reduce(summaries, &Ladder.summary/2)
-            Enum.map([first, low, high, last], &elem(&1, 0))
-          end)
+      merged
+      |> Ladder.runs()
+      |> Enum.flat_map(fn
+        {:gap, ref} -> [ref]
+        {:run, [{b, s} | rest]} -> columns(rest, column, column.(b), s, [])
       end)
 
     Ladder.gather(views, refs, input, key)
   end
 
+  # A run's ascending buckets folded into their pixel columns in one pass: a bucket's
+  # column never falls as the bucket rises, so a column's buckets are consecutive.
+  defp columns([], _column, _c, held, refs), do: column_refs(held, refs)
+
+  defp columns([{b, s} | rest], column, c, held, refs) do
+    case column.(b) do
+      ^c -> columns(rest, column, c, Ladder.located(held, s), refs)
+      next -> columns(rest, column, next, s, column_refs(held, refs))
+    end
+  end
+
+  defp column_refs({v, {first, last, low, high}}, refs),
+    do: [
+      Ladder.ref(v, first),
+      Ladder.ref(v, low),
+      Ladder.ref(v, high),
+      Ladder.ref(v, last) | refs
+    ]
+
   # The pixel column a bucket folds into: the one its start lies in, over the extent split
   # into `width` columns; every bucket column 0 when the extent is a point.
   defp column_of({lo, hi}, width, k) when hi > lo do
+    w = Ladder.pow2(k)
+
     fn b ->
-      start = b * Ladder.pow2(k)
+      start = b * w
       (start - lo) |> Kernel./(hi - lo) |> Kernel.*(width) |> floor() |> max(0) |> min(width - 1)
     end
   end
