@@ -37,7 +37,37 @@ defmodule Macaw.Data.Test.TraceTest do
            ]
 
     assert calls({Callee, :a, 1}, fn -> Callee.b(Callee.a(1)) end) == [{Callee, :a}]
-    assert calls({Callee, :a, 2}, fn -> Callee.a(1) end) == []
+  end
+
+  test "a pattern that matches no function fails, rather than seeing no calls" do
+    assert_raise ArgumentError, ~r/no function matches/, fn ->
+      calls({Callee, :a, 2}, fn -> Callee.a(1) end)
+    end
+
+    assert_raise ArgumentError, ~r/no function matches/, fn ->
+      calls({Callee, :renamed, :_}, fn -> Callee.a(1) end)
+    end
+  end
+
+  # A module on the code path but not loaded until its first call, as modules are in the
+  # test environment: a pattern set before it loads would match nothing.
+  @tag :tmp_dir
+  test "a module not loaded yet is traced from its first call", %{tmp_dir: dir} do
+    module = :macaw_data_trace_test_lazy
+
+    forms = [
+      {:attribute, 1, :module, module},
+      {:attribute, 1, :export, [f: 0]},
+      {:function, 1, :f, 0, [{:clause, 1, [], [], [{:atom, 1, :ok}]}]}
+    ]
+
+    {:ok, ^module, beam} = :compile.forms(forms)
+    File.write!(Path.join(dir, "#{module}.beam"), beam)
+    true = :code.add_patha(String.to_charlist(dir))
+    on_exit(fn -> :code.del_path(String.to_charlist(dir)) end)
+    refute :code.is_loaded(module)
+
+    assert calls({module, :f, 0}, fn -> module.f() end) == [{module, :f}]
   end
 
   test "concurrent traces of one function each see every call: one ending does not end another" do

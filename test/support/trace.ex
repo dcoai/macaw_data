@@ -13,12 +13,20 @@ defmodule Macaw.Data.Test.Trace do
   Every call `fun` makes, in this process, to a function `pattern` matches
   (`{module, name, arity}`, `:_` for any), in order, as `{module, name}`. Traced to a
   collector, since a process is not its own tracer.
+
+  A pattern covers only loaded code, so a named module is loaded first. A pattern that
+  matches no function raises: tracing nothing would let an assertion that a call is never
+  made pass for a misspelled or renamed function.
   """
-  def calls({_, _, _} = pattern, fun) do
+  def calls({module, _, _} = pattern, fun) do
+    if module != :_, do: Code.ensure_loaded!(module)
     me = self()
     collector = spawn_link(fn -> collect(me, []) end)
     session = :trace.session_create(__MODULE__, collector, [])
-    :trace.function(session, pattern, true, [:global])
+
+    if :trace.function(session, pattern, true, [:global]) == 0,
+      do: raise(ArgumentError, "no function matches the trace pattern #{inspect(pattern)}")
+
     :trace.process(session, me, true, [:call])
     fun.()
     :trace.process(session, me, false, [:call])
