@@ -7,7 +7,11 @@ defmodule Macaw.Data.Bounded do
   loaded host does not change. A call that answers is judged by its own count, read as
   its function returns; a call still running is read every 10 ms and killed at the first
   reading over the cap. Liveness is a separate wall-clock bound, `timeout`, for a call
-  blocked in `receive`, which spends no reductions and so is never stopped by a cap.
+  blocked in `receive`, which spends no reductions and so is never stopped by a cap: past
+  it, a capped call is hung only when it is blocked, waiting in `receive` at two readings
+  10 ms apart with its reductions unchanged. One still working is left to its cap, so a
+  slow call on a loaded host is never hung (macaw_data#33). A call with no cap has only
+  the clock, and past it is hung whatever it is doing.
 
   Nothing is rescued: a raise or an exit is read from the process's `:DOWN`.
 
@@ -30,7 +34,8 @@ defmodule Macaw.Data.Bounded do
   `thunk` called in a process spawned with `spawn:` options and `:monitor`, the caller in
   its `$callers`: `{:ok, value, reductions}`; `{:reductions, spent}` when it spent more
   than `reductions:` (`nil`, no cap); `:hung` when it had not answered within `timeout:`
-  ms; `{:down, reason}` when it exited first, a heap limit's kill as `:killed`. A process
+  ms and is blocked in `receive` (with no cap, whatever it is doing); `{:down, reason}`
+  when it exited first, a heap limit's kill as `:killed`. A process
   the caller kills is waited for, so nothing it does outlives the call.
   """
   @spec run((-> term()), keyword()) :: outcome()
@@ -52,7 +57,7 @@ defmodule Macaw.Data.Bounded do
         [:monitor | Keyword.get(opts, :spawn, [])]
       )
 
-    call = %{pid: pid, monitor: monitor, tag: tag, cap: cap}
+    call = %{pid: pid, monitor: monitor, tag: tag, cap: cap, last: nil}
     await(call, System.monotonic_time(:millisecond) + timeout)
   end
 
@@ -66,33 +71,46 @@ defmodule Macaw.Data.Bounded do
         {:down, reason}
     after
       wait(call.cap, deadline) ->
-        if System.monotonic_time(:millisecond) >= deadline do
-          stop(call, :hung)
-        else
-          case over(pid, call.cap) do
-            nil -> await(call, deadline)
-            spent -> stop(call, {:reductions, spent})
-          end
+        reading = reading(pid)
+        past? = System.monotonic_time(:millisecond) >= deadline
+
+        cond do
+          reading == nil -> await(call, deadline)
+          over?(reading, call.cap) -> stop(call, {:reductions, elem(reading, 1)})
+          past? and hung?(call, reading) -> stop(call, :hung)
+          true -> await(%{call | last: reading}, deadline)
         end
     end
   end
 
-  # With no cap there is nothing to read, and the wait is the deadline's.
-  defp wait(cap, deadline) do
-    left = max(deadline - System.monotonic_time(:millisecond), 0)
-    if cap == nil, do: left, else: min(@poll, left)
+  # With no cap there is nothing to read before the deadline, and the wait is the
+  # deadline's; with one, a reading every 10 ms, past the deadline too.
+  defp wait(nil, deadline), do: max(deadline - System.monotonic_time(:millisecond), 0)
+
+  defp wait(_cap, deadline) do
+    left = deadline - System.monotonic_time(:millisecond)
+    if left > 0, do: min(@poll, left), else: @poll
   end
 
-  # The running call's reductions when they are over the cap, else `nil` (and `nil` for a
-  # process that has just ended, whose `:DOWN` or result is in the mailbox).
-  defp over(_pid, nil), do: nil
-
-  defp over(pid, cap) do
-    case Process.info(pid, :reductions) do
-      {:reductions, spent} when spent > cap -> spent
-      _within_or_ended -> nil
+  # The running call's status and reductions, or `nil` for a process that has just ended,
+  # whose `:DOWN` or result is in the mailbox.
+  defp reading(pid) do
+    case Process.info(pid, [:status, :reductions]) do
+      [status: status, reductions: spent] -> {status, spent}
+      nil -> nil
     end
   end
+
+  defp over?({_status, spent}, cap) when cap != nil, do: spent > cap
+  defp over?(_reading, _cap), do: false
+
+  # Past the deadline: a call with no cap has only the clock, so it is hung whatever it is
+  # doing. A capped call is hung only when it is blocked in `receive`: waiting at this
+  # reading and the one before, its reductions unchanged between them. One still working
+  # is left to its cap, so a slow call on a loaded host is never hung.
+  defp hung?(%{cap: nil}, _reading), do: true
+  defp hung?(%{last: {:waiting, spent}}, {:waiting, spent}), do: true
+  defp hung?(_call, _reading), do: false
 
   # The call killed and waited for. A result it sent before the kill landed is its answer,
   # judged by its own count, so the moment of a reading is never a verdict.

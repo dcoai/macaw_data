@@ -18,7 +18,8 @@ defmodule Macaw.Data.Derived.Sandbox do
 
   A call's cost is the reductions its process spends, held to `max_reductions:`, so a
   runaway's verdict is the same on a loaded host; a call blocked in `receive` is `:hung` at
-  a separate, generous `timeout:` (visualize#852, visualize D-220). Nothing is rescued: a raise, a heap overrun,
+  a separate, generous `timeout:` (visualize#852, visualize D-220), and one still working
+  when it passes is left to the cap, never hung (macaw_data#33). Nothing is rescued: a raise, a heap overrun,
   a runaway and a hang are read from the process the call ran in, through its monitor.
   """
 

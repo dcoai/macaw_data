@@ -334,6 +334,35 @@ defmodule Macaw.Data.Derived.SandboxTest do
     end
   end
 
+  describe "liveness: hung only when blocked (spec/02 §6.4; macaw_data#33)" do
+    # A timeout of 1 ms: every call below takes longer than that working, so a runner that
+    # read the clock alone would call each hung. Each is judged by what it did instead.
+    @sum "fn n -> Enum.reduce(1..n, 0, fn x, acc -> acc + x end) end"
+
+    @tag verifies: "derived-runner-liveness"
+    test "a capped call still working past its timeout is judged by its count, never hung" do
+      {:ok, compiled} = Sandbox.compile(@sum)
+      assert Sandbox.run(compiled, [200_000], timeout: 1) == {:ok, 20_000_100_000}
+
+      assert Sandbox.run(compiled, [200_000], timeout: 1, max_reductions: 100_000) ==
+               {:error, :reductions, 100_000}
+
+      # The compile is a bounded call too.
+      assert {:ok, %Compiled{}} = Sandbox.compile(@sum <> " # " <> "x", timeout: 1)
+    end
+
+    @tag verifies: "derived-runner-liveness"
+    test "a call blocked in receive is hung, capped or not; one with no cap is hung whatever it does" do
+      blocked = fn -> receive(do: (:never_sent -> :ok)) end
+      assert Macaw.Data.Bounded.run(blocked, reductions: 1_000_000, timeout: 20) == :hung
+      assert Macaw.Data.Bounded.run(blocked, timeout: 20) == :hung
+
+      spin = fn -> Stream.repeatedly(fn -> :ok end) |> Stream.run() end
+      assert Macaw.Data.Bounded.run(spin, timeout: 20) == :hung
+      assert {:reductions, _} = Macaw.Data.Bounded.run(spin, reductions: 1_000_000, timeout: 1)
+    end
+  end
+
   describe "run/3" do
     @tag verifies: "derived-runner-outcomes"
     test "a value" do

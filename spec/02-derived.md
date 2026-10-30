@@ -405,7 +405,7 @@ a checked source compiles once into a closure that reads row.field by either spe
   - **a call that answers is judged by its own count**, read as the function returns: over the cap is `{:error, :reductions, max_reductions}` even though a value came back;
   - **a call still running is read every 10 ms** and killed at the first reading over the cap. The overshoot is bounded, at most 10 ms of one scheduler's work, and is CPU the host spends, never a verdict: a call that finished within the cap and answered as the kill was sent is still `{:ok, value}`.
 - **The cap is derived** (visualize#852's root-cause note): `100_000_000` reductions is about 4,500 times the costliest stored document visualize has to compile and about 7,500 times its run over its four hosts, so a per-identity batch over some 180,000 input rows fits. A runaway reaches it in about 0.7 s idle and 2.4 s saturated.
-- **Liveness is separate from cost.** A call blocked in `receive` spends no reductions, so no cap stops it. `timeout:` is a generous wall-clock bound for that case alone: a call that has not answered when it passes is killed and reported as **hung**, `{:error, :hung, timeout}`, never as slow. A stored function cannot `receive` (§6.1).
+- **Liveness is separate from cost.** A call blocked in `receive` spends no reductions, so no cap stops it. `timeout:` is a generous wall-clock bound for that case alone: a call that has not answered when it passes and is **blocked**, waiting in `receive` at two readings 10 ms apart with its reductions unchanged, is killed and reported as **hung**, `{:error, :hung, timeout}`, never as slow. A call still working when it passes is left to its cap and judged by its count, as its value, `:reductions` or `:memory`: on a loaded host a compile or a CPU-bound call can outlast a tight `timeout:` without being blocked, and was once judged hung for it (macaw_data#33). The sandbox always runs with a cap; `Macaw.Data.Bounded` called with none has only the clock, and past it a call is hung whatever it is doing. A stored function cannot `receive` (§6.1).
 - **The outcome is read from the process, never rescued.** A result within the cap is `{:ok, value}`; one over it `{:error, :reductions, max_reductions}`. A `:DOWN` of `:killed` is the heap limit, `{:error, :memory, max_heap}`. The caller's own kills are `:reductions` and `:hung`. Any other exit is a raise, `{:error, :raised, name}`, `name` the exception's module as `Exception.normalize/3` reads the reason, **never its message**, which may quote the rows. A killed process is waited for before the call returns, so nothing it does outlives the call.
 
 | Kind | When | Detail |
@@ -427,6 +427,10 @@ a call answers its value; a raise is its exception's module and never its messag
 
 ```test:derived-runner-reductions
 a runaway is stopped as reductions at the cap; a call that answers over the cap is reductions though a value came back; a call within it is ok
+```
+
+```test:derived-runner-liveness
+a capped call still working when its timeout passes is judged by its count, its value or reductions, never hung, the compile of a source too; a call blocked in receive is hung at the bound; a call with no cap is hung at the bound whatever it does
 ```
 
 ```test:derived-runner-tighten
