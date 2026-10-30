@@ -12,9 +12,14 @@ defmodule Macaw.Data.Operations.FrameLoopLoadTest do
   alias Macaw.Data.Test.{FrameLoop, Saturate, Work}
 
   # The per-chunk frame, its merges alone and its full recompute, counted with every
-  # kernel call on a normal scheduler.
+  # kernel call on a normal scheduler, each the least of three counts: the counter's
+  # residue only ever adds (a count of 168,617 once read 169,597, idle; macaw_data#65, #66).
   defp counts(window, cache, warm) do
-    count = &elem(Work.reductions(fn -> Native.normal_schedulers(&1) end), 0)
+    count = fn fun ->
+      Enum.min(
+        for _ <- 1..3, do: elem(Work.reductions(fn -> Native.normal_schedulers(fun) end), 0)
+      )
+    end
 
     {count.(fn -> FrameLoop.cached(window, cache) end),
      count.(fn -> FrameLoop.cached(window, warm) end), count.(fn -> FrameLoop.full(window) end)}
@@ -33,10 +38,10 @@ defmodule Macaw.Data.Operations.FrameLoopLoadTest do
     :ok = Saturate.stop(busy)
 
     if Native.loaded?() do
-      # The residue is how a yielding BIF is charged against its time slice
-      # (Macaw.Data.Test.Work): a few reductions.
+      # Within the counter's stated residue, 0.2 % (Macaw.Data.Test.Work): a dirty call
+      # charged by its time moved these by up to 45 % (macaw_data#60).
       for {i, s} <- Enum.zip(Tuple.to_list(idle), Tuple.to_list(saturated)) do
-        assert abs(s - i) <= 100, "idle #{inspect(idle)}, saturated #{inspect(saturated)}"
+        assert abs(s - i) <= div(i, 500), "idle #{inspect(idle)}, saturated #{inspect(saturated)}"
         assert s <= 250_000, "saturated #{inspect(saturated)}"
       end
     end

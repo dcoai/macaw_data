@@ -214,7 +214,7 @@ with the kernels loaded, the synthetic frame loop's per-chunk frame, its merges 
 ```
 
 ```test:operations-cache-native-frame-load
-with the kernels loaded and every kernel call on a normal scheduler, the frame loop's per-chunk frame, its merges alone and its full recompute count the same reductions, within 100, idle and with every scheduler saturated, each at most 250,000
+with the kernels loaded and every kernel call on a normal scheduler, the frame loop's per-chunk frame, its merges alone and its full recompute count the same reductions, the least of three counts each within the counter's 0.2 % residue, idle and with every scheduler saturated, each at most 250,000
 ```
 
 ### 1.6 Execution: inline by default, parallel on request {#operations-parallel}
