@@ -49,6 +49,7 @@ defmodule Macaw.Data.Table.Column do
   import Bitwise
 
   alias Macaw.Data.Schema
+  alias Macaw.Data.Table.Digest
 
   @typedoc "A column's storage, one of the forms above."
   @type t :: tuple()
@@ -114,6 +115,33 @@ defmodule Macaw.Data.Table.Column do
     do: {:ok, category(category_form(values, false, false), values)}
 
   def pack(_type, values, _name), do: {:ok, {:list, values}}
+
+  @doc false
+  # A piece of a column packed, its faults' indexes counted from `at`: `pack/3`'s, and a
+  # value that is not data (a function, a PID, a reference, a port, an improper list),
+  # which has no digest (spec/01 §1.1.2), `{[name, i], :not_data}`. Only the list form
+  # holds values as given, so only it is read for them.
+  @spec piece(atom(), [term()], term(), non_neg_integer()) ::
+          {:ok, t()} | {:error, [{list(), term()}, ...]}
+  def piece(type, values, name, at) do
+    case pack(type, values, name) do
+      {:ok, {:list, list} = col} ->
+        case for(
+               {v, i} <- Enum.with_index(list, at),
+               not Digest.data?(v),
+               do: {[name, i], :not_data}
+             ) do
+          [] -> {:ok, col}
+          faults -> {:error, faults}
+        end
+
+      {:ok, col} ->
+        {:ok, col}
+
+      {:error, faults} ->
+        {:error, Enum.map(faults, fn {[name, i], fault} -> {[name, i + at], fault} end)}
+    end
+  end
 
   defp faults(values, name, ok?, type) do
     for {v, i} <- Enum.with_index(values), v != nil, not ok?.(v), do: {[name, i], {:type, type}}

@@ -175,7 +175,7 @@ appending and trimming give the contents a fresh build of the same rows would ha
   A time of a calendar other than ISO is "any other term". A column's canonical form is three streams over its values in order: the tags, the words, and the own bytes. The digest is the SHA-256 of a version byte (1), the kernel's encoding (`Macaw.Layers.Document.digest/1`'s, its version byte aside) of `{"macaw.table", [{name, type}, …]}`, the row count as 64 bits big-endian, and then for each column in order the SHA-256 of each of its three streams. Each stream is hashed by itself, so where a chunk ends never reaches the digest. The packed forms lay their values out nearly so already (int64 and float64 values, UTC microseconds, a text column's bytes), so a chunk's digest costs about one pass over its buffers.
 - **A table holds data.** A value that is not data (a function, a PID, a reference, a port, an improper list) has no digest, so `new/1` refuses it, `{[name, i], :not_data}`, whatever the column's type.
 - **A chunk's digest** (`Table.Chunk.digest/1`) is its content digest as a one-chunk table of the table's names and types. It is computed once, when the chunk is built, and kept in the chunk. Reading it never hashes, and neither does slicing, trimming or appending.
-- **`compact/1`** of two equal tables is the same struct (`==`), canonical chunks with the same digests. A table already canonical is returned as it is.
+- **`compact/1`** of two equal tables of one origin (§1.1.3) is the same struct (`==`), canonical chunks with the same digests. A table already canonical is returned as it is.
 - **The kernel's digest of the struct is of its layout,** until the kernel lets a type supply its canonical digest input (macaw_layers#18), a table's being its digest. Until then a table's digest is `Table.digest/1`. The kernel's encoding it uses is a copy, held byte-for-byte equal to `Macaw.Layers.Document.digest/1`.
 
 ```test:table-equal
@@ -188,6 +188,41 @@ new/1 refuses a value that is not data, a function, a PID, a reference, a port o
 
 ```test:table-digest
 digest/1 is the SHA-256 of the canonical form, the same for every form of the same values, each value a chunk of its own or all in one; the kernel's encoding it uses is the kernel's, byte for byte; a chunk's digest is its own as a one-chunk table; a dictionary built again in another order keeps it; 1 and 1.0 and 0.0 and -0.0 differ; reading a chunk's digest, slicing, trimming and appending hash nothing, and new/1 hashes each chunk once
+```
+
+#### 1.1.3 Chunk identity {#sources-table-chunk-identity}
+
+**Every chunk has a logical id: where it sits, which never changes** (macaw_data#9 §2). A cache scopes its entries by it and evicts them when the chunk leaves its window. Beside it a chunk has a **version**, `Chunk.version/1`: its content digest (§1.1.2), or a step output's derivation digest.
+
+- **A table built from rows** (`new/1`, `from/2`) is not a source's. It has no change stream for a stable id to follow, so a chunk's logical id is its content digest, and the caller names nothing.
+- **A source's table** is built by `new/2` with `origin: %{source, resolution, window, span, offset}`: the source's name, the resolution its relation is held at (`served.resolution`, §4.3), its window field (or `nil`), its chunk span (`Source.Description.chunk_span/2`, or `nil`), and where the rows given start among the source's rows (0 by default). A chunk's logical id is `{source, resolution, slot}`, and every row of a chunk lies in its slot:
+  - **in event time,** when the origin has a window field and a span. The slot is the start of the span the rows lie in. Spans are laid from a fixed origin: the Unix epoch for a time (a `DateTime`'s UTC instant, a `NaiveDateTime`'s wall clock, a `Date` at midnight), 0 for a number. So a chunk is a window. Rows with no window value are the slot `nil`, before every other. The rows given are in the window field's order, `nil` first; others are `{[:origin, :window], {:unsorted, i}}`, at the first row out of order.
+  - **by row count** otherwise. The slot is the position among the source's rows where the chunk's run of `chunk_rows/0` rows starts, a multiple of it. It is fixed when the chunk is built, so trimming the oldest rows never moves a later chunk's slot.
+  - **Resolution is in the id.** A relation at one resolution is another relation than the same source's at another (§4.3), so their chunks never share an id, a delta or a cache entry.
+  - **`append/2` keeps the alignment.** The rows that fall in the last chunk's slot are written into it, a chunk of the same id with new contents and a new digest; later rows start new chunks. Appended rows lie at or after the last row's window value, else `{:error, {:unsorted, i}}`: a late row is a change, `Table.apply/2`'s (§2.6). A table of another origin is `{:error, {:origin, expected, given}}`.
+  - **`compact/1` keeps the slots,** rebuilding a source's table on them.
+  - The origin is not part of a table's contents: `equal?/2` and `digest/1` ignore it.
+- **The span never depends on data seen at runtime,** so logical ids hold across a rebuild and a restart. `Source.Description.chunk_span/2` of a description and a resolution is the description's `chunk_span` when it declares one (§2.1). Else it is derived from the resolution to target `chunk_rows/0` rows a chunk: `chunk_rows/0` times a resolution of *r* seconds (a number, or `:second`, `:minute`, `:hour` or `:day`) over a time window field, a `Duration`; `chunk_rows/0` times *r*, in the field's units, over a number window field. A resolution it can't read (`nil`, another name, a name over a number field) and a source with no time or number window field have no span, and their chunks are aligned by row count.
+- **A step's output chunk** (macaw_data#9 §5) is built without hashing its contents, and `from_chunks/2` is a table of such chunks:
+  - `Chunk.derive/3`, a per-row step's: its logical id is `{input's logical id, step key}`, so caching continues along a chain of steps;
+  - `Chunk.combine/3`, a global step's (a sort, a merge of several chunks): its logical id is `{:combined, digest}`, the kernel's digest of `{step key, [{logical id, version}, …]}` over its inputs, so a step after it still caches.
+  - The **step key** is the step's name, its checked options and the context it reads as that context resolves for the chunk (spec/04). Keying on raw context would miss on every frame.
+- **The derivation digest** is a step output's version: the kernel's digest of `{[version, …], step key}` over its inputs, never of its contents. It is valid because steps are pure and deterministic for their inputs and key. It is a **cache key only:** two derivations of equal results get different keys, which costs a miss and never gives a stale hit. A step output's content digest (`Chunk.digest/1`) is `nil` until it is persisted or compared: `compact/1` gives it one, and `equal?/2` and `digest/1` read its contents.
+
+```test:table-chunk-ids
+a table built from rows has its chunks' content digests as their ids; a source's chunks are {source, resolution, slot}, by span start in event time and by row offset otherwise, equal across a rebuild and to ids written out literally; trimming keeps every remaining chunk's id; appending writes into the last chunk's slot and starts new ones; rows out of window order, and an append of another origin, are refused
+```
+
+```test:table-resolution-ids
+the same rows of one source held at two resolutions share no chunk id
+```
+
+```test:table-span
+chunk_span/2 is the declared chunk_span, else chunk_rows times the resolution, a Duration over a time window field and a number over a number one, and nil for a resolution it can't read or no window field; a description refuses a chunk span of the wrong kind; tables of different rows at one span have their boundaries at the same span starts
+```
+
+```test:table-derivation
+a per-row step's output chunk has the id {input id, step key}, and a global step's the digest of its key over its inputs' ids and versions; a derivation digest is the same across runs, and changes with an input's version or the key; a chain of steps hashes no output's contents, and compact/1 gives a step's output a content digest
 ```
 
 ### 1.2 The schema {#sources-schema}
@@ -446,13 +481,14 @@ describer/1 answers a named source's schema, no_source for an unknown name, and 
 
 ### 2.1 The description {#sources-description}
 
-`%Macaw.Data.Source.Description{schema, params, supports, viewer_independent, lateness, idle_after}`, built by `new/1`, which reports every fault at once by path:
+`%Macaw.Data.Source.Description{schema, params, supports, viewer_independent, lateness, idle_after, chunk_span}`, built by `new/1`, which reports every fault at once by path:
 - **`schema`**, required, a `Macaw.Data.Schema` (§1.2).
 - **`params`**: the parameters the source takes, by name, each a parameter (§2.2); `%{}` by default. A name is a non-empty string.
 - **`supports`**: the capabilities it honors, distinct, among `:window`, `:box`, `:region`, `:latest`, `:budget`, `:push` and `:as_of`; `[]` by default. **Every capability is optional:** Macaw finishes a window, box, region, latest or budget the source did not honor, and reports it (§2.4). (visualize.md C1, D-140.)
 - **`viewer_independent`**: `true` declares that the source answers every viewer the same. It only allows pooling across viewers (§6), which fetches with the anonymous viewer, so a wrong declaration shows everyone the anonymous answer and never one person's rows to another. The conformance kit checks it by asking two viewers. `false` by default.
 - **`lateness`**: a hard bound on how late a change may be, for a source that refuses changes past some age (§4.4); `nil` by default, accepting a change of any age.
 - **`idle_after`**: milliseconds the source may deliver nothing before a derived source's watermark leaves it out ([02 §8.6](02-derived.md#derived-engine-watermarks)), a positive integer; `nil` by default, never idle.
+- **`chunk_span`**: the span of the window field a chunk of the source's table holds (§1.1.3), declared because the source knows its rate: a positive `Duration` of fixed length (no years or months) over a `:time` window field, a positive number in the field's units over a `:number` one. `nil` by default, derived from the resolution (`chunk_span/2`). Another value is `{[:chunk_span], {:type, :duration}}` or `{[:chunk_span], {:type, :number}}`, and one with no window field `{[:chunk_span], :no_window_field}`. Set wrong, chunks are too small or too large, which costs only speed.
 
 There is no other key: the earlier `reveals`, a declaration of what a result tells about the viewer for a page's privacy note, was removed (the owner's decision, 2026-10-27): a page notice of what it shows had no use case, and viewer dependence is what `viewer_independent` and the kit already check.
 

@@ -12,6 +12,8 @@ defmodule Macaw.Data.TableChunksTest do
   alias Macaw.Data.Table.Digest
   alias Macaw.Layers.Document
 
+  import Macaw.Data.Test.Trace, only: [calls: 2]
+
   # `columns` ({name, type, values}) built in pieces of the given sizes and appended: the
   # same rows, chunked as the sizes say.
   defp chunked(columns, sizes) do
@@ -71,28 +73,6 @@ defmodule Macaw.Data.TableChunksTest do
 
   defp slice_columns(columns, from, count),
     do: for({name, type, values} <- columns, do: {name, type, Enum.slice(values, from, count)})
-
-  # Every call `fun` makes, in this process, to a function `pattern` matches, in order, by
-  # module and name: traced to a collector, since a process is not its own tracer.
-  defp calls(pattern, fun) do
-    collector = spawn_link(fn -> collect([]) end)
-    :erlang.trace_pattern(pattern, true, [:global])
-    :erlang.trace(self(), true, [:call, {:tracer, collector}])
-    fun.()
-    :erlang.trace(self(), false, [:call])
-    :erlang.trace_pattern(pattern, false, [:global])
-    ref = :erlang.trace_delivered(self())
-    receive do: ({:trace_delivered, _, ^ref} -> :ok)
-    send(collector, {:done, self()})
-    receive do: ({:calls, calls} -> calls)
-  end
-
-  defp collect(calls) do
-    receive do
-      {:trace, _pid, :call, {module, name, _args}} -> collect([{module, name} | calls])
-      {:done, from} -> send(from, {:calls, Enum.reverse(calls)})
-    end
-  end
 
   # Any data: never a function, a PID, a reference or a port.
   defp data_gen do

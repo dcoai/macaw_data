@@ -48,11 +48,12 @@ defmodule Macaw.Data.Table do
   alias Macaw.Data.Table.Chunk
   alias Macaw.Data.Table.Column
   alias Macaw.Data.Table.Digest
+  alias Macaw.Data.Table.Origin
 
   @compile {:no_warn_undefined, [Table, Nx]}
 
   @enforce_keys [:names, :types, :chunks, :size]
-  defstruct [:names, :types, :chunks, :size]
+  defstruct [:names, :types, :chunks, :size, origin: nil, at: 0]
 
   @types [:number, :time, :category, :text, :color, :point, :term]
 
@@ -85,8 +86,22 @@ defmodule Macaw.Data.Table do
             names: [name()],
             types: %{name() => type()},
             chunks: [view()],
-            size: non_neg_integer()
+            size: non_neg_integer(),
+            origin: origin() | nil,
+            at: non_neg_integer()
           }
+
+  @typedoc """
+  A source's table's origin (spec/01 §1.1.3): the source, the resolution its relation is
+  held at, its window field and its chunk span (each `nil` for row-count alignment). Given
+  to `new/2`, it may also say where the rows start among the source's (`offset:`, 0).
+  """
+  @type origin :: %{
+          source: term(),
+          resolution: term(),
+          window: name() | nil,
+          span: Duration.t() | number() | nil
+        }
 
   @doc "The column types, in the order spec/01 §1.1 lists them."
   @spec types() :: [type(), ...]
@@ -107,83 +122,111 @@ defmodule Macaw.Data.Table do
   `{:ok, table}`, or every fault: `{[name], {:enum, types}}` for an unknown type,
   `{[name, i], {:type, type}}` for a value its type does not hold, `{[name, i], :not_data}`
   for a value that is not data (a function, a PID, a reference, a port, an improper list:
-  it has no digest), `{[name], {:length, n}}`
-  for a column whose length is not the first column's `n`, `{[name], :duplicate}` for a
-  name given twice. A number column holds numbers; a time column `DateTime`s,
-  `NaiveDateTime`s or `Date`s; a color column color terms (`Macaw.Data.Schema.color?/1`);
-  a point column `{longitude, latitude}` pairs of numbers; the others any value. `nil` is
-  missing in every type.
+  it has no digest), `{[name], {:length, n}}` for a column whose length is not the first
+  column's `n`, `{[name], :duplicate}` for a name given twice. A number column holds
+  numbers; a time column `DateTime`s, `NaiveDateTime`s or `Date`s; a color column color
+  terms (`Macaw.Data.Schema.color?/1`); a point column `{longitude, latitude}` pairs of
+  numbers; the others any value. `nil` is missing in every type.
+
+  Its chunks are canonical (spec/01 §1.1.1), their ids their content digests. With
+  `origin:` it is a source's table (spec/01 §1.1.3), its chunks laid on the origin's slots
+  and named `{source, resolution, slot}`; an origin's own faults are `{[:origin, key],
+  reason}`, and rows out of the window field's order `{[:origin, :window], {:unsorted, i}}`.
   """
-  @spec new([{name(), type(), [term()]}]) :: {:ok, t()} | {:error, [{list(), term()}, ...]}
-  def new(columns) when is_list(columns) do
+  @spec new([{name(), type(), [term()]}], keyword()) ::
+          {:ok, t()} | {:error, [{list(), term()}, ...]}
+  def new(columns, opts \\ []) when is_list(columns) and is_list(opts) do
     size =
       case columns do
         [{_, _, values} | _] when is_list(values) -> length(values)
         _ -> 0
       end
 
-    {built, faults} =
+    {checked, faults} =
       columns
       |> Enum.with_index()
-      |> Enum.reduce({[], []}, fn {{name, type, values}, i}, {built, faults} ->
+      |> Enum.reduce({[], []}, fn {{name, type, values}, i}, {checked, faults} ->
         cond do
           Enum.any?(Enum.take(columns, i), &(elem(&1, 0) == name)) ->
-            {built, [{[name], :duplicate} | faults]}
+            {checked, [{[name], :duplicate} | faults]}
 
           type not in @types ->
-            {built, [{[name], {:enum, @types}} | faults]}
+            {checked, [{[name], {:enum, @types}} | faults]}
 
           not is_list(values) or length(values) != size ->
-            {built, [{[name], {:length, size}} | faults]}
+            {checked, [{[name], {:length, size}} | faults]}
 
           true ->
-            case pack(type, values, name) do
-              {:ok, pieces} -> {[{name, type, pieces} | built], faults}
-              {:error, column_faults} -> {built, column_faults ++ faults}
-            end
+            {[{name, type, values} | checked], faults}
         end
       end)
 
+    checked = Enum.reverse(checked)
+
+    {origin, offset, layout} =
+      case Origin.check(Keyword.get(opts, :origin), checked) do
+        {:ok, origin, offset} ->
+          {origin, offset, Origin.layout(origin, offset, checked, size, @rows)}
+
+        {:error, origin_faults} ->
+          {nil, 0, {:error, origin_faults}}
+      end
+
+    {counts, faults} =
+      case layout do
+        {:ok, counts} -> {counts, faults}
+        :invalid -> {nil, faults}
+        {:error, layout_faults} -> {nil, layout_faults ++ faults}
+      end
+
+    {packed, faults} = pack(checked, counts, faults)
+
     case faults do
-      [] -> {:ok, chunked(Enum.reverse(built), size)}
+      [] -> {:ok, chunked(packed, counts, size, origin, offset)}
       _ -> {:error, Enum.sort_by(Enum.reverse(faults), &elem(&1, 0))}
     end
   end
 
-  # A column's values packed a canonical chunk at a time, each piece by itself; a fault's
-  # index is the row's in the whole column. A value that is not data (a function, a PID, a
-  # reference, a port, an improper list) has no digest, so no column holds it.
-  defp pack(type, values, name) do
-    values
-    |> Enum.chunk_every(@rows)
-    |> Enum.with_index()
-    |> Enum.reduce({[], []}, fn {piece, k}, {pieces, faults} ->
-      case Column.pack(type, piece, name) do
-        {:ok, {:list, list} = col} ->
-          {[col | pieces], not_data(list, name, k * @rows) ++ faults}
-
-        {:ok, col} ->
-          {[col | pieces], faults}
-
-        {:error, piece_faults} ->
-          {pieces, Enum.map(piece_faults, &shift(&1, k * @rows)) ++ faults}
-      end
+  # Each column packed a chunk at a time, by the layout's counts; a fault's index is the
+  # row's in the whole column. Without a layout (its faults are reported), the columns are
+  # still packed a canonical chunk at a time, so every value's fault is found.
+  defp pack(columns, nil, faults) do
+    Enum.reduce(columns, {[], faults}, fn {name, type, values}, {packed, faults} ->
+      {_pieces, piece_faults} = pieces(type, values, name, counts_of(length(values)))
+      {packed, piece_faults ++ faults}
     end)
-    |> case do
-      {pieces, []} -> {:ok, Enum.reverse(pieces)}
-      {_pieces, faults} -> {:error, faults}
-    end
   end
 
-  defp shift({[name, i], fault}, by), do: {[name, i + by], fault}
+  defp pack(columns, counts, faults) do
+    {packed, faults} =
+      Enum.reduce(columns, {[], faults}, fn {name, type, values}, {packed, faults} ->
+        {pieces, piece_faults} = pieces(type, values, name, Enum.map(counts, &elem(&1, 0)))
+        {[{name, type, pieces} | packed], piece_faults ++ faults}
+      end)
 
-  defp not_data(values, name, at) do
-    for {v, i} <- Enum.with_index(values, at), not Digest.data?(v), do: {[name, i], :not_data}
+    {Enum.reverse(packed), faults}
+  end
+
+  defp counts_of(size),
+    do: Enum.map(Enum.chunk_every(List.duplicate(nil, size), @rows), &length/1)
+
+  defp pieces(type, values, name, counts) do
+    {pieces, faults, _rest, _at} =
+      Enum.reduce(counts, {[], [], values, 0}, fn count, {pieces, faults, rest, at} ->
+        {piece, rest} = Enum.split(rest, count)
+
+        case Column.piece(type, piece, name, at) do
+          {:ok, col} -> {[col | pieces], faults, rest, at + count}
+          {:error, piece_faults} -> {pieces, piece_faults ++ faults, rest, at + count}
+        end
+      end)
+
+    {Enum.reverse(pieces), faults}
   end
 
   # Packed columns, each a list of pieces, as one table of chunks: the k-th piece of every
-  # column is chunk k.
-  defp chunked(columns, size) do
+  # column is chunk k, of the layout's k-th count and id.
+  defp chunked(columns, counts, size, origin, offset) do
     header = for {name, type, _pieces} <- columns, do: {name, type}
 
     chunks =
@@ -195,10 +238,9 @@ defmodule Macaw.Data.Table do
           columns
           |> Enum.map(fn {name, _type, pieces} -> Enum.map(pieces, &{name, &1}) end)
           |> Enum.zip_with(& &1)
-          |> Enum.with_index()
-          |> Enum.map(fn {piece, k} ->
-            rows = min(@rows, size - k * @rows)
-            {Chunk.build(header, Map.new(piece), rows), 0, rows}
+          |> Enum.zip(counts)
+          |> Enum.map(fn {piece, {rows, id}} ->
+            {Chunk.build(header, Map.new(piece), rows, id), 0, rows}
           end)
       end
 
@@ -206,16 +248,46 @@ defmodule Macaw.Data.Table do
       names: Enum.map(header, &elem(&1, 0)),
       types: Map.new(header),
       chunks: chunks,
-      size: size
+      size: size,
+      origin: origin,
+      at: if(origin, do: offset, else: 0)
     }
   end
 
-  @doc "As `new/1`, raising `ArgumentError` naming every fault."
-  @spec new!([{name(), type(), [term()]}]) :: t()
-  def new!(columns) do
-    case new(columns) do
+  @doc "As `new/2`, raising `ArgumentError` naming every fault."
+  @spec new!([{name(), type(), [term()]}], keyword()) :: t()
+  def new!(columns, opts \\ []) do
+    case new(columns, opts) do
       {:ok, table} -> table
       {:error, faults} -> raise ArgumentError, "not a table: #{inspect(faults)}"
+    end
+  end
+
+  @doc """
+  A table of chunks already built (spec/01 §1.1.3): a step's outputs (`Chunk.derive/3`,
+  `Chunk.combine/3`), each whole, in order, under `header`, a list of `{name, type}`. A
+  chunk of no rows is left out. A chunk of other columns is
+  `{:error, {:columns, header, names}}`, its column names. Nothing is hashed.
+  """
+  @spec from_chunks([{name(), type()}], [Chunk.t()]) ::
+          {:ok, t()} | {:error, {:columns, list(), list()}}
+  def from_chunks(header, chunks) when is_list(header) and is_list(chunks) do
+    names = Enum.map(header, &elem(&1, 0))
+
+    case Enum.find(chunks, &(Enum.sort(Chunk.names(&1)) != Enum.sort(names))) do
+      nil ->
+        views = for chunk <- chunks, Chunk.size(chunk) > 0, do: {chunk, 0, Chunk.size(chunk)}
+
+        {:ok,
+         %__MODULE__{
+           names: names,
+           types: Map.new(header),
+           chunks: views,
+           size: Enum.sum(Enum.map(views, &elem(&1, 2)))
+         }}
+
+      chunk ->
+        {:error, {:columns, header, Chunk.names(chunk)}}
     end
   end
 
@@ -351,7 +423,7 @@ defmodule Macaw.Data.Table do
       when is_integer(start) and start >= 0 and is_integer(count) and count >= 0 do
     first = min(start, size)
     n = min(count, size - first)
-    %__MODULE__{table | chunks: cut(table.chunks, first, n), size: n}
+    %__MODULE__{table | chunks: cut(table.chunks, first, n), size: n, at: table.at + first}
   end
 
   # The views of `take` rows after the first `skip`.
@@ -374,20 +446,112 @@ defmodule Macaw.Data.Table do
   def chunks(%__MODULE__{chunks: chunks}), do: chunks
 
   @doc """
-  The table with `other`'s rows after its own: `other`'s chunks added as they are, nothing
-  copied (spec/01 §1.1.1). The two have the same names in the same order, each of the same
-  type; another table is `{:error, {:columns, expected, given}}`, each a list of
-  `{name, type}`.
+  A source's table's origin (spec/01 §1.1.3), or `nil` for a table built from rows.
   """
-  @spec append(t(), t()) :: {:ok, t()} | {:error, {:columns, list(), list()}}
+  @spec origin(t()) :: origin() | nil
+  def origin(%__MODULE__{origin: origin}), do: origin
+
+  @doc """
+  The table with `other`'s rows after its own (spec/01 §1.1.1, §1.1.3). The two have the
+  same names in the same order, each of the same type; another table is
+  `{:error, {:columns, expected, given}}`, each a list of `{name, type}`.
+
+  A table built from rows takes `other`'s chunks as they are, copying nothing. A source's
+  table keeps its alignment: the rows that fall in its last chunk's slot are written into
+  it, a chunk of the same id with new contents, and later rows start new chunks. `other`
+  is of the same origin, else `{:error, {:origin, expected, given}}`, and its rows lie at
+  or after the table's last row in the window field's order, else
+  `{:error, {:unsorted, i}}`, `i` the row of `other`'s out of order.
+  """
+  @spec append(t(), t()) ::
+          {:ok, t()}
+          | {:error,
+             {:columns, list(), list()}
+             | {:origin, term(), term()}
+             | {:unsorted, non_neg_integer()}}
   def append(%__MODULE__{} = table, %__MODULE__{} = other) do
-    case {header(table), header(other)} do
-      {same, same} ->
+    cond do
+      header(table) != header(other) ->
+        {:error, {:columns, header(table), header(other)}}
+
+      table.origin != other.origin ->
+        {:error, {:origin, table.origin, other.origin}}
+
+      table.origin == nil ->
         {:ok,
          %__MODULE__{table | chunks: table.chunks ++ other.chunks, size: table.size + other.size}}
 
-      {expected, given} ->
-        {:error, {:columns, expected, given}}
+      true ->
+        aligned(table, other)
+    end
+  end
+
+  # `other`'s rows laid on the source's slots after the table's, the last chunk written
+  # again when they reach into its slot.
+  defp aligned(%__MODULE__{origin: origin} = table, other) do
+    with :ok <- in_order(table, other),
+         {:ok, built} <- rebuilt(table, rows_of(other), table.at + table.size) do
+      case {Enum.split(table.chunks, -1), built.chunks} do
+        {{kept, [{last, first, count}]}, [{next, 0, _} | rest]} ->
+          if Chunk.id(last) == Chunk.id(next) do
+            rows =
+              Enum.zip_with(
+                rows_of(slice_view(table, last, first, count)),
+                rows_of(slice(built, 0, Chunk.size(next))),
+                &(&1 ++ &2)
+              )
+
+            {:ok, merged} = rebuilt(table, rows, table.at + table.size - count)
+
+            {:ok,
+             %__MODULE__{
+               table
+               | chunks: kept ++ merged.chunks ++ rest,
+                 size: table.size + other.size
+             }}
+          else
+            {:ok,
+             %__MODULE__{
+               table
+               | chunks: table.chunks ++ built.chunks,
+                 size: table.size + other.size
+             }}
+          end
+
+        _empty ->
+          {:ok,
+           %__MODULE__{
+             table
+             | chunks: table.chunks ++ built.chunks,
+               size: table.size + other.size,
+               origin: origin
+           }}
+      end
+    end
+  end
+
+  defp in_order(%__MODULE__{origin: %{window: window, span: span}} = table, other)
+       when window != nil and span != nil and table.size > 0 and other.size > 0 do
+    [last] = column(slice(table, table.size - 1, 1), window)
+    [next] = column(slice(other, 0, 1), window)
+    if Origin.ordered?(last, next), do: :ok, else: {:error, {:unsorted, 0}}
+  end
+
+  defp in_order(_table, _other), do: :ok
+
+  # The table's columns' values, one list per column in order.
+  defp rows_of(%__MODULE__{} = table), do: Enum.map(table.names, &column(table, &1))
+
+  defp slice_view(%__MODULE__{} = table, chunk, first, count),
+    do: %__MODULE__{table | chunks: [{chunk, first, count}], size: count}
+
+  # Columns of values laid on the table's origin from `offset` among the source's rows.
+  defp rebuilt(%__MODULE__{origin: origin} = table, values, offset) do
+    columns = Enum.zip_with(header(table), values, fn {name, type}, v -> {name, type, v} end)
+
+    case new(columns, origin: Map.put(origin, :offset, offset)) do
+      {:ok, built} -> {:ok, built}
+      {:error, [{[:origin, :window], {:unsorted, i}}]} -> {:error, {:unsorted, i}}
     end
   end
 
@@ -401,27 +565,45 @@ defmodule Macaw.Data.Table do
     do: slice(table, n, size)
 
   @doc """
-  The table in canonical chunks: `chunk_rows/0` rows each from the first, the last
-  shorter, each packed from its own values (spec/01 §1.1.1). Two equal tables compact to
-  the same struct; a table already canonical is returned as it is.
+  The table in canonical chunks, each whole, packed from its own values and hashed
+  (spec/01 §1.1.1): `chunk_rows/0` rows each from the first, the last shorter, for a table
+  built from rows or of steps' outputs; a source's table on its origin's slots
+  (spec/01 §1.1.3). Two equal tables of one origin compact to the same struct; a table
+  already canonical is returned as it is.
   """
   @spec compact(t()) :: t()
-  def compact(%__MODULE__{} = table) do
-    if canonical?(table.chunks) do
+  def compact(%__MODULE__{origin: origin} = table) do
+    if canonical?(table.chunks, origin) do
       table
     else
+      opts = if origin, do: [origin: Map.put(origin, :offset, table.at)], else: []
+
       {:ok, compacted} =
-        new(for {name, type} <- header(table), do: {name, type, column(table, name)})
+        new(for({name, type} <- header(table), do: {name, type, column(table, name)}), opts)
 
       compacted
     end
   end
 
-  # Whole chunks, every one but the last of `@rows` rows.
+  # Whole, hashed chunks: on the origin's slots, which a source's table always has, or,
+  # built from rows, named by their digests, every one but the last of `@rows` rows.
+  defp canonical?(views, nil), do: canonical?(views)
+
+  defp canonical?(views, _origin),
+    do:
+      Enum.all?(views, fn {chunk, first, n} ->
+        first == 0 and n == Chunk.size(chunk) and Chunk.digest(chunk) != nil
+      end)
+
   defp canonical?([]), do: true
-  defp canonical?([{chunk, 0, n}]), do: Chunk.size(chunk) == n
-  defp canonical?([{chunk, 0, @rows} | rest]), do: Chunk.size(chunk) == @rows and canonical?(rest)
+  defp canonical?([{chunk, 0, n}]), do: Chunk.size(chunk) == n and named?(chunk)
+
+  defp canonical?([{chunk, 0, @rows} | rest]),
+    do: Chunk.size(chunk) == @rows and named?(chunk) and canonical?(rest)
+
   defp canonical?(_views), do: false
+
+  defp named?(chunk), do: Chunk.digest(chunk) != nil and Chunk.id(chunk) == Chunk.digest(chunk)
 
   # -- identity ---------------------------------------------------------------------------
 
@@ -438,11 +620,10 @@ defmodule Macaw.Data.Table do
   end
 
   @doc """
-  The table's content digest (spec/01 §1.1.2): 64 lowercase hex characters, the kernel's
-  digest (`Macaw.Layers.Document.digest/1`) of its canonical term
-  `{"macaw.table", [{name, type}, …], [values, …]}`, each column's values a list in order.
-  Over the values, never the buffers: a chunking, a column's form and a dictionary's order
-  all keep it.
+  The table's content digest (spec/01 §1.1.2): 64 lowercase hex characters, a SHA-256 over
+  its canonical form, each value a tag, a word and bytes of its own, whatever form holds
+  it. Over the values, never the buffers: a chunking, a column's form and a dictionary's
+  order all keep it, and the origin is not part of it.
   """
   @spec digest(t()) :: String.t()
   def digest(%__MODULE__{chunks: chunks, size: size} = table) do
