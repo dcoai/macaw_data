@@ -34,11 +34,12 @@ Each behavior is a module's declaration of what it reads and what it answers, so
 | `run(node, table, context) :: table` | the step: the table after it |
 | `reduces() :: {String.t(), pos_integer()}` *(optional)* | a **reducer**: the option holding the target count, and the rows each unit of it keeps at most (`lttb`: `{"n", 1}`; `m4`: `{"width", 4}`), so a budget can name it (§7) |
 | `prepare(nodes, table, context) :: term()` *(optional)* | computed once per design and shared by every mark that reads it (a force layout's positions), passed to `run/3` in the context under `prepared`; the drawer's, never called here |
+| `class/1`, `reads/0`, `bind/3`, `resolve/3`, `chunk/3` *(optional)* | a **column-native step**'s class, the context it reads and its part per chunk (§1.4) |
 
 `run/3` is given **the node checked** (§3.1): its keys strings, each of the op's options present with its default filled in, an enum value its declared atom, a frame-bound value resolved to a number. `outputs/2` is given the same node. `outputs/2` holds for `run/3`: for every fixture of the op's tests, the columns `run/3` answers are, by name and type, the ones `outputs/2` names.
 
 ```test:operations-transform-callbacks
-a transform declares its name, options, needs and outputs and runs a checked node over a table; an optional reducer and prepare are declared only by the ops that have them; outputs agree with what run answers on every fixture
+a transform declares its name, options, needs and outputs and runs a checked node over a table; an optional reducer, prepare and the column-native step's callbacks are declared only by the ops that have them; outputs agree with what run answers on every fixture
 ```
 
 ### 1.2 Aggregates {#operations-aggregate}
@@ -85,6 +86,42 @@ An option is declared `{name, %Option{type: type, default: value, required: bool
 
 ```test:operations-option-types
 every option type holds the values it names and refuses the rest with a reason naming the type; an enum is read by spelling into its atom; a frame-bound option takes "plot" or its own type
+```
+
+### 1.4 Steps: a part per chunk, and a merge {#operations-steps}
+
+**A table is chunked** ([01 §1.1.1](01-sources.md#sources-table-chunks)), and each of `macaw_data`'s table operations works it **a chunk at a time** (macaw_data#9 §5): a part per chunk, then a merge of the parts into the step's table. No step transposes: it decides from only the columns it reads, then gathers every column, a packed column by slicing or copying its buffers. No step calls `Table.rows/1` or `Operations.table/2` inside a chain; `rows/1` and `row/2` are the row view at the edge. A chunk's part depends on that chunk and on the context as it resolves for it, so a caller may keep it across frames, changes and compaction ([01 §1.1.3](01-sources.md#sources-table-chunk-identity)). `Macaw.Data.Operations.Step` runs a step so; a transform without the callbacks below is run whole by `run/3`, as a host's may be.
+
+A column-native step declares, beside §1.1's callbacks (each optional, together):
+
+| Callback | Contract |
+|---|---|
+| `class(node) :: :row \| :combine \| :global` | its **class**, which decides its merge |
+| `reads() :: [atom()]` | the keys of the context it reads (§3.2): only those reach it |
+| `bind(node, table, context) :: map()` *(optional)* | the declared context resolved over the whole input, once: `window`'s `now`, the newest reading when the caller gives none. Without it, the declared context as it is |
+| `resolve(node, view, bound) :: term()` | the context **as it resolves for one chunk**, from the bound context and the chunk's place (`:at`, the input's row its view starts at, and `:rows`, the input's count). It reads that chunk's columns alone |
+| `chunk(node, view, resolved) :: part` | the chunk's part |
+
+A view is `{chunk, first, count}`, the run of a chunk the input reads (`Table.chunks/1`).
+
+- **Per row** (`:row`): `filter`, `take` and `window` without `latest`. Each chunk is worked by itself, and **the merge is concatenation**. A per-row step's part is a selection of its view's rows: `:all`, the view passed through unchanged, its chunk the input's; `:none`, dropped; `{:run, first, count}`, a run of it, cut without copying; or `{:rows, indexes}`, those rows, every column gathered into a new chunk by copying its slots (`Table.Chunk.gather/5`), whose id is `{input's id, step key}`. The output keeps the input's columns and the column it is known to be sorted by (`Table.sorted/1`).
+- **The step key** of a chunk is the step's identity (`step_digest/2`'s, the kernel's digest of its module and its checked node), the context as it resolved for the chunk, and the run of the chunk the view reads when that is not the whole chunk. Keying on raw context would miss on every frame, so the key changes only when the chunk's part could: a cache keys a part by `{Chunk.id/1, Chunk.version/1, step key}`. `Step.parts/4` lists each chunk's view, resolved context and key, computing no part; `Step.chunk/3` computes one and `Step.merge/4` merges them; `Step.run/4` is the three.
+- **The chunking never changes a result:** the same rows chunked any way give `Table.equal?/2` results.
+
+```test:operations-step-classes
+every column-native step declares its class and the context it reads, and only that context reaches it; a per-row step's merge is concatenation, its output's chunks the input's passed through, cut to a run, or gathered under the id {input id, step key}, in order, the input's sorted column kept
+```
+
+```test:operations-step-chunking
+for generated rows over about 40 seeds, filter, take and window give equal? results over the same rows chunked a row a chunk, 7 rows a chunk, canonically, and as one chunk, equal to the rows' answer
+```
+
+```test:operations-step-keys
+a chunk's step key is the step's identity, the context as it resolved for the chunk and the run its view reads; window keys a chunk wholly inside it without now, so the key holds across frames, drops one wholly outside, and keys an edge chunk by its slice bounds
+```
+
+```test:operations-step-cost
+take n: 100 reads only the chunks it returns, its work growing by a step a chunk and never with the rows; a chain of filter, window and take calls neither Table.rows/1 nor Operations.table/2
 ```
 
 ## 2. Packages and the registry {#operations-registry}
@@ -168,7 +205,7 @@ a transform needing a frame runs with one and is refused without one; plot resol
 
 ## 4. Table operations {#operations-table}
 
-Each is a module of `macaw_data`'s package implementing §1.1, ported from visualize's `Chart.Transform.Data` (spec/14 §5.4.1) with its behavior and faults; every visualize test of the step is ported with it. **Rows are read with `Macaw.Data.Table.get/2`**, so a column is found by either spelling, and a column the rows lack reads `nil`, which the step treats as its section says. **A step that derives a row from a datum keeps the datum's columns** and adds its own. Each step's **outputs** are named in its section. **Rows pass through a table:** `Table.from/2` reads them at the edge, so a row lacking a column another row has reads `nil` there, and a `Date`, a `NaiveDateTime` or an ISO 8601 string in a time column is a `DateTime` from then on, as everywhere a delivery carries one, and a category's atom is the string that spells it (01 §1.1). `Macaw.Data.Operations.Transforms.all/0` lists the operations, and the package also registers them.
+Each is a module of `macaw_data`'s package implementing §1.1, ported from visualize's `Chart.Transform.Data` (spec/14 §5.4.1) with its behavior and faults; every visualize test of the step is ported with it. **A column is found by either spelling of its name** (as `Macaw.Data.Table.get/2` reads a row), and a column the rows lack reads `nil`, which the step treats as its section says. A step works its input a chunk at a time, its class named in its section (§1.4). **A step that derives a row from a datum keeps the datum's columns** and adds its own. Each step's **outputs** are named in its section. **Rows pass through a table:** `Table.from/2` reads them at the edge, so a row lacking a column another row has reads `nil` there, and a `Date`, a `NaiveDateTime` or an ISO 8601 string in a time column is a `DateTime` from then on, as everywhere a delivery carries one, and a category's atom is the string that spells it (01 §1.1). `Macaw.Data.Operations.Transforms.all/0` lists the operations, and the package also registers them.
 
 | Op | Options (`*` required) | Section |
 |---|---|---|
@@ -195,7 +232,7 @@ the table operations are macaw_data's transforms, in the table's order, each nee
 - `eq` keeps a reading equal to `value` and `ne` one that is not. A category is one value whichever spelling a row or the node gives it, so `:ok` equals `"ok"` (an atom and a string are equal when the atom's string is the string; `Macaw.Data.Operations.same?/2`);
 - `lt`, `lte`, `gt` and `gte` keep a reading that is not `nil` and stands so to `value` under Elixir's term ordering, as `sort` orders. **A `nil` reading never passes an ordering.**
 
-The test is `test`, not `op`, because `op` names the step. A column the rows lack reads `nil`, so `filter(field: "height", test: :eq, value: 0)` after a hierarchy keeps its leaves. **Outputs:** the input's columns.
+The test is `test`, not `op`, because `op` names the step. A column the rows lack reads `nil`, so `filter(field: "height", test: :eq, value: 0)` after a hierarchy keeps its leaves. **Outputs:** the input's columns. **Class:** per row (§1.4), each chunk decided from `field`'s column alone: a chunk every row of which passes is passed through, one none of which passes is dropped, and any other gathers the rows that pass.
 
 ```test:operations-filter-tests
 each test keeps exactly its rows in order: present and absent by nil, eq and ne by value with an atom equal to its string, the orderings by term order with nil never passing; a missing column reads nil
@@ -203,7 +240,7 @@ each test keeps exactly its rows in order: present and absent by nil, eq and ne 
 
 ### 4.2 take {#operations-take}
 
-`n` (`{:integer, 0}`, required); `side` (`{:enum, [:end, :start]}`, `:end`). The last, or the first, `n` rows in order. An `n` at or above the row count is every row, and `n` of zero is none; a negative `n` is `{:type, {:integer, 0}}`. A design that shows the newest reading beside its history reads `take(n: 1)`. **Outputs:** the input's columns.
+`n` (`{:integer, 0}`, required); `side` (`{:enum, [:end, :start]}`, `:end`). The last, or the first, `n` rows in order. An `n` at or above the row count is every row, and `n` of zero is none; a negative `n` is `{:type, {:integer, 0}}`. A design that shows the newest reading beside its history reads `take(n: 1)`. **Outputs:** the input's columns. **Class:** per row (§1.4), reading no column: each chunk's run is resolved from where it sits and the input's count, so a chunk it does not return is never read, and its work grows by a step a chunk, never with the rows.
 
 ```test:operations-take-ends
 take keeps the last n rows by default and the first with side start; n at or above the count is every row, zero is none, and a negative n is refused
@@ -225,6 +262,15 @@ So four windows of decreasing span partition a column exactly.
 **`latest: true`** asks for each entity's current state: of the rows the window selects, for each identity value, the one row whose reading of `field` is greatest, the later row in order where two tie, kept in their order. It is what a request's `latest` gives (01 §2.4), by the same function, `Macaw.Data.Window.latest_rows/3`. The identity is the one the context's `schema` **declares** (`Macaw.Data.Schema.identity/2`), never inferred, and a row whose identity is `nil` names nothing and is dropped. A `latest` step without a schema in its context, or over a schema declaring no identity, raises `ArgumentError` naming the step. Dropping the entities that are gone is a `filter` after it.
 
 **Outputs:** the input's columns.
+
+**Class:** without `latest`, per row (§1.4). `now` and the window's bounds are bound over the whole input once; then, for each chunk:
+- **a chunk wholly inside the window** passes through unchanged, and its step key holds no `now`, so it holds across frames;
+- **a chunk wholly outside it** is dropped;
+- **only an edge chunk is cut,** keyed by its slice bounds. Over the column the input is known to be sorted by (`Table.sorted/1`: a source's window field, kept by every per-row step), the bounds are found by binary search, a few readings a chunk, and the chunk is cut to a run without copying; the newest reading is found from the end the same way. Any other column is scanned, every reading read.
+
+```test:operations-window-sorted
+over a table sorted by its window field, window binary-searches each chunk, reading a few values a chunk rather than every one, and cuts an edge chunk to a run of it; over an unsorted column it scans and gathers, and the two agree
+```
 
 ```test:operations-window-spans
 a window selects [now - from, now - to): a given to is exclusive, an absent to closes at now inclusively, an absent from is open, so adjacent windows partition the rows; now is the context's or the newest reading; every reading form is read in seconds and any other raises; a bad unit is refused

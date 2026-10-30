@@ -90,10 +90,6 @@ defmodule Macaw.Data.Table.Chunk do
     }
   end
 
-  @doc "The names of the chunk's columns, in no order."
-  @spec names(t()) :: [term()]
-  def names(%__MODULE__{columns: columns}), do: Map.keys(columns)
-
   @doc """
   The chunk's logical id (spec/01 §1.1.3): where it sits, which never changes.
   """
@@ -315,14 +311,65 @@ defmodule Macaw.Data.Table.Chunk do
   defp base(%__MODULE__{fetch: nil, columns: columns}), do: columns
   defp base(%__MODULE__{fetch: fetch}), do: fetch.()
 
-  # The values of column `name` in the run of `count` rows from `first`.
-  @doc false
+  @doc """
+  The values of column `name` in the run of `count` rows from `first`, as read through
+  the chunk's delta: what a step decides from (spec/04 §1.4). One column is read, never a
+  row.
+  """
   @spec values(t(), term(), non_neg_integer(), non_neg_integer()) :: [term()]
   def values(%__MODULE__{size: size, columns: columns, delta: nil, fetch: nil}, name, 0, size),
     do: Column.values(Map.fetch!(columns, name), size)
 
   def values(%__MODULE__{} = chunk, name, first, count),
     do: chunk |> storage(name, first, count) |> Column.values(count)
+
+  @doc """
+  The value of column `name` at row `i` of the chunk, as read: one slot of its storage,
+  for a step that searches a sorted column (spec/04 §1.4).
+  """
+  @spec at(t(), term(), non_neg_integer()) :: term()
+  def at(%__MODULE__{} = chunk, name, i) do
+    [value] = chunk |> storage(name, i, 1) |> Column.values(1)
+    value
+  end
+
+  @doc """
+  A per-row step's output chunk (spec/01 §1.1.3, spec/04 §1.4): the rows at `indexes`
+  of the run of `count` rows from `first` of `input`, every column gathered from its
+  storage by copying its slots, nothing decoded and nothing hashed. As `derive/3`, its id
+  is `{id(input), step_key}` and its version the derivation digest of
+  `{[version(input)], step_key}`; the step key names the run when it is not the whole
+  chunk.
+  """
+  @spec gather(t(), non_neg_integer(), non_neg_integer(), [non_neg_integer()], term()) :: t()
+  def gather(%__MODULE__{} = input, first, count, indexes, step_key) when is_list(indexes) do
+    columns =
+      input
+      |> view_columns(first, count)
+      |> Map.new(fn {name, col} -> {name, Column.gather(col, indexes)} end)
+
+    size = length(indexes)
+
+    %__MODULE__{
+      size: size,
+      columns: columns,
+      id: {input.id, step_key},
+      digest: nil,
+      derivation: Document.digest({[version(input)], step_key}),
+      base_rows: size,
+      header: input.header
+    }
+  end
+
+  # Every column's storage for the run, the chunk read through its delta once.
+  defp view_columns(%__MODULE__{delta: nil, fetch: nil, columns: columns}, first, count),
+    do: Map.new(columns, fn {name, col} -> {name, Column.slice(col, first, count)} end)
+
+  defp view_columns(%__MODULE__{} = chunk, first, count) do
+    rows = Enum.map(read(chunk), &elem(&1, 0))
+    {:ok, read} = pack(chunk.header, rows)
+    Map.new(read, fn {name, col} -> {name, Column.slice(col, first, count)} end)
+  end
 
   # The storage of column `name` sliced to the run of `count` rows from `first`.
   @doc false

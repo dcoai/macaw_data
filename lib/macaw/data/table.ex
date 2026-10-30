@@ -44,18 +44,16 @@ defmodule Macaw.Data.Table do
   and a struct source or a tensor raises `UndefinedFunctionError` where it is read.
   """
 
-  alias Macaw.Data.Schema
+  alias Macaw.Data.Table.Edge
   alias Macaw.Data.Table.Chunk
   alias Macaw.Data.Table.Column
   alias Macaw.Data.Table.Digest
   alias Macaw.Data.Table.Origin
 
-  @compile {:no_warn_undefined, [Table, Nx]}
-
   import Kernel, except: [apply: 2]
 
   @enforce_keys [:names, :types, :chunks, :size]
-  defstruct [:names, :types, :chunks, :size, origin: nil, next: 0]
+  defstruct [:names, :types, :chunks, :size, origin: nil, next: 0, sorted: nil]
 
   @types [:number, :time, :category, :text, :color, :point, :term]
 
@@ -90,7 +88,8 @@ defmodule Macaw.Data.Table do
             chunks: [view()],
             size: non_neg_integer(),
             origin: origin() | nil,
-            next: non_neg_integer()
+            next: non_neg_integer(),
+            sorted: name() | nil
           }
 
   @typedoc """
@@ -252,7 +251,8 @@ defmodule Macaw.Data.Table do
       chunks: chunks,
       size: size,
       origin: origin,
-      next: if(origin, do: offset + size, else: 0)
+      next: if(origin, do: offset + size, else: 0),
+      sorted: if(Origin.windowed?(origin), do: origin.window)
     }
   end
 
@@ -267,31 +267,56 @@ defmodule Macaw.Data.Table do
 
   @doc """
   A table of chunks already built (spec/01 §1.1.3): a step's outputs (`Chunk.derive/3`,
-  `Chunk.combine/3`), each whole, in order, under `header`, a list of `{name, type}`. A
-  chunk of no rows is left out. A chunk of other columns is
-  `{:error, {:columns, header, names}}`, its column names. Nothing is hashed.
-  """
-  @spec from_chunks([{name(), type()}], [Chunk.t()]) ::
-          {:ok, t()} | {:error, {:columns, list(), list()}}
-  def from_chunks(header, chunks) when is_list(header) and is_list(chunks) do
-    names = Enum.map(header, &elem(&1, 0))
+  `Chunk.gather/5`, `Chunk.combine/3`), in order, under `header`, a list of
+  `{name, type}`. Each is a chunk, read whole, or a view `{chunk, first, count}` reading a
+  run of it, as `chunks/1` lists them, so a per-row step's output keeps the chunks it
+  passes through (spec/04 §1.4). A chunk or a run of no rows is left out. A chunk of other
+  columns is `{:error, {:columns, header, names}}`, its column names. Nothing is hashed.
 
-    case Enum.find(chunks, &(Enum.sort(Chunk.names(&1)) != Enum.sort(names))) do
+  `sorted:` names a column the rows are known to be in ascending order of, `nil` last
+  (`sorted/1`): a per-row step's output keeps its input's.
+  """
+  @spec from_chunks([{name(), type()}], [Chunk.t() | view()], keyword()) ::
+          {:ok, t()} | {:error, {:columns, list(), list()}}
+  def from_chunks(header, chunks, opts \\ []) when is_list(header) and is_list(chunks) do
+    names = Enum.map(header, &elem(&1, 0))
+    views = Enum.map(chunks, &as_view/1)
+
+    case Enum.find(views, fn {chunk, _, _} ->
+           Enum.sort(chunk_names(chunk)) != Enum.sort(names)
+         end) do
       nil ->
-        views = for chunk <- chunks, Chunk.size(chunk) > 0, do: {chunk, 0, Chunk.size(chunk)}
+        views = for {_chunk, _first, count} = view <- views, count > 0, do: view
 
         {:ok,
          %__MODULE__{
            names: names,
            types: Map.new(header),
            chunks: views,
-           size: Enum.sum(Enum.map(views, &elem(&1, 2)))
+           size: Enum.sum(Enum.map(views, &elem(&1, 2))),
+           sorted: Keyword.get(opts, :sorted)
          }}
 
-      chunk ->
-        {:error, {:columns, header, Chunk.names(chunk)}}
+      {chunk, _first, _count} ->
+        {:error, {:columns, header, chunk_names(chunk)}}
     end
   end
+
+  defp as_view({_chunk, first, count} = view) when is_integer(first) and is_integer(count),
+    do: view
+
+  defp as_view(chunk), do: {chunk, 0, Chunk.size(chunk)}
+
+  defp chunk_names(chunk), do: Enum.map(Chunk.header(chunk), &elem(&1, 0))
+
+  @doc """
+  The column the table's rows are known to be in ascending order of, `nil` last, or `nil`
+  for none (spec/01 §1.1.3): a source's table in event time is in its window field's order,
+  and a per-row step's output keeps its input's order. A step binary-searches only this
+  column (spec/04 §4.3).
+  """
+  @spec sorted(t()) :: name() | nil
+  def sorted(%__MODULE__{sorted: sorted}), do: sorted
 
   @doc """
   A table of any source `rows/1` reads.
@@ -312,45 +337,26 @@ defmodule Macaw.Data.Table do
     given = Keyword.get(opts, :types, %{})
 
     rows
-    |> column_names()
+    |> Edge.column_names()
     |> Enum.map(fn name ->
       values = Enum.map(rows, &Map.get(&1, name))
-      type = Map.get(given, name) || infer_column(values) || :term
-      {name, type, if(type == :time, do: Enum.map(values, &to_datetime/1), else: values)}
+      type = Map.get(given, name) || Edge.infer_column(values) || :term
+      {name, type, if(type == :time, do: Enum.map(values, &Edge.to_datetime/1), else: values)}
     end)
     |> new()
   end
 
-  # A time at the edge: a `Date` at midnight UTC, a `NaiveDateTime` taken as UTC, an
-  # ISO 8601 string parsed as one of those; anything else as it is, for `new/1` to refuse.
   @doc false
   # A value as the edge reads it into a column of `type` (spec/01 §2.6, as `from/2` and
   # `Delivery.table/2` pack): a time column's ISO strings, dates and naive times as
   # `DateTime`s, a category's atom as its string; any other as it is.
   @spec at_edge(type() | nil, term()) :: term()
-  def at_edge(:time, value), do: to_datetime(value)
+  def at_edge(:time, value), do: Edge.to_datetime(value)
 
   def at_edge(:category, v) when is_atom(v) and not is_boolean(v) and v != nil,
     do: Atom.to_string(v)
 
   def at_edge(_type, value), do: value
-
-  defp to_datetime(%DateTime{} = t), do: t
-  defp to_datetime(%NaiveDateTime{} = t), do: DateTime.from_naive!(t, "Etc/UTC")
-  defp to_datetime(%Date{} = d), do: DateTime.new!(d, ~T[00:00:00], "Etc/UTC")
-
-  defp to_datetime(string) when is_binary(string) do
-    with {:error, _} <- DateTime.from_iso8601(string),
-         {:error, _} <- NaiveDateTime.from_iso8601(string),
-         {:error, _} <- Date.from_iso8601(string) do
-      string
-    else
-      {:ok, t, _offset} -> t
-      {:ok, t} -> to_datetime(t)
-    end
-  end
-
-  defp to_datetime(other), do: other
 
   # -- reading ----------------------------------------------------------------------------
 
@@ -398,20 +404,7 @@ defmodule Macaw.Data.Table do
     end
   end
 
-  def rows([]), do: []
-  # A delivery's rows as they are (macaw#185). A map pattern, so this module needs no
-  # delivery at compile time.
-  def rows(%{__struct__: Macaw.Data.Delivery, rows: rows}), do: rows(rows)
-  # A map pattern, not `%Nx.Tensor{}`: a struct pattern needs the struct defined at
-  # compile time, and a consumer without Nx has none.
-  def rows(%{__struct__: Nx.Tensor} = tensor), do: tensor_rows(tensor, Nx.rank(tensor))
-  def rows(%_{} = struct), do: struct |> Table.to_rows() |> Enum.to_list()
-  def rows(map) when map_size(map) == 0, do: []
-  def rows(map) when is_map(map), do: column_rows(Map.to_list(map))
-
-  def rows([first | _] = list) do
-    if columns?(list, first), do: column_rows(list), else: list
-  end
+  def rows(source), do: Edge.rows(source)
 
   # One row a step: the heads of every column under the names, then the tails.
   defp transpose(_names, [[] | _], acc), do: :lists.reverse(acc)
@@ -722,8 +715,6 @@ defmodule Macaw.Data.Table do
 
   defp header(%__MODULE__{names: names, types: types}), do: Enum.map(names, &{&1, types[&1]})
 
-  # -- row helpers, for any source ---------------------------------------------------------
-
   @doc """
   A tensor's columns, or tuple rows' elements, under `names`, in order.
 
@@ -741,20 +732,7 @@ defmodule Macaw.Data.Table do
   @spec named(source(), [name()]) ::
           {:ok, source()}
           | {:error, {:width, non_neg_integer(), non_neg_integer()} | {:rank, non_neg_integer()}}
-  def named(%{__struct__: Nx.Tensor} = tensor, names) when is_list(names) do
-    case {Nx.rank(tensor), length(names)} do
-      {1, 1} -> {:ok, %{hd(names) => Nx.to_list(tensor)}}
-      {1, n} -> {:error, {:width, n, 1}}
-      {2, n} -> named_columns(tensor, names, Nx.axis_size(tensor, 1), n)
-      {rank, _n} -> {:error, {:rank, rank}}
-    end
-  end
-
-  def named([first | _] = rows, names) when is_tuple(first) and is_list(names) do
-    if columns?(rows, first), do: {:ok, rows}, else: named_rows(rows, names, length(names))
-  end
-
-  def named(source, names) when is_list(names), do: {:ok, source}
+  defdelegate named(source, names), to: Edge
 
   @doc """
   Whether a source's rows have no names: a tensor, or tuple rows (a list whose first
@@ -766,32 +744,7 @@ defmodule Macaw.Data.Table do
       false
   """
   @spec unnamed?(term()) :: boolean()
-  def unnamed?(%{__struct__: Nx.Tensor}), do: true
-  def unnamed?([first | _] = rows) when is_tuple(first), do: not columns?(rows, first)
-  def unnamed?(_source), do: false
-
-  defp named_rows(rows, names, n) do
-    rows
-    |> Enum.reduce_while([], fn
-      row, acc when is_tuple(row) and tuple_size(row) == n ->
-        {:cont, [names |> Enum.zip(Tuple.to_list(row)) |> Map.new() | acc]}
-
-      row, _acc when is_tuple(row) ->
-        {:halt, {:error, {:width, n, tuple_size(row)}}}
-
-      row, acc ->
-        {:cont, [row | acc]}
-    end)
-    |> case do
-      {:error, _width} = error -> error
-      named -> {:ok, Enum.reverse(named)}
-    end
-  end
-
-  defp named_columns(tensor, names, n, n),
-    do: {:ok, names |> Enum.zip(tensor |> Nx.transpose() |> Nx.to_list()) |> Map.new()}
-
-  defp named_columns(_tensor, _names, width, n), do: {:error, {:width, n, width}}
+  defdelegate unnamed?(source), to: Edge
 
   @doc """
   The value of column `name` in `row`, by either spelling of the name: the key itself, else
@@ -820,23 +773,7 @@ defmodule Macaw.Data.Table do
       nil
   """
   @spec key(map(), name()) :: name() | nil
-  def key(row, name) when is_map_key(row, name), do: name
-
-  def key(row, name) when is_atom(name),
-    do: if(is_map_key(row, Atom.to_string(name)), do: Atom.to_string(name))
-
-  def key(row, name) when is_binary(name) do
-    case Process.get({__MODULE__, name}) do
-      key when is_map_key(row, key) -> key
-      _other -> scan(row, name)
-    end
-  end
-
-  defp scan(row, name) do
-    found = Enum.find(Map.keys(row), &(is_atom(&1) and Atom.to_string(&1) == name))
-    if found, do: Process.put({__MODULE__, name}, found)
-    found
-  end
+  defdelegate key(row, name), to: Edge
 
   @doc "The accessor `fn row -> get(row, name) end`; a function is returned unchanged."
   @spec accessor(name() | (row() -> term())) :: (row() -> term())
@@ -851,13 +788,7 @@ defmodule Macaw.Data.Table do
   def time_columns(%__MODULE__{} = table),
     do: for(name <- table.names, column_type(table, name) == :time, do: name)
 
-  def time_columns(source) do
-    rows = rows(source)
-
-    rows
-    |> column_names()
-    |> Enum.filter(fn name -> temporal_column?(Enum.map(rows, &Map.get(&1, name))) end)
-  end
+  def time_columns(source), do: Edge.time_columns(source)
 
   @doc """
   Every named column's type, read whole: all non-`nil` values temporal is `:time`, all
@@ -877,116 +808,12 @@ defmodule Macaw.Data.Table do
   def column_types(%__MODULE__{} = table),
     do: Map.new(table.names, &{&1, column_type(table, &1)})
 
-  def column_types(source), do: source |> rows() |> infer()
-
-  defp infer(rows) do
-    for name <- column_names(rows),
-        type = infer_one(Enum.reject(Enum.map(rows, &Map.get(&1, name)), &is_nil/1)),
-        type != nil,
-        into: %{},
-        do: {name, type}
-  end
-
-  # One column's type from its values, gaps aside; nil when nothing suggests one.
-  defp infer_column(values), do: infer_one(Enum.reject(values, &is_nil/1))
-
-  defp infer_one([]), do: nil
-
-  defp infer_one(values) do
-    cond do
-      Enum.all?(values, &temporal?/1) -> :time
-      Enum.all?(values, &is_number/1) -> :number
-      Enum.all?(values, &is_binary/1) -> :text
-      Enum.all?(values, &Schema.color?/1) -> :color
-      Enum.all?(values, &(is_atom(&1) and not is_nil(&1))) -> :category
-      true -> nil
-    end
-  end
+  def column_types(source), do: Edge.column_types(source)
 
   @doc """
   Whether a value is a point in time: a `DateTime`, `Date` or `NaiveDateTime`, or a string
   in ISO 8601 form that one of those parses.
   """
   @spec temporal?(term()) :: boolean()
-  def temporal?(%DateTime{}), do: true
-  def temporal?(%Date{}), do: true
-  def temporal?(%NaiveDateTime{}), do: true
-
-  def temporal?(string) when is_binary(string) do
-    match?({:ok, _, _}, DateTime.from_iso8601(string)) or
-      match?({:ok, _}, NaiveDateTime.from_iso8601(string)) or
-      match?({:ok, _}, Date.from_iso8601(string))
-  end
-
-  def temporal?(_), do: false
-
-  # -- sources ----------------------------------------------------------------------------
-
-  # A list is columns when every element names an equal-length column.
-  defp columns?(list, {name, values}) when is_atom(name) or is_binary(name) do
-    n = column_length(values)
-
-    n != nil and
-      Enum.all?(list, fn
-        {k, v} when is_atom(k) or is_binary(k) -> column_length(v) == n
-        _other -> false
-      end)
-  end
-
-  defp columns?(_list, _first), do: false
-
-  defp column_length(values) when is_list(values), do: length(values)
-
-  defp column_length(%{__struct__: Nx.Tensor} = tensor) do
-    if Nx.rank(tensor) == 1, do: Nx.axis_size(tensor, 0)
-  end
-
-  defp column_length(_values), do: nil
-
-  defp column_values(%{__struct__: Nx.Tensor} = tensor) do
-    if Nx.rank(tensor) == 1, do: Nx.to_list(tensor), else: tensor
-  end
-
-  defp column_values(values), do: values
-
-  defp column_rows(pairs) do
-    columns = Enum.map(pairs, fn {name, values} -> {name, column_values(values)} end)
-    [{_, first} | _] = columns
-    n = if is_list(first), do: length(first), else: 0
-
-    Enum.each(columns, fn {name, values} ->
-      unless is_list(values) and length(values) == n do
-        raise ArgumentError,
-              "expected every column to be a list of #{n} values, got #{inspect(name)}: " <>
-                inspect(values)
-      end
-    end)
-
-    names = Enum.map(columns, &elem(&1, 0))
-
-    columns
-    |> Enum.map(&elem(&1, 1))
-    |> Enum.zip_with(fn values -> names |> Enum.zip(values) |> Map.new() end)
-  end
-
-  defp tensor_rows(tensor, 1), do: Nx.to_list(tensor)
-  defp tensor_rows(tensor, 2), do: tensor |> Nx.to_list() |> Enum.map(&List.to_tuple/1)
-
-  defp tensor_rows(tensor, rank) do
-    raise ArgumentError, "expected a tensor of rank 1 or 2, got rank #{rank}: #{inspect(tensor)}"
-  end
-
-  defp column_names(rows) do
-    rows
-    |> Enum.reduce(%{}, fn
-      row, seen when is_map(row) -> Map.merge(seen, row)
-      _row, seen -> seen
-    end)
-    |> Map.keys()
-    |> Enum.sort()
-  end
-
-  defp temporal_column?(values) do
-    Enum.any?(values, &(not is_nil(&1))) and Enum.all?(values, &(is_nil(&1) or temporal?(&1)))
-  end
+  defdelegate temporal?(value), to: Edge
 end

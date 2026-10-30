@@ -101,11 +101,15 @@ slice/3 is the rows from start, count of them, for generated tables, chunkings a
 
 **Row lists are accepted at the edge.** `from/2` reads every shape data arrives in into a table:
 - a list of row maps, a map or keyword list of equal-length columns, an `Nx.Tensor`, or anything implementing `Table.Reader` (Explorer's frames among them), through `rows/1`;
-- columns are named by every key of every row, in term order, a row without the key missing there;
+- columns are named by every key of every row, in term order, a row without the key missing there. Each row's keys are compared with the row's before it, and only a new shape's are added, so rows of one shape merge nothing;
 - each column's type is the one `types:` gives, else the one `column_types/1` infers, else `:term`;
 - a time column's values become `DateTime`s at the edge: a `Date` at midnight UTC, a `NaiveDateTime` as UTC, an ISO 8601 string parsed; a `DateTime` keeps its zone, and every value its precision. `new/1` takes `NaiveDateTime`s and `Date`s as themselves.
 
 The `table` package and Nx are optional dependencies: without them lists and column maps still work, and a struct source or a tensor raises `UndefinedFunctionError` where it is read.
+
+```test:table-edge-names
+from/2 names the columns by every key of every row, rows of differing shapes included, without merging a row map
+```
 
 ```test:table-edge
 from/2 reads rows, columns and a Table.Reader source, infers or takes the types, turns ISO strings, dates and naive times into DateTimes in a time column, makes a mixed column a term column, passes a table through, and refuses a value its given type does not hold
@@ -203,11 +207,17 @@ digest/1 is the SHA-256 of the canonical form, the same for every form of the sa
   - **`compact/1` keeps the slots,** rebuilding a source's table on them.
   - The origin is not part of a table's contents: `equal?/2` and `digest/1` ignore it.
 - **The span never depends on data seen at runtime,** so logical ids hold across a rebuild and a restart. `Source.Description.chunk_span/2` of a description and a resolution is the description's `chunk_span` when it declares one (§2.1). Else it is derived from the resolution to target `chunk_rows/0` rows a chunk: `chunk_rows/0` times a resolution of *r* seconds (a number, or `:second`, `:minute`, `:hour` or `:day`) over a time window field, a `Duration`; `chunk_rows/0` times *r*, in the field's units, over a number window field. A resolution it can't read (`nil`, another name, a name over a number field) and a source with no time or number window field have no span, and their chunks are aligned by row count.
-- **A step's output chunk** (macaw_data#9 §5) is built without hashing its contents, and `from_chunks/2` is a table of such chunks:
-  - `Chunk.derive/3`, a per-row step's: its logical id is `{input's logical id, step key}`, so caching continues along a chain of steps;
+- **A step's output chunk** (macaw_data#9 §5) is built without hashing its contents, and `from_chunks/3` is a table of such chunks, each read whole or as a view `{chunk, first, count}` of a run of it, as a per-row step passes an input's chunk through or cuts it (spec/04 §1.4):
+  - `Chunk.derive/3`, a per-row step's from the values it computed, and `Chunk.gather/5`, a per-row step's of the rows at given indexes of an input's view, every column's slots copied from its storage and nothing decoded: its logical id is `{input's logical id, step key}`, so caching continues along a chain of steps;
   - `Chunk.combine/3`, a global step's (a sort, a merge of several chunks): its logical id is `{:combined, digest}`, the kernel's digest of `{step key, [{logical id, version}, …]}` over its inputs, so a step after it still caches.
   - The **step key** is the step's name, its checked options and the context it reads as that context resolves for the chunk (spec/04). Keying on raw context would miss on every frame.
 - **The derivation digest** is a step output's version: the kernel's digest of `{[version, …], step key}` over its inputs, never of its contents. It is valid because steps are pure and deterministic for their inputs and key. It is a **cache key only:** two derivations of equal results get different keys, which costs a miss and never gives a stale hit. A step output's content digest (`Chunk.digest/1`) is `nil` until it is persisted or compared: `compact/1` gives it one, and `equal?/2` and `digest/1` read its contents.
+
+- **A table may know the column its rows are sorted by** (`sorted/1`): in ascending order, `nil` last, as a window field is held (§1.5). A source's table in event time is sorted by its window field; a table built from rows is sorted by none; `from_chunks/3` takes `sorted:`, as a per-row step keeps its input's. A step binary-searches only that column (spec/04 §4.3). Reading a step's columns, `Chunk.values/4` is one column of a run of a chunk, and `Chunk.at/3` one value, as read through the chunk's delta.
+
+```test:table-sorted
+a source's table in event time is sorted by its window field, a table built from rows or aligned by row count by none, and from_chunks/3 keeps the sorted column given; it is not part of the contents
+```
 
 ```test:table-chunk-ids
 a table built from rows has its chunks' content digests as their ids; a source's chunks are {source, resolution, slot}, by span start in event time and by row offset otherwise, equal across a rebuild and to ids written out literally; trimming keeps every remaining chunk's id; appending writes into the last chunk's slot and starts new ones; rows out of window order, and an append of another origin, are refused

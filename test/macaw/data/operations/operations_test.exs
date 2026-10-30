@@ -30,8 +30,11 @@ defmodule Macaw.Data.OperationsTest do
       callbacks = Transform.behaviour_info(:callbacks)
       assert {:run, 3} in callbacks and {:outputs, 2} in callbacks and {:needs, 0} in callbacks
       # spelling: allow, behaviour_info/1 is Elixir's
-      assert Enum.sort(Transform.behaviour_info(:optional_callbacks)) == [prepare: 3, reduces: 0]
+      assert Enum.sort(Transform.behaviour_info(:optional_callbacks)) ==
+               [bind: 3, chunk: 3, class: 1, prepare: 3, reads: 0, reduces: 0, resolve: 3]
+
       refute function_exported?(Ops.Double, :reduces, 0)
+      refute function_exported?(Ops.Double, :class, 1)
     end
 
     @tag verifies: "operations-transform-callbacks"

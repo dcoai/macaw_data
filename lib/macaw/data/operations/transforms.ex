@@ -78,6 +78,27 @@ defmodule Macaw.Data.Operations.Transforms do
   end
 
   @doc false
+  # The name among `names` that spells `field`, `nil` when none does.
+  @spec name_in([Table.name()], Table.name()) :: Table.name() | nil
+  def name_in(names, field), do: Enum.find(names, &(spell(&1) == spell(field)))
+
+  @doc false
+  # The values of the column named `name` in a chunk's view, all `nil` for no column.
+  @spec view_values(Table.view(), Table.name() | nil) :: [term()]
+  def view_values({_chunk, _first, count}, nil), do: List.duplicate(nil, count)
+
+  def view_values({chunk, first, count}, name),
+    do: Macaw.Data.Table.Chunk.values(chunk, name, first, count)
+
+  @doc false
+  # A per-row selection of a view of `count` rows from the indexes kept (spec/04 §1.4).
+  @spec selection([non_neg_integer()], non_neg_integer()) ::
+          Macaw.Data.Operations.Step.selection()
+  def selection([], _count), do: :none
+  def selection(kept, count) when length(kept) == count, do: :all
+  def selection(kept, _count), do: {:rows, kept}
+
+  @doc false
   @spec spell(Table.name()) :: String.t()
   def spell(name) when is_atom(name), do: Atom.to_string(name)
   def spell(name), do: name

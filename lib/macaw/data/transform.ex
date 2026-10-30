@@ -59,5 +59,34 @@ defmodule Macaw.Data.Transform do
   @doc "Computed once per design and shared by its marks, under the context's `prepared`."
   @callback prepare([node_map()], Table.t(), map()) :: term()
 
-  @optional_callbacks reduces: 0, prepare: 3
+  @typedoc "A step's class (spec/04 §1.4), which decides its merge."
+  @type class :: :row | :combine | :global
+
+  @doc """
+  A column-native step's class for the node (spec/04 §1.4): `:row`, each chunk worked by
+  itself and merged by concatenation; `:combine`, partials merged associatively; `:global`,
+  a merge over the whole input. `Macaw.Data.Operations.Step` runs it.
+  """
+  @callback class(node_map()) :: class()
+
+  @doc "The keys of the caller's context the step reads; no other key reaches it."
+  @callback reads() :: [atom()]
+
+  @doc """
+  The declared context resolved over the whole input, once: a map the step's `resolve/3`
+  is given. Without it the declared context is given as it is.
+  """
+  @callback bind(node_map(), Table.t(), map()) :: map()
+
+  @doc """
+  The context as it resolves for one chunk's view, given the bound context and the view's
+  place (`:at`, its first row in the input, and `:rows`, the input's count). Part of the
+  chunk's step key.
+  """
+  @callback resolve(node_map(), Table.view(), map()) :: term()
+
+  @doc "One chunk's part, from its view and the context resolved for it."
+  @callback chunk(node_map(), Table.view(), term()) :: term()
+
+  @optional_callbacks reduces: 0, prepare: 3, class: 1, reads: 0, bind: 3, resolve: 3, chunk: 3
 end

@@ -753,6 +753,92 @@ defmodule Macaw.Data.Table.Column do
      dictionary, slice_booleans(booleans, first, n)}
   end
 
+  # -- gathering --------------------------------------------------------------------------
+
+  @doc false
+  # The values at `indexes` (ascending or not, repeats allowed), as a column of the same
+  # form: each buffer's slots copied by runs of consecutive indexes, each bitmap's bits
+  # read and packed again. A dictionary, a union's children and a zoned column's zones
+  # are kept as they are, so codes and offsets still point into them (spec/04 §1.4).
+  @spec gather(t(), [non_neg_integer()]) :: t()
+  def gather({:list, values}, indexes) do
+    tuple = List.to_tuple(values)
+    {:list, Enum.map(indexes, &elem(tuple, &1))}
+  end
+
+  def gather({form, data, validity}, indexes) when form in [:int64, :float64],
+    do: {form, take(data, 8, indexes), take_bits(validity, indexes)}
+
+  def gather({:date, data, validity}, indexes),
+    do: {:date, take(data, 4, indexes), take_bits(validity, indexes)}
+
+  def gather({:bool, values, validity}, indexes),
+    do: {:bool, take_bits(values, indexes), take_bits(validity, indexes)}
+
+  def gather({:integral, data, validity, integral}, indexes),
+    do:
+      {:integral, take(data, 8, indexes), take_bits(validity, indexes),
+       take_bits(integral, indexes)}
+
+  def gather({:union, types, offsets, ints, floats}, indexes),
+    do: {:union, take(types, 1, indexes), take(offsets, 4, indexes), ints, floats}
+
+  def gather({form, us, validity, precision}, indexes) when form in [:utc, :naive],
+    do:
+      {form, take(us, 8, indexes), take_bits(validity, indexes),
+       take_precision(precision, indexes)}
+
+  def gather({:zoned, us, validity, precision, zones, codes}, indexes) do
+    {:zoned, take(us, 8, indexes), take_bits(validity, indexes),
+     take_precision(precision, indexes), zones, take(codes, 4, indexes)}
+  end
+
+  def gather({form, offsets, data, validity}, indexes) when form in [:text, :binary] do
+    {parts, ends, _at} =
+      Enum.reduce(runs(indexes), {[], [], 0}, fn {first, n}, {parts, ends, at} ->
+        <<from::signed-little-32>> = binary_part(offsets, first * 4, 4)
+        bounds = for <<o::signed-little-32 <- binary_part(offsets, first * 4 + 4, n * 4)>>, do: o
+        shifted = for o <- bounds, do: <<at + o - from::little-32>>
+        last = List.last(bounds)
+        {[binary_part(data, from, last - from) | parts], [shifted | ends], at + last - from}
+      end)
+
+    {form, IO.iodata_to_binary([<<0::32>> | Enum.reverse(ends)]),
+     IO.iodata_to_binary(Enum.reverse(parts)), take_bits(validity, indexes)}
+  end
+
+  def gather({:dictionary, codes, validity, dictionary, booleans}, indexes) do
+    booleans =
+      case booleans do
+        nil -> nil
+        {kinds, values} -> {take_bits(kinds, indexes), take_bits(values, indexes)}
+      end
+
+    {:dictionary, take(codes, 4, indexes), take_bits(validity, indexes), dictionary, booleans}
+  end
+
+  # The `width`-byte slots at `indexes`, copied a run of consecutive slots at a time.
+  defp take(data, width, indexes) do
+    indexes
+    |> runs()
+    |> Enum.map(fn {first, n} -> binary_part(data, first * width, n * width) end)
+    |> IO.iodata_to_binary()
+  end
+
+  defp take_precision(p, _indexes) when is_integer(p), do: p
+  defp take_precision(precisions, indexes), do: take(precisions, 1, indexes)
+
+  defp take_bits(bitmap, indexes),
+    do: bitmap(Enum.map(indexes, &bit_at(bitmap, &1)), &(&1 == 1))
+
+  # Indexes as runs of consecutive ones, `{first, count}`, in their order.
+  defp runs([]), do: []
+  defp runs([i | rest]), do: runs(rest, i, 1, [])
+
+  defp runs([j | rest], first, n, acc) when j == first + n, do: runs(rest, first, n + 1, acc)
+  defp runs([j | rest], first, n, acc), do: runs(rest, j, 1, [{first, n} | acc])
+  defp runs([], first, n, acc), do: Enum.reverse([{first, n} | acc])
+
   defp slice_booleans(nil, _first, _n), do: nil
 
   defp slice_booleans({kinds, values}, first, n),

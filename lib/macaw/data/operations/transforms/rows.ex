@@ -8,7 +8,7 @@ defmodule Macaw.Data.Operations.Transforms.Filter do
   @behaviour Macaw.Data.Transform
 
   alias Macaw.Data.{Operations, Table}
-  alias Macaw.Data.Operations.{Option, Transforms}
+  alias Macaw.Data.Operations.{Option, Step, Transforms}
 
   @tests [:eq, :ne, :lt, :lte, :gt, :gte, :present, :absent]
 
@@ -32,11 +32,29 @@ defmodule Macaw.Data.Operations.Transforms.Filter do
   def outputs(_node, columns), do: columns
 
   @impl true
-  def run(%{"field" => field, "test" => test, "value" => value} = node, table, _context) do
-    table
-    |> Table.rows()
-    |> Enum.filter(&passes?(test, Table.get(&1, field), value))
-    |> Transforms.answer(__MODULE__, node, table)
+  def run(node, table, context), do: Step.run(__MODULE__, node, table, context)
+
+  # A per-row step (spec/04 §1.4): each chunk decided from the one column it reads.
+  @impl true
+  def class(_node), do: :row
+
+  @impl true
+  def reads, do: []
+
+  @impl true
+  def bind(%{"field" => field}, table, _context),
+    do: %{name: Transforms.name_in(Table.names(table), field)}
+
+  @impl true
+  def resolve(_node, _view, %{name: name}), do: name
+
+  @impl true
+  def chunk(%{"test" => test, "value" => value}, {_chunk, _first, count} = view, name) do
+    view
+    |> Transforms.view_values(name)
+    |> Enum.with_index()
+    |> Enum.flat_map(fn {reading, i} -> if passes?(test, reading, value), do: [i], else: [] end)
+    |> Transforms.selection(count)
   end
 
   defp passes?(:present, reading, _value), do: reading != nil
@@ -57,8 +75,7 @@ defmodule Macaw.Data.Operations.Transforms.Take do
   """
   @behaviour Macaw.Data.Transform
 
-  alias Macaw.Data.Operations.{Option, Transforms}
-  alias Macaw.Data.Table
+  alias Macaw.Data.Operations.{Option, Step}
 
   @impl true
   def name, do: "take"
@@ -78,11 +95,31 @@ defmodule Macaw.Data.Operations.Transforms.Take do
   def outputs(_node, columns), do: columns
 
   @impl true
-  def run(%{"n" => n, "side" => side} = node, table, _context) do
-    rows = Table.rows(table)
-    taken = if side == :end, do: Enum.take(rows, -n), else: Enum.take(rows, n)
-    Transforms.answer(taken, __MODULE__, node, table)
+  def run(node, table, context), do: Step.run(__MODULE__, node, table, context)
+
+  # A per-row step (spec/04 §1.4) that reads no column: each chunk's run is decided by
+  # where the chunk sits, so a chunk it does not return is never read.
+  @impl true
+  def class(_node), do: :row
+
+  @impl true
+  def reads, do: []
+
+  @impl true
+  def resolve(%{"n" => n, "side" => side}, {_chunk, _first, count}, %{at: at, rows: rows}) do
+    {lo, hi} = if side == :end, do: {max(rows - n, 0), rows}, else: {0, min(n, rows)}
+    a = max(lo, at) - at
+    b = min(hi, at + count) - at
+
+    cond do
+      b <= a -> :none
+      a == 0 and b == count -> :all
+      true -> {:run, a, b - a}
+    end
   end
+
+  @impl true
+  def chunk(_node, _view, selection), do: selection
 end
 
 defmodule Macaw.Data.Operations.Transforms.Sort do
