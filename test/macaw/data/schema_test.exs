@@ -9,7 +9,7 @@ defmodule Macaw.Data.SchemaTest do
 
   import Macaw.Layers.Color, only: [sigil_RGB: 2]
 
-  alias Macaw.Data.{Schema, Table}
+  alias Macaw.Data.Schema
   alias Macaw.Data.Schema.Cache
   alias Macaw.Layers.Color
 

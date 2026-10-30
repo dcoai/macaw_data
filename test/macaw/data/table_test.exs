@@ -9,8 +9,6 @@ defmodule Macaw.Data.TableTest do
 
   doctest Table
 
-  @rows [%{t: 1, v: 10.0}, %{t: 2, v: 20.0}, %{t: 3, v: 30.0}]
-
   # Rows to a column map: the inverse `rows/1` is tested against.
   defp columns(rows) do
     names = rows |> Enum.flat_map(&Map.keys/1) |> Enum.uniq()

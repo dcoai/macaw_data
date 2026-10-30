@@ -91,7 +91,8 @@ test:
     MACAW_DATA_NATIVE: required
   script:
     - mix compile --warnings-as-errors
-    - mix test
+    # A warning in a test file fails the job too (#37), as the compile's does for lib/.
+    - mix test --warnings-as-errors
     # Spec, tests and code aligned (macaw_compose spec/00 §4.1): the status reads this
     # job's test run as evidence, so it runs right after it, in the same job.
     - mix surfex.status
@@ -103,7 +104,7 @@ test-elixir:
   stage: test
   script:
     - mix compile --warnings-as-errors
-    - mix test
+    - mix test --warnings-as-errors
 
 # `native: :required` and no toolchain: the build must fail, and for that reason.
 native-required:

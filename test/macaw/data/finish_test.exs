@@ -249,7 +249,8 @@ defmodule Macaw.Data.FinishTest do
     assert Window.within?(nil, [0, 1]) == false
     assert Window.applies?([0, 10], :number) and Window.applies?(nil, :time)
     refute Window.applies?([0, ~D[2026-01-01]], :number)
-    assert Window.instant?(~N[2026-01-01 00:00:00]) and not Window.instant?(1)
+    assert Window.instant?(~N[2026-01-01 00:00:00])
+    refute Window.instant?(1)
     assert Window.time?(1) and not Window.time?("1")
     refute Window.in_box?(nil, %{west: 0, south: 0, east: 1, north: 1})
   end

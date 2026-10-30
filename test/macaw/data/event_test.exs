@@ -6,7 +6,7 @@ defmodule Macaw.Data.EventTest do
 
   @now ~U[2026-10-27 12:00:00Z]
 
-  defp valid(extra \\ %{}),
+  defp valid(extra),
     do: Map.merge(%{name: "pick", instance: "cell-1", initiator: :visitor, time: @now}, extra)
 
   @tag verifies: "event-fields"

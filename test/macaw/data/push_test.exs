@@ -103,7 +103,11 @@ defmodule Macaw.Data.PushTest do
       Push.receive(push, Push.increment_message(ref, 2, increment([%{"t" => 2, "v" => 1}])))
 
     me = self()
-    describe = fn name -> send(me, {:described, name}) && {:ok, @schema} end
+
+    describe = fn name ->
+      send(me, {:described, name})
+      {:ok, @schema}
+    end
 
     push = Push.drain(push, describe)
     assert ts(push) == [1, 2]
