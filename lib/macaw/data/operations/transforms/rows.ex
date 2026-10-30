@@ -7,11 +7,16 @@ defmodule Macaw.Data.Operations.Transforms.Filter do
   """
   @behaviour Macaw.Data.Transform
 
-  alias Macaw.Data.{Operations, Table}
+  alias Macaw.Data.{Native, Operations, Table}
+  alias Macaw.Data.Native.Kernels
   alias Macaw.Data.Operations.{Option, Step, Transforms}
-  alias Macaw.Data.Table.{Chunk, Column}
+  alias Macaw.Data.Table.{Bitmap, Chunk, Column}
 
   @tests [:eq, :ne, :lt, :lte, :gt, :gte, :present, :absent]
+  # The kernel's code of each comparison.
+  @codes %{eq: 0, ne: 1, lt: 2, lte: 3, gt: 4, gte: 5}
+  @s64_min -0x8000000000000000
+  @s64_max 0x7FFFFFFFFFFFFFFF
 
   @impl true
   def name, do: "filter"
@@ -50,7 +55,87 @@ defmodule Macaw.Data.Operations.Transforms.Filter do
   def resolve(_node, _view, %{name: name}), do: name
 
   @impl true
-  def chunk(%{"test" => test, "value" => value}, {chunk, first, count} = view, name) do
+  def chunk(node, view, name) do
+    case native(node, view, name) do
+      :fallback -> chunk_elixir(node, view, name)
+      selection -> selection
+    end
+  end
+
+  @doc false
+  # The selection by the native kernel (spec/04 §4.1.1), reading `name`'s buffers in place,
+  # where the kernels are loaded and the column and test are ones it reads; else, or where
+  # the kernel hands the view back, `:fallback`.
+  def native(%{"test" => test, "value" => value}, {chunk, first, count}, name) when name != nil do
+    with true <- Native.active?(),
+         {mode, data, validity, present, pass, ncodes} <-
+           buffers(Chunk.packed(chunk, name), test, value) do
+      missing = passes?(test, nil, value)
+      code = Map.get(@codes, test, 0)
+      x = if is_number(value), do: value, else: 0
+      args = [mode, data, validity, first, count, code, x, present, missing, pass, ncodes]
+
+      case Native.scheduler(count) do
+        :normal -> apply(Kernels, :filter_mask, args)
+        :dirty -> apply(Kernels, :filter_mask_dirty, args)
+      end
+    else
+      _ -> :fallback
+    end
+  end
+
+  def native(_node, _view, _name), do: :fallback
+
+  # What the kernel reads of a column, `{mode, data, validity, present, pass, ncodes}`:
+  # `present` and `absent` of any column whose validity bitmap says which rows are `nil`
+  # (mode 0, the bitmap alone); a number column against a number within int64 or a float
+  # (1, 2: the values compared); against any other value (0: every number stands so to a
+  # term of another type, so one answer holds for every reading); a dictionary of strings
+  # (3: each code's answer, decided once over the dictionary by the Elixir path's own test).
+  # Any other column (a union, an integral, a list) or test is the Elixir path's.
+  defp buffers(column, test, _value) when test in [:present, :absent] do
+    case validity(column) do
+      nil -> :elixir
+      validity -> {0, <<>>, validity, test == :present, <<>>, 0}
+    end
+  end
+
+  defp buffers({form, data, validity}, test, value) when form in [:int64, :float64] do
+    cond do
+      is_float(value) or (is_integer(value) and value >= @s64_min and value <= @s64_max) ->
+        {if(form == :int64, do: 1, else: 2), data, validity, false, <<>>, 0}
+
+      is_number(value) ->
+        :elixir
+
+      true ->
+        {0, <<>>, validity, passes?(test, 0, value), <<>>, 0}
+    end
+  end
+
+  defp buffers({:dictionary, codes, validity, dictionary, nil}, test, value) do
+    strings = Column.dictionary_strings(dictionary)
+    pass = Bitmap.from(strings, &passes?(test, &1, value))
+    {3, codes, validity, false, pass, length(strings)}
+  end
+
+  defp buffers(_column, _test, _value), do: :elixir
+
+  # A column's validity bitmap, where it alone says which rows are `nil`.
+  defp validity({form, _data, validity}) when form in [:int64, :float64, :date, :bool],
+    do: validity
+
+  defp validity({form, _us, validity, _precision}) when form in [:utc, :naive], do: validity
+  defp validity({:zoned, _us, validity, _precision, _zones, _codes}), do: validity
+  defp validity({form, _offsets, _data, validity}) when form in [:text, :binary], do: validity
+  defp validity({:dictionary, _codes, validity, _dictionary, _booleans}), do: validity
+  defp validity({:integral, _data, validity, _integral}), do: validity
+  defp validity(_column), do: nil
+
+  @doc false
+  # The selection by the Elixir path alone, whatever the kernels: the path a build without
+  # them runs, and the reference the native kernel is held equal to.
+  def chunk_elixir(%{"test" => test, "value" => value}, {chunk, first, count} = view, name) do
     packed =
       if name, do: Column.where(Chunk.storage(chunk, name, first, count), count, test, value)
 

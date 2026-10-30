@@ -36,7 +36,13 @@ case Toolchain.decide(
           lttb_finish: [],
           lttb_finish_dirty: [alias: :lttb_finish, concurrency: :dirty_cpu],
           group_sum: [],
-          group_sum_dirty: [alias: :group_sum, concurrency: :dirty_cpu]
+          group_sum_dirty: [alias: :group_sum, concurrency: :dirty_cpu],
+          filter_mask: [],
+          filter_mask_dirty: [alias: :filter_mask, concurrency: :dirty_cpu],
+          take: [],
+          take_dirty: [alias: :take, concurrency: :dirty_cpu],
+          take_bits: [],
+          take_bits_dirty: [alias: :take_bits, concurrency: :dirty_cpu]
         ]
 
       @doc false
@@ -99,6 +105,26 @@ case Toolchain.decide(
       @doc false
       def group_sum_dirty(_vf, _vd, _vv, _grouped, _cd, _cv, _ncodes, _first, _count, _limit),
         do: :erlang.nif_error(:not_built)
+
+      @doc false
+      def filter_mask(_m, _d, _v, _first, _count, _test, _x, _present, _missing, _pass, _ncodes),
+        do: :erlang.nif_error(:not_built)
+
+      @doc false
+      def filter_mask_dirty(_m, _d, _v, _first, _count, _test, _x, _present, _missing, _pass, _n),
+        do: :erlang.nif_error(:not_built)
+
+      @doc false
+      def take(_data, _width, _indexes), do: :erlang.nif_error(:not_built)
+
+      @doc false
+      def take_dirty(_data, _width, _indexes), do: :erlang.nif_error(:not_built)
+
+      @doc false
+      def take_bits(_bitmap, _indexes), do: :erlang.nif_error(:not_built)
+
+      @doc false
+      def take_bits_dirty(_bitmap, _indexes), do: :erlang.nif_error(:not_built)
     end
 
   {:fail, message} ->

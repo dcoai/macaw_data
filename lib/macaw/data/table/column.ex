@@ -46,7 +46,8 @@ defmodule Macaw.Data.Table.Column do
   # value shares it (Arrow field metadata), else a binary of one byte per value (a uint8
   # struct field: `macaw.zoned`'s, or `macaw.precise`'s beside a UTC or naive instant).
 
-  alias Macaw.Data.Schema
+  alias Macaw.Data.{Native, Schema}
+  alias Macaw.Data.Native.Kernels
   alias Macaw.Data.Table.{Bitmap, Digest}
 
   @typedoc "A column's storage, one of the forms above."
@@ -664,6 +665,14 @@ defmodule Macaw.Data.Table.Column do
     {gaps(for(<<c::little-32 <- codes>>, do: c), valid(validity, n)), strings}
   end
 
+  @doc false
+  # A dictionary's strings, in code order.
+  @spec dictionary_strings({binary(), binary()}) :: [binary()]
+  def dictionary_strings({offsets, data}) do
+    offsets = for <<o::signed-little-32 <- offsets>>, do: o
+    strings(data, offsets, :all)
+  end
+
   defp gaps(values, :all), do: values
   defp gaps([v | values], [1 | bits]), do: [v | gaps(values, bits)]
   defp gaps([_ | values], [0 | bits]), do: [nil | gaps(values, bits)]
@@ -913,8 +922,23 @@ defmodule Macaw.Data.Table.Column do
      Bitmap.take(validity, indexes, div(byte_size(codes), 4)), dictionary, booleans}
   end
 
-  # The `width`-byte slots at `indexes`, copied a run of consecutive slots at a time.
-  defp take(data, width, indexes) do
+  # The `width`-byte slots at `indexes`: by the native kernel where the kernels are loaded
+  # (spec/04 §4.1.1), on a dirty scheduler past `Native.sync_rows/0` slots; else copied a
+  # run of consecutive slots at a time.
+  defp take(data, width, [_ | _] = indexes) do
+    if Native.active?() do
+      case Native.scheduler(length(indexes)) do
+        :normal -> Kernels.take(data, width, indexes)
+        :dirty -> Kernels.take_dirty(data, width, indexes)
+      end
+    else
+      take_elixir(data, width, indexes)
+    end
+  end
+
+  defp take(data, width, indexes), do: take_elixir(data, width, indexes)
+
+  defp take_elixir(data, width, indexes) do
     indexes
     |> runs()
     |> Enum.map(fn {first, n} -> binary_part(data, first * width, n * width) end)

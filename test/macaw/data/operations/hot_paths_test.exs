@@ -88,7 +88,9 @@ defmodule Macaw.Data.Operations.HotPathsTest do
       table = Table.new!([{"v", :number, for(i <- 1..n, do: :math.sin(i / 50) * 100)}])
       [view] = Table.chunks(table)
       node = checked(%{op: "filter", field: "v", test: :gt, value: 0.0})
-      {reductions, {:rows, kept}} = Work.reductions(fn -> Filter.chunk(node, view, "v") end)
+
+      {reductions, {:rows, kept}} =
+        Work.reductions(fn -> Native.elixir(fn -> Filter.chunk(node, view, "v") end) end)
 
       assert length(kept) == Enum.count(Table.column(table, "v"), &(&1 > 0.0))
       assert reductions <= 3 * n, "#{reductions} reductions for #{n} rows"

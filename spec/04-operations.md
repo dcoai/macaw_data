@@ -366,6 +366,25 @@ for generated number columns with and without gaps, integer and float, every tes
 each test keeps exactly its rows in order: present and absent by nil, eq and ne by value with an atom equal to its string, the orderings by term order with nil never passing; a missing column reads nil
 ```
 
+#### 4.1.1 The mask and the gather in native kernels {#operations-filter-native}
+
+**`filter`'s selection, and the gather of the rows it keeps, run in native kernels where the kernels are loaded** (§1.7, macaw_data#38). `Filter.chunk/3` hands the view's column to `filter_mask`, which reads it in place and answers the selection itself (`:all`, `:none`, `{:run, a, n}`, or `{:rows, indexes}`), so a chunk is passed through, dropped, cut or gathered exactly as on the Elixir path:
+- **`present` and `absent`** read only the validity bitmap, of any column whose bitmap alone says which rows are `nil` (every packed form but the int/float union and `:list`).
+- **An int64 or float64 column against a number** (an integer within int64, or a float) compares each reading as Erlang compares numbers: exactly, an integer against a float too, past 2^53 included. **Against any other value**, every number stands to it as the term order puts numbers, below every other type, so the Elixir path's test of one number is every reading's answer.
+- **A dictionary of strings** (no booleans beside it) is tested once per dictionary string, by the Elixir path's own test (`eq` and `ne` with `same?/2`'s spellings, the orderings by term order), and each row reads its code's answer.
+- A missing row passes as the Elixir path's test of `nil` answers. Any other column or test (the union, an integral column's orderings, a time against a time, a dictionary with booleans) is the Elixir path's, and so is a float buffer holding a value that isn't finite (`:fallback`).
+
+**The gather** of a chunk's columns at the rows kept (`Column.gather/2`, so every gather and reshape) copies each fixed-width buffer's slots (`take`) and each bitmap's bits (`take_bits`) at the indexes, in their order, repeats allowed, the bits packed least-significant first with zero padding: the Elixir path's bytes. An index past its buffer is a fault, raised. A text column's offsets and data, and the macaw forms' children, are gathered on the Elixir path from those.
+- **Its cost:** no column is decoded and no bitmap expanded; a few nanoseconds a row and a term an index kept. A call over at most `Native.sync_rows/0` rows or indexes runs on a normal scheduler, within 1 ms; a larger one on a dirty CPU scheduler.
+
+```test:operations-filter-native-identical
+for generated int, wide int, float, union, category, category with booleans, text and time columns with nils, every test and values of every kind (small and past int64 numbers, strings, atoms, nil, a time), chunked several ways and viewed from an offset, the kernel's selection equals the Elixir path's and it answers every form it reads; an integer against a float compares exactly past 2^53; the steps' tables are equal with and without the kernels; a gather at any indexes equals Column.gather/2's slot for slot and bit for bit
+```
+
+```test:operations-filter-native-bound
+a mask over sync_rows/0 rows, 8,192, and a gather of half as many indexes take under 1 ms on a normal scheduler, a larger view runs dirty with the Elixir path's selection, and an index past its buffer raises
+```
+
 ### 4.2 take {#operations-take}
 
 `n` (`{:integer, 0}`, required); `side` (`{:enum, [:end, :start]}`, `:end`). The last, or the first, `n` rows in order. An `n` at or above the row count is every row, and `n` of zero is none; a negative `n` is `{:type, {:integer, 0}}`. A design that shows the newest reading beside its history reads `take(n: 1)`. **Outputs:** the input's columns. **Class:** per row (§1.4), reading no column: each chunk's run is resolved from where it sits and the input's count, so a chunk it does not return is never read, and its work grows by a step a chunk, never with the rows.
