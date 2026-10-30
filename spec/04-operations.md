@@ -197,6 +197,22 @@ a float sum, a mean, min, max, m4 and lttb recompute a changed chunk rather than
 prune keeps the parts of the chunks the tables hold, at their version or base version, and drops a chunk's that left the window or a version no chunk has
 ```
 
+#### 1.5.1 What a frame costs with the native kernels {#operations-cache-native-frame}
+
+**With the native kernels loaded (§1.7), the frame loop's per-row work runs in them** (macaw_data#38, #54): the ladder partial (§4.5.2), the finishes (§4.5.4), the exact sum by group (§5.1), and the filter's mask and gather (§4.1.1). What is left on the BEAM is the steps' plumbing: their keys and the cache, `window`'s search, building output chunks and the merged partials' few terms. Measured on #26's loop (macaw_data#54, `mix run` and the `:benchmark` test, a shared box under load 5–19, so wall times are ranges):
+
+| Frame | Reductions, Elixir path → kernels | ms at the default heap, Elixir → kernels | ms, frame heap sized (4M words), Elixir → kernels |
+|---|---:|---:|---:|
+| per chunk | 958,680 → ~181,000 | 36–47 → 7–10 | 13–16 → 6–8 |
+| every part reused (merges alone) | 552,014 → ~175,000 | 23–40 → 6.5–10 | 9 → 5–7 |
+| recomputed in full | 1,931,845 → ~186,000 | 55–58 → 9–11 | 30–33 → 7.4–11.4 |
+
+So with the kernels a frame is within visualize's ~17 ms budget at the default heap, per chunk and recomputed in full: sizing the frame process's heap (§1.5) is no longer needed to meet it, though it still trims a millisecond or two. Without them, the Elixir path's cost and pins above stand. The kernels' work counts no reductions, so the frame's reductions with them are pinned too, as a guard that the kernels keep answering it:
+
+```test:operations-cache-native-frame-budget
+with the kernels loaded, the synthetic frame loop's per-chunk frame, its merges alone and its full recompute each cost at most 250,000 reductions, so a kernel that stops answering a step of the frame fails the default suite
+```
+
 ### 1.6 Execution: inline by default, parallel on request {#operations-parallel}
 
 **A step runs its chunks inline by default** (macaw_data#9 §7): a caller such as a frame task already runs many charts at once, and parallel work inside one step would compete with them.

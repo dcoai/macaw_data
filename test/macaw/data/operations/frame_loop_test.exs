@@ -77,6 +77,24 @@ defmodule Macaw.Data.Operations.FrameLoopTest do
       assert per_chunk <= 1_100_000, "per chunk #{per_chunk}"
       assert merges <= 600_000, "merges alone #{merges}"
     end
+
+    # With the kernels the frame's per-row work counts no reductions (spec/04 §1.7), so
+    # what remains is the steps' plumbing, about 180,000 (macaw_data#54): a step whose
+    # kernel stops answering, its Elixir path run instead, fails here.
+    @tag verifies: "operations-cache-native-frame-budget"
+    test "with the kernels, a per-chunk frame, its merges alone and a full recompute each cost at most 250,000 reductions" do
+      {window, cache} = loop(1)
+      {_, warm, _} = FrameLoop.cached(window, cache)
+      {per_chunk, _} = Work.reductions(fn -> FrameLoop.cached(window, cache) end)
+      {merges, _} = Work.reductions(fn -> FrameLoop.cached(window, warm) end)
+      {full, _} = Work.reductions(fn -> FrameLoop.full(window) end)
+
+      if Native.loaded?() do
+        assert per_chunk <= 250_000, "per chunk #{per_chunk}"
+        assert merges <= 250_000, "merges alone #{merges}"
+        assert full <= 250_000, "full #{full}"
+      end
+    end
   end
 
   describe "the cache a frame holds" do
