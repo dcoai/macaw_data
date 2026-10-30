@@ -32,7 +32,10 @@ defmodule Macaw.Data.Delivery do
       the last increment it reflects (`0` for none); `nil` for any other answer
       (spec/01 §4.1).
   - `origin`: where it came from, `%{source: name, request: digest, as_of: time | nil}`,
-    or `nil`.
+    or `nil`;
+  - `retracted` and `replace`: the changes a pushed increment carries beside its inserted
+    rows (spec/01 §4.2), rows withdrawn and range replacements
+    `%{from, to, identities, rows}`; both `[]` by default, and a snapshot carries neither.
 
   The shape of visualize's `Visualize.Data.Delivery`, whose facts are flat and whose
   `reduced_by` is `:feed` or `:visualize`, is spec/01 §3's here.
@@ -58,7 +61,16 @@ defmodule Macaw.Data.Delivery do
   @compile {:no_warn_undefined, [Elixir.Table.Reader]}
 
   @enforce_keys [:rows, :served]
-  defstruct [:rows, :served, names: nil, types: %{}, schema: nil, origin: nil]
+  defstruct [
+    :rows,
+    :served,
+    names: nil,
+    types: %{},
+    schema: nil,
+    origin: nil,
+    retracted: [],
+    replace: []
+  ]
 
   @served_defaults %{
     window: nil,
@@ -87,6 +99,9 @@ defmodule Macaw.Data.Delivery do
           position: non_neg_integer() | nil
         }
 
+  @typedoc "A range replacement (spec/01 §4.2): over `[from, to)`, limited to `identities`, exactly `rows`."
+  @type replacement :: %{from: term(), to: term(), identities: [term()] | nil, rows: [map()]}
+
   @typedoc "Where an answer came from."
   @type origin :: %{source: term(), request: String.t(), as_of: DateTime.t() | nil} | nil
 
@@ -96,7 +111,9 @@ defmodule Macaw.Data.Delivery do
           types: %{Table.name() => Table.type()},
           served: served(),
           schema: String.t() | nil,
-          origin: origin()
+          origin: origin(),
+          retracted: [map()],
+          replace: [replacement()]
         }
 
   @doc """
@@ -117,7 +134,9 @@ defmodule Macaw.Data.Delivery do
     do: raise(ArgumentError, "a delivery carries rows, not another delivery")
 
   def new(rows, opts) when is_list(opts) do
-    opts = Keyword.validate!(opts, [:served, :schema, :origin, :types, :names])
+    opts =
+      Keyword.validate!(opts, [:served, :schema, :origin, :types, :names, :retracted, :replace])
+
     source!(rows)
 
     %__MODULE__{
@@ -126,7 +145,9 @@ defmodule Macaw.Data.Delivery do
       types: types(Keyword.get(opts, :types, %{})),
       served: served(Keyword.get(opts, :served, [])),
       schema: schema(Keyword.get(opts, :schema)),
-      origin: origin(Keyword.get(opts, :origin))
+      origin: origin(Keyword.get(opts, :origin)),
+      retracted: retracted(Keyword.get(opts, :retracted, [])),
+      replace: replace(Keyword.get(opts, :replace, []))
     }
   end
 
@@ -276,6 +297,42 @@ defmodule Macaw.Data.Delivery do
 
   defp schema(version) when is_nil(version) or is_binary(version), do: version
   defp schema(other), do: raise(ArgumentError, "not a schema version: #{inspect(other)}")
+
+  defp retracted(rows) when is_list(rows) do
+    if Enum.all?(rows, &row?/1),
+      do: rows,
+      else: raise(ArgumentError, "not a delivery's retracted rows: #{inspect(rows, limit: 5)}")
+  end
+
+  defp retracted(other),
+    do: raise(ArgumentError, "not a delivery's retracted rows: #{inspect(other, limit: 5)}")
+
+  @replacement %{from: nil, to: nil, identities: nil, rows: []}
+
+  defp replace(list) when is_list(list), do: Enum.map(list, &replacement/1)
+
+  defp replace(other),
+    do: raise(ArgumentError, "not a delivery's replacements: #{inspect(other, limit: 5)}")
+
+  defp replacement(%{} = given) when not is_struct(given) do
+    replacement = Map.merge(@replacement, given)
+
+    if Map.keys(given) -- Map.keys(@replacement) == [] and
+         (is_nil(replacement.identities) or is_list(replacement.identities)) and
+         is_list(replacement.rows) and Enum.all?(replacement.rows, &row?/1),
+       do: replacement,
+       else:
+         raise(
+           ArgumentError,
+           "not a range replacement: #{inspect(given, limit: 5)} (spec/01 §4.2)"
+         )
+  end
+
+  defp replacement(other),
+    do:
+      raise(ArgumentError, "not a range replacement: #{inspect(other, limit: 5)} (spec/01 §4.2)")
+
+  defp row?(row), do: is_map(row) and not is_struct(row)
 
   defp origin(nil), do: nil
 

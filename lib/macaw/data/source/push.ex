@@ -27,6 +27,15 @@ defmodule Macaw.Data.Source.Push do
   - **A snapshot hands off by position:** it replaces what is held and takes its
     `served.position`; increments at or before it are dropped, later ones apply. A
     snapshot older than the position held is dropped whole.
+  - **An increment's changes apply in order** (spec/01 §4.2): its `retracted` rows, each
+    matched by identity, held window value and the fields it names, one copy per unit of
+    weight; then its `replace` ranges, everything held in each retracted; then its
+    insertions. A change that can't be matched, or contradicts a replacement, is a fault
+    in `errors`, never a guess; against a capped or reduced holding an unheld retraction
+    is counted in `ignored` instead.
+  - **Only at the held resolution** (spec/01 §4.3): an increment whose
+    `served.resolution` differs from what is held is not merged, and `refetch/1` answers
+    `{:resolution, held, given}`.
   - **An increment's rows are insertions, merged by the window field:** they stay
     ordered by it, a late row placed among the held, and the served window grows to
     cover them. Rows are never deduplicated: an identical row is a second row. A schema
@@ -40,6 +49,7 @@ defmodule Macaw.Data.Source.Push do
 
   alias Macaw.Data.{Delivery, Schema, Table, Window}
   alias Macaw.Data.Schema.Cache
+  alias Macaw.Data.Source.Push.Changes
 
   @tag :macaw_source
 
@@ -149,7 +159,8 @@ defmodule Macaw.Data.Source.Push do
 
   @doc """
   `nil`, or why the holder must fetch a snapshot for this subscription and hand it to
-  `snapshot/2` (spec/01 §4.1): `{:gap, from, to}`, the numbers that never arrived. A
+  `snapshot/2` (spec/01 §4.1): `{:gap, from, to}`, the numbers that never arrived, or
+  `{:resolution, held, given}`, an increment at another resolution (spec/01 §4.3). A
   snapshot taken clears it.
   """
   @spec refetch(t()) :: term()
@@ -201,26 +212,45 @@ defmodule Macaw.Data.Source.Push do
     end
   end
 
-  # After a drain, increments still held back mean a gap: recorded once, and answered.
+  # After a drain, increments still held back mean a gap: recorded once, and answered
+  # unless a refetch is already asked for another reason.
   defp gap(%{waiting: waiting, position: held} = push) when map_size(waiting) > 0 do
     gap = {:gap, held + 1, Enum.min(Map.keys(waiting)) - 1}
 
-    if push.refetch == gap,
-      do: push,
-      else: %{push | refetch: gap, errors: push.errors ++ [gap]}
+    case push.refetch do
+      ^gap ->
+        push
+
+      refetch when refetch == nil or elem(refetch, 0) == :gap ->
+        %{push | refetch: gap, errors: push.errors ++ [gap]}
+
+      _other ->
+        push
+    end
   end
 
   defp gap(%{refetch: {:gap, _from, _to}} = push), do: %{push | refetch: nil}
   defp gap(push), do: push
 
+  # One increment, its number consumed whatever comes of it: merged only into a relation
+  # held at its resolution (spec/01 §4.3), a mismatch answered with a refetch.
   defp apply_increment(push, seq, delivery, describe) do
     push = %{push | position: seq}
 
-    case resolve(push, delivery, describe) do
-      {:ok, schema, push} -> %{push | held: merge(push.held, delivery, schema, push.limit)}
+    with {:ok, schema, push} <- resolve(push, delivery, describe),
+         :ok <- resolution(push.held, delivery) do
+      merge(push, delivery, schema)
+    else
       {:error, reason, push} -> fault(push, reason)
+      {:resolution, _held, _given} = mismatch -> %{fault(push, mismatch) | refetch: mismatch}
     end
   end
+
+  defp resolution(nil, _delivery), do: :ok
+  defp resolution(%{served: %{resolution: r}}, %{served: %{resolution: r}}), do: :ok
+
+  defp resolution(%{served: %{resolution: held}}, %{served: %{resolution: given}}),
+    do: {:resolution, held, given}
 
   defp fault(push, reason), do: %{push | errors: push.errors ++ [reason]}
 
@@ -241,32 +271,40 @@ defmodule Macaw.Data.Source.Push do
     end
   end
 
-  defp merge(nil, delivery, schema, limit),
-    do: merge(%{delivery | rows: empty(delivery.rows)}, delivery, schema, limit)
-
-  defp merge(held, delivery, schema, limit) do
+  # The increment's changes applied to what is held (spec/01 §4.2), the rows kept in the
+  # window field's order and the served window grown over the rows inserted.
+  defp merge(push, delivery, schema) do
+    held = push.held || %{delivery | rows: empty(delivery.rows), retracted: [], replace: []}
     old = Delivery.named_rows(held)
-    new = Delivery.named_rows(delivery)
+    {rows, inserted, faults, unheld} = Changes.apply(old, delivery, schema, thinned?(push.held))
     version = delivery.schema || held.schema
 
-    case Schema.window_field(schema) do
-      nil ->
-        all = old ++ new
-        cut = max(length(all) - limit, 0)
-        served = %{held.served | capped: held.served.capped or cut > 0}
-        %{rebuild(held, Enum.drop(all, cut), delivery) | schema: version, served: served}
+    held =
+      case Schema.window_field(schema) do
+        nil ->
+          cut = max(length(rows) - push.limit, 0)
+          served = %{held.served | capped: held.served.capped or cut > 0}
+          %{rebuild(held, Enum.drop(rows, cut), delivery) | schema: version, served: served}
 
-      time ->
-        # Every pushed row is an insertion, a late one placed among the held: an
-        # identical row is a second row, never deduplicated (spec/01 §4.1).
-        held_to = window_to(held) || newest(old, time)
-        rows = ordered(old ++ new, time)
-        to = Window.latest(held_to, window_to(delivery) || newest(new, time))
-        from = window_from(held) || window_from(delivery) || earliest(rows, time)
-        served = %{held.served | window: [from, to]}
-        %{rebuild(held, rows, delivery) | schema: version, served: served}
-    end
+        time ->
+          held_to = window_to(held) || newest(old, time)
+          rows = ordered(rows, time)
+          to = Window.latest(held_to, window_to(delivery) || newest(inserted, time))
+          from = window_from(held) || window_from(delivery) || earliest(rows, time)
+          served = %{held.served | window: [from, to]}
+          %{rebuild(held, rows, delivery) | schema: version, served: served}
+      end
+
+    push = %{push | held: held, errors: push.errors ++ faults}
+
+    if unheld > 0,
+      do: Enum.reduce(1..unheld, push, fn _, push -> ignore(push, :unheld) end),
+      else: push
   end
+
+  # A holding from a capped or reduced delivery may lack rows (spec/01 §4.2).
+  defp thinned?(nil), do: false
+  defp thinned?(%Delivery{served: served}), do: served.capped or served.reduced_by != nil
 
   # Stable by the window field's position, a row with no time last.
   defp ordered(rows, time) do

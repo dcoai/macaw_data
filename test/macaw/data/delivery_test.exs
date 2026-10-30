@@ -153,6 +153,36 @@ defmodule Macaw.Data.DeliveryTest do
     end
   end
 
+  @tag verifies: "delivery-changes"
+  test "a delivery carries retracted rows and range replacements, checked" do
+    d = Delivery.new(@rows)
+    assert {d.retracted, d.replace} == {[], []}
+
+    d =
+      Delivery.new(@rows,
+        retracted: [%{t: 1, v: 3}],
+        replace: [%{from: 0, to: nil, identities: ["a"], rows: [%{t: 2, v: 1}]}, %{from: 5}]
+      )
+
+    assert d.retracted == [%{t: 1, v: 3}]
+
+    assert d.replace == [
+             %{from: 0, to: nil, identities: ["a"], rows: [%{t: 2, v: 1}]},
+             %{from: 5, to: nil, identities: nil, rows: []}
+           ]
+
+    for bad <- [
+          [retracted: [{1, 3}]],
+          [retracted: %{t: 1}],
+          [replace: [%{from: 0, until: 3}]],
+          [replace: [%{identities: "a"}]],
+          [replace: [%{rows: [[t: 1]]}]],
+          [replace: %{from: 0}]
+        ] do
+      assert_raise ArgumentError, fn -> Delivery.new(@rows, bad) end
+    end
+  end
+
   @tag verifies: "delivery-box"
   test "a box window over a point field: four bounds, latitudes ordered and in range" do
     box = %{west: -10.5, south: 35.0, east: 30.0, north: 60.0}

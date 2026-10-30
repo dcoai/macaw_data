@@ -532,7 +532,7 @@ the held relation is the integral of the changelog: for a generated changelog of
 
 ## 3. Deliveries {#sources-delivery}
 
-**`Macaw.Data.Delivery` is one answer of a source,** a snapshot of its relation (§2.5): its rows, and what it actually served, a handful of terms beside the rows, never per row. `%Delivery{rows, names, types, schema, served, origin}`:
+**`Macaw.Data.Delivery` is one answer of a source,** a snapshot of its relation (§2.5): its rows, and what it actually served, a handful of terms beside the rows, never per row. `%Delivery{rows, names, types, schema, served, origin, retracted, replace}`:
 - **`rows`, the rows as the source gave them** (macaw#185): a list of row maps or tuples, a map or keyword list of columns, an `Nx.Tensor`, a `Table.Reader` source, or a `Macaw.Data.Table`, which passes as it is. **Nothing is packed or rewritten when a delivery is made:** a delivery is on the hottest path a live chart has, every tick of every chart reading it, and packing at the edge cost a reader of rows half a second for 50,000 rows (visualize#970), dropped tuple rows, and rewrote values a reader gave (an integer beside floats, a naive time, a sparse row). `new/2` checks only the shape, and raises `ArgumentError` for rows of no shape a source has.
 - **`names`**: the column names of tuple rows or a tensor, in order, or `nil`; **`types`**: column types for packing, `%{}` to infer them.
 - **Reading:**
@@ -550,6 +550,7 @@ the held relation is the integral of the changelog: for a generated changelog of
   - `note`: a line for a person (`"coarsened from raw"`), or `nil`;
   - `position`: for a snapshot taken for a push subscription, the number of the last increment it reflects, a non-negative integer (`0` for none); `nil` for any other answer (§4.1).
 - **`origin`**: `%{source: name, request: digest, as_of: time}`, the source, a digest of the request (`Macaw.Layers.Document.digest/1` of it), and the `DateTime` it is as of when used, else `nil`; or `nil`.
+- **`retracted`** and **`replace`**: the changes a pushed increment carries beside its inserted rows (§4.2), `[]` by default.
 
 `new/2` raises `ArgumentError` naming the fault for a key that is not a delivery's or a served fact, or a value a field does not take. visualize's `Visualize.Data.Delivery` holds these facts flat, with `reduced_by: :feed | :visualize` and no `served` or `origin`; mapping them at adoption is visualize's.
 
@@ -658,9 +659,7 @@ a request names the subscription it is a snapshot for, nil by default, and refus
 
 ### 4.2 Retractions and range replacements {#sources-push-changes}
 
-<!-- surfex: deferred dco-tek/macaw/macaw_data#13: retractions and range replacements in pushed increments -->
-
-**A pushed increment carries its changes beside its inserted rows** (§3): `retracted`, a list of row maps withdrawn, and `replace`, a list of range replacements, each `%{from, to, identities, rows}`; both `[]` by default, and a snapshot carries neither. `Delivery.new/2` checks their shapes: a row is a map, `identities` a list or `nil`, `rows` a list of maps, and no other key.
+**A pushed increment carries its changes beside its inserted rows** (§3): `retracted`, a list of row maps withdrawn, and `replace`, a list of range replacements, each `%{from, to, identities, rows}`; both `[]` by default, and a snapshot carries neither. `Delivery.new/2` checks their shapes, raising `ArgumentError` for a retraction that is not a map, a replacement with another key, `identities` neither a list nor `nil`, or `rows` not a list of maps; a replacement's missing keys take `nil`, `nil`, `nil` and `[]`.
 
 **`retracted`: rows withdrawn from what is held.** Identity names an entity, not a row (§1.4): a series or a host. Several held rows can share an identity and an instant (tally taps, label sets collapsed into one entity, duplicate readings), so a retraction matches in steps:
 1. **By identity and the window-field value the row was held at:** its old value, when an edit moves the row. That locates the row, and in the chunked table its chunk (§2.6).
@@ -702,8 +701,6 @@ a delivery carries retracted rows and range replacements, both empty by default;
 ```
 
 ### 4.3 One resolution per subscription {#sources-push-resolution}
-
-<!-- surfex: deferred dco-tek/macaw/macaw_data#13: increments merged only at the held resolution -->
 
 **An increment applies only to a held relation at the same resolution** (`served.resolution`, `nil` equal only to `nil`). A source keeps one resolution for a subscription, fixed when it starts.
 - **On a mismatch, nothing is merged.** The increment is `{:resolution, held, given}` in `errors`, `Push.refetch/1` answers the same, and the holder fetches a snapshot at the subscription's resolution (§4.1). The increment's number is consumed, so the snapshot hands off as any does.
