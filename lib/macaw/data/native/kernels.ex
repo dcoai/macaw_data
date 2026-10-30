@@ -18,8 +18,8 @@ case Toolchain.decide(
       @mode Application.compile_env(:macaw_data, :native, :optional)
       @toolchain Toolchain.detect()
 
-      # `ladder_dirty` is `ladder` on a dirty CPU scheduler, for a view past
-      # `Macaw.Data.Native.sync_rows/0` (spec/04 §1.7).
+      # Each `_dirty` kernel is its namesake on a dirty CPU scheduler, for a call past what a
+      # normal scheduler takes within 1 ms (`Macaw.Data.Native.scheduler/1`, spec/04 §1.7).
       use Zig,
         otp_app: :macaw_data,
         zig_code_path: "kernels.zig",
@@ -27,7 +27,11 @@ case Toolchain.decide(
         nifs: [
           abi: [],
           ladder: [],
-          ladder_dirty: [alias: :ladder, concurrency: :dirty_cpu]
+          ladder_dirty: [alias: :ladder, concurrency: :dirty_cpu],
+          m4_finish: [],
+          m4_finish_dirty: [alias: :m4_finish, concurrency: :dirty_cpu],
+          lttb_finish: [],
+          lttb_finish_dirty: [alias: :lttb_finish, concurrency: :dirty_cpu]
         ]
 
       @doc false
@@ -69,6 +73,19 @@ case Toolchain.decide(
       @doc false
       def ladder_dirty(_xf, _xd, _xv, _yf, _yd, _yv, _first, _count, _kind, _k),
         do: :erlang.nif_error(:not_built)
+
+      @doc false
+      def m4_finish(_pieces, _k, _extent, _lo, _hi, _width), do: :erlang.nif_error(:not_built)
+
+      @doc false
+      def m4_finish_dirty(_pieces, _k, _extent, _lo, _hi, _width),
+        do: :erlang.nif_error(:not_built)
+
+      @doc false
+      def lttb_finish(_pieces, _n), do: :erlang.nif_error(:not_built)
+
+      @doc false
+      def lttb_finish_dirty(_pieces, _n), do: :erlang.nif_error(:not_built)
     end
 
   {:fail, message} ->

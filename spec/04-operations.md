@@ -501,7 +501,26 @@ a call over sync_rows/0 rows, 8,192, each its own bucket, the largest answer a c
 for generated segments of either number type, mixed types, values past int64, gaps and runs, a piece packed and read back is the segments, term for term, and read as a view's it is each gap and bucket with that view
 ```
 
+#### 4.5.4 The finishes' native kernels {#operations-ladder-finish}
+
+**`m4`'s and `lttb`'s finishes run in native kernels where the kernels are loaded** (§1.7, macaw_data#38). `finish/3` hands the merged partial's packed pieces (§4.5.3), coarsened to the step's level, to `m4_finish` or `lttb_finish`, which read them in place and answer the refs the step gathers:
+- **The merge read** is `Ladder.runs/1`'s: a run ending one piece and one starting the next are one run, the bucket they share merged by `summary/2`; a gap ending one and one starting the next are one gap, the first; a run whose buckets fall out of order across pieces is sorted by bucket and each bucket's summaries merged.
+- **`m4`:** each run's buckets folded into the pixel column their start lies in, `floor((b·2^k − lo) / (hi − lo) · width)` clamped to `[0, width − 1]` (every bucket column 0 when the extent is a point or none), and each column's first, least, greatest and last refs, with each gap's. The refs are the Elixir path's (`M4.refs/3`) as a set, which is all the gather reads.
+- **`lttb`:** the candidates of `Lttb`'s Elixir path, each run's first and last points and each bucket's least and greatest, each once in input order, with each gap; then `Reduce.lttb/3` to `n` over them: the run's share `max(min(len, 2), floor(n·len / defined))`, the canonical algorithm's buckets of `every` points, each bucket's mean point summed from the integer 0 and the largest triangle, earliest on a tie. The refs are the Elixir path's (`Lttb.refs/2`), in order.
+- **Its arithmetic is Erlang's, operation for operation:** two integers stay an exact integer; an integer meeting a float is first converted to the nearest float; `/` is a float division; floats in Zig's strict mode, no expression reordered or contracted. The expression order is `column_of/3`'s and `Reduce`'s.
+- **It hands the partial back** (`:fallback`) where it can't answer exactly that way: a piece kept as a term (§4.5.3), pieces whose points are of different types, an extent or an intermediate integer past int64, a level above 62 or below −1074 (a bucket no int64 or float multiplies exactly), and anything Erlang would raise on (a float that is not finite, a division by zero). The Elixir path then answers.
+- **Its cost:** tens of nanoseconds a bucket, no term built but the refs it answers. A call over at most `Native.finish_buckets/0` buckets (2,048) runs on a normal scheduler, within 1 ms even when every bucket gives `lttb` two candidates; a larger one on a dirty CPU scheduler (`Native.finish_scheduler/1`).
+
+```test:operations-ladder-finish-identical
+for generated rows of int, float and time x on linear, time and log scales, integer and float y, gaps, unsorted and repeated x, chunked several ways, at several widths, n and levels, m4_finish's refs equal M4.refs/3's as a set and lttb_finish's equal Lttb.refs/2's in order, the kernels answering every such partial, and the steps' tables equal with and without the kernels; a piece kept as a term, or an extent past int64, is handed back
+```
+
+```test:operations-ladder-finish-bound
+a finish over finish_buckets/0 buckets, 2,048, each giving lttb two candidates, takes under 1 ms on a normal scheduler, and a larger one runs on a dirty scheduler with the Elixir path's refs
+```
+
 ### 4.6 sort {#operations-sort}
+
 
 `field` (`:field`, required); `order` (`{:enum, [:ascending, :descending]}`, `:ascending`). The rows **stably** sorted by the reading of `field` under `Enum.sort_by/3`'s term ordering, in that direction. **Outputs:** the input's columns. **Class:** global (§1.4): each chunk's readings of `field`, then every row sorted and gathered across the chunks.
 

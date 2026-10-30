@@ -507,6 +507,48 @@ defmodule Macaw.Data.Operations.Transforms.Ladder do
   def ref(nil, {ref, _s, _y}), do: ref
   def ref(v, {i, _s, _y}), do: {v, i}
 
+  # -- the finishes' kernels (spec/04 §4.5.4) -------------------------------------------------
+
+  @doc false
+  # `M4.refs/3` by the native kernel, reading the merged partial's packed pieces in place,
+  # where the kernels are loaded: the same refs (as a set: the gather reads them in any
+  # order), or `:fallback` where the kernel hands the partial back (a piece kept as a term,
+  # an integer past 64 bits, a raise), and the Elixir path answers.
+  @spec m4_native(partial(), {number(), number()} | nil, pos_integer()) :: [ref()] | :fallback
+  def m4_native({k, _views, pieces}, extent, width) do
+    if Native.active?() do
+      {at, lo, hi} =
+        case extent do
+          {lo, hi} when hi > lo -> {1, lo, hi}
+          _point_or_none -> {0, 0, 0}
+        end
+
+      case Native.finish_scheduler(buckets(pieces)) do
+        :normal -> Kernels.m4_finish(pieces, k, at, lo, hi, width)
+        :dirty -> Kernels.m4_finish_dirty(pieces, k, at, lo, hi, width)
+      end
+    else
+      :fallback
+    end
+  end
+
+  @doc false
+  # `Lttb.refs/2` by the native kernel, as `m4_native/3`: the same refs in the same order.
+  @spec lttb_native(partial(), pos_integer()) :: [ref()] | :fallback
+  def lttb_native({_k, _views, pieces}, n) do
+    if Native.active?() do
+      case Native.finish_scheduler(buckets(pieces)) do
+        :normal -> Kernels.lttb_finish(pieces, n)
+        :dirty -> Kernels.lttb_finish_dirty(pieces, n)
+      end
+    else
+      :fallback
+    end
+  end
+
+  # About the buckets the pieces hold, read off their sizes (a bucket is 88 bytes).
+  defp buckets(pieces), do: Enum.reduce(pieces, 0, fn {_v, p}, n -> n + div(byte_size(p), 88) end)
+
   @doc """
   The rows at `refs` (`{view, row}`, any order) gathered from their views, in input order,
   each view's run named by `key` and the rows taken: a table of the input's columns.

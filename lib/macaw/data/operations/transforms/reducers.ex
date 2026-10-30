@@ -95,14 +95,26 @@ defmodule Macaw.Data.Operations.Transforms.Lttb do
           merged = Ladder.coarsen(merged, max(elem(merged, 0), bound.level))
 
         refs =
-          merged
-          |> Ladder.runs()
-          |> Enum.flat_map(&candidates/1)
-          |> Reduce.lttb(n, fn {_ref, s, y} -> {s, y} end)
-          |> Enum.map(&elem(&1, 0))
+          case Ladder.lttb_native(merged, n) do
+            :fallback -> refs(merged, n)
+            refs -> refs
+          end
 
         Ladder.gather(views, refs, input, key)
     end
+  end
+
+  @doc false
+  # The rows the selection keeps, `{view, row}` in order, by the Elixir path: the merged
+  # partial's candidates, then `Reduce.lttb/3`. Where the kernels are loaded,
+  # `Ladder.lttb_native/2` answers the same refs, and this is the reference it is held to.
+  @spec refs(Ladder.partial(), pos_integer()) :: [Ladder.ref()]
+  def refs(merged, n) do
+    merged
+    |> Ladder.runs()
+    |> Enum.flat_map(&candidates/1)
+    |> Reduce.lttb(n, fn {_ref, s, y} -> {s, y} end)
+    |> Enum.map(&elem(&1, 0))
   end
 
   # A segment's candidates in input order, each once: a gap as itself; a run's first and
@@ -230,18 +242,31 @@ defmodule Macaw.Data.Operations.Transforms.M4 do
 
   def finish(%{"width" => width} = node, merged, %{input: input, key: key} = at) do
     bound = bind(node, input, at.context)
-    {k, views, _pieces} = merged = Ladder.coarsen(merged, max(elem(merged, 0), bound.level))
-    column = column_of(bound.extent, width, k)
+    {_k, views, _pieces} = merged = Ladder.coarsen(merged, max(elem(merged, 0), bound.level))
 
     refs =
-      merged
-      |> Ladder.runs()
-      |> Enum.flat_map(fn
-        {:gap, ref} -> [ref]
-        {:run, [{b, s} | rest]} -> columns(rest, column, column.(b), s, [])
-      end)
+      case Ladder.m4_native(merged, bound.extent, width) do
+        :fallback -> refs(merged, bound.extent, width)
+        refs -> refs
+      end
 
     Ladder.gather(views, refs, input, key)
+  end
+
+  @doc false
+  # The rows each pixel column keeps, `{view, row}` in any order, by the Elixir path. Where
+  # the kernels are loaded, `Ladder.m4_native/3` answers the same set, and this is the
+  # reference it is held to.
+  @spec refs(Ladder.partial(), {number(), number()} | nil, pos_integer()) :: [Ladder.ref()]
+  def refs({k, _views, _pieces} = merged, extent, width) do
+    column = column_of(extent, width, k)
+
+    merged
+    |> Ladder.runs()
+    |> Enum.flat_map(fn
+      {:gap, ref} -> [ref]
+      {:run, [{b, s} | rest]} -> columns(rest, column, column.(b), s, [])
+    end)
   end
 
   # A run's ascending buckets folded into their pixel columns in one pass: a bucket's

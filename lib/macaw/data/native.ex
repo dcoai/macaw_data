@@ -21,8 +21,9 @@ defmodule Macaw.Data.Native do
   @key {__MODULE__, :loaded?}
   @elixir {__MODULE__, :elixir}
   # The interface version kernels.zig answers (`abi/0`), so a stale library is not used.
-  @abi 3
+  @abi 4
   @sync_rows 8_192
+  @finish_buckets 2_048
 
   @doc "Whether the native kernels are built and loaded: decided once, at the application's start."
   @spec loaded?() :: boolean()
@@ -69,6 +70,19 @@ defmodule Macaw.Data.Native do
   @spec scheduler(non_neg_integer()) :: :normal | :dirty
   def scheduler(rows) when rows <= @sync_rows, do: :normal
   def scheduler(_rows), do: :dirty
+
+  @doc """
+  The most buckets a finish kernel (`m4`'s columns, `lttb`'s selection) reads on a normal
+  scheduler, #{@finish_buckets}: a few tens of nanoseconds a bucket, well within the BEAM's
+  1 ms rule; past it the kernel runs on a dirty CPU scheduler.
+  """
+  @spec finish_buckets() :: pos_integer()
+  def finish_buckets, do: @finish_buckets
+
+  @doc "Where a finish kernel over `buckets` runs: `:normal` up to `finish_buckets/0`, else `:dirty`."
+  @spec finish_scheduler(non_neg_integer()) :: :normal | :dirty
+  def finish_scheduler(buckets) when buckets <= @finish_buckets, do: :normal
+  def finish_scheduler(_buckets), do: :dirty
 
   @doc false
   # At the application's start: whether the kernels loaded, held in `:persistent_term`. A
