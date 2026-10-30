@@ -96,11 +96,48 @@ defmodule Macaw.Data.Operations.Step do
     parts
   end
 
-  # A table holding a chunk whose size is pending (a cold chunk under a predicate delete)
-  # is warmed first, as every read of one is (spec/01 §1.1.4).
-  defp warmed(table) do
-    if Enum.any?(Table.chunks(table), &(elem(&1, 2) == nil)), do: Table.warm(table), else: table
+  @doc """
+  The table with every chunk whose digest or size is pending (a cold chunk under a
+  predicate delete) warmed, as every read of one is (spec/01 §1.1.4); any other table as
+  it is. `parts/4` and `run/4` warm their input so; a caller merging parts it holds warms
+  the input it merges them over the same way, so the output names the same versions.
+  """
+  @spec warmed(Table.t()) :: Table.t()
+  def warmed(%Table{} = table) do
+    if Enum.any?(Table.chunks(table), fn {chunk, _first, count} ->
+         count == nil or Chunk.version(chunk) == nil
+       end),
+       do: Table.warm(table),
+       else: table
   end
+
+  @doc """
+  A combine's part of a chunk with a delta, by inverse update from its base's part
+  (spec/04 §1.5): `base` is the part the step computed for the chunk's base, under the
+  same step key (a cache holds it under `{Chunk.id/1, Chunk.base_version/1, key}`).
+  `{:ok, part}`, equal to `chunk/3`'s, where the step's update is exact (counts, `bin`
+  counts, integer sums); `:recompute` where it is not, or the part's view is not its whole
+  chunk, or the chunk has no delta. Only the delta's rows are worked.
+  """
+  @spec update(module(), map(), part(), term()) :: {:ok, term()} | :recompute
+  def update(module, node, %{view: {chunk, 0, count}, context: context}, base) do
+    if module.class(node) == :combine and function_exported?(module, :update, 4) and
+         Chunk.delta?(chunk) and count == Chunk.size(chunk) and Chunk.version(chunk) != nil do
+      changes = Chunk.changes(chunk)
+
+      change = %{
+        changes
+        | removed: module.chunk(node, changes.removed, context),
+          inserted: module.chunk(node, changes.inserted, context)
+      }
+
+      module.update(node, base, change, context)
+    else
+      :recompute
+    end
+  end
+
+  def update(_module, _node, _part, _base), do: :recompute
 
   @doc """
   One chunk's part. A per-row step's is the views its selection keeps: none, the input's

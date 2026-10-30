@@ -35,6 +35,7 @@ Each behavior is a module's declaration of what it reads and what it answers, so
 | `reduces() :: {String.t(), pos_integer()}` *(optional)* | a **reducer**: the option holding the target count, and the rows each unit of it keeps at most (`lttb`: `{"n", 1}`; `m4`: `{"width", 4}`), so a budget can name it (§7) |
 | `prepare(nodes, table, context) :: term()` *(optional)* | computed once per design and shared by every mark that reads it (a force layout's positions), passed to `run/3` in the context under `prepared`; the drawer's, never called here |
 | `class/1`, `reads/0`, `bind/3`, `resolve/3`, `chunk/3`, `keyed/1`, `combine/3`, `finish/3` *(optional)* | a **column-native step**'s class, the context it reads, its part per chunk and its merge (§1.4) |
+| `update(node, part, change, resolved)` *(optional, a combine's)* | its **inverse update** where exact (§1.5): a chunk's part from its base's part and its delta's changes, `{:ok, part}` or `:recompute` |
 
 `run/3` is given **the node checked** (§3.1): its keys strings, each of the op's options present with its default filled in, an enum value its declared atom, a frame-bound value resolved to a number. `outputs/2` is given the same node. `outputs/2` holds for `run/3`: for every fixture of the op's tests, the columns `run/3` answers are, by name and type, the ones `outputs/2` names.
 
@@ -55,6 +56,7 @@ a transform declares its name, options, needs and outputs and runs a checked nod
 | `reduce(values, options) :: term()` | the value of the readings, **`nil` readings already dropped**: a gap is absence, never zero (01 §1.1) |
 | `init(options)`, `step(state, value, options)`, `finish(state, options)` *(optional, together)* | the streaming form chunked windows use, over the same readings in the same order: `finish(Enum.reduce(values, init(options), &step(&2, &1, options)), options)` equals `reduce(values, options)` |
 | `merge(state, state, options)` *(optional, with the streaming form)* | the **combining form**: the state of two runs of readings, the first before the second, from each run's state. It is associative, so a step's per-chunk states merge under any grouping (§1.4): `merge(state(a), state(b))` finishes to the value of `state(a ++ b)` |
+| `retract(state, state, options)` *(optional, with the combining form)* | its **inverse, where exact** (§1.5): the state of a run's readings with some removed, from the run's state and the removed readings' state, `{:ok, state}` equal to the state of the readings that remain, or `:inexact`. `count` has it; `sum` has it while every reading is an integer (once a float is among them the sum is a float, where the remaining integers' would be an integer); no other statistic has it |
 
 ```test:operations-aggregate-callbacks
 an aggregate declares its name, options, output type and whether it keeps the unit, and reduces readings with nils dropped; where it has the streaming form, the stream equals reduce on every fixture, chunked at every split; where it has the combining form, merging the states of two runs equals the state of both
@@ -143,6 +145,42 @@ a chunk's step key is the step's identity, the context as it resolved for the ch
 
 ```test:operations-step-cost
 take n: 100 reads only the chunks it returns, its work growing by a step a chunk and never with the rows; a chain of filter, window and take calls neither Table.rows/1 nor Operations.table/2
+```
+
+### 1.5 Caching: owned by the caller {#operations-cache}
+
+**The operations are pure** (macaw_data#9 §6): they hold no cache and no hidden state. The caller owns the cache of steps' per-chunk parts, since the frame or the feed knows when a chunk leaves its window. `Macaw.Data.Operations.Cache` is the example caller, a plain value the caller holds and passes back.
+
+- **The key** of a part is `{logical id, version, step key}`: `Chunk.id/1`, where the chunk sits ([01 §1.1.3](01-sources.md#sources-table-chunk-identity)); `Chunk.version/1`, its content digest, or a step output's derivation digest; and the part's step key (§1.4). **The version decides validity:** any rebuild of the same contents (a re-fetch, a restart, another process) has the same digest and hits, and different contents never do. **The logical id scopes eviction:** `Cache.prune/2` keeps only the parts of chunks the tables given still hold, at their version or their base version.
+- **A digest is never computed on lookup.** The version is read from the chunk, computed once when its state was made. A chunk whose digest is pending has no version and never matches a key.
+- **`Cache.run(cache, module, node, table, context)`** answers `{table, cache}`: for each of `Step.parts/4`'s parts, the part held under its key is **reused**; else a chunk with a delta whose base's part is held is **updated** by inverse, where that is exact; else the part is **computed** (`Step.chunk/3`). Only the merge (`Step.merge/6`) is recomputed. The table equals `Step.run/4`'s, a per-chunk run with cached parts equal to a full run. `Cache.run/5` records how the last run came by its parts (`last`: `reused`, `updated`, `computed`).
+- **Compaction keeps every cached part:** it changes neither a chunk's logical id nor its content digest (01 §1.1.4).
+- **What is reused frame after frame:** scale-domain extremes, M4 and `lttb` partials within a bucket level (§4.5.1), and any per-chunk part of a settled chunk. A drawn path segment is not free: it is reusable only if the caller applies the scale as a transform when drawing, which is the caller's concern.
+
+**A delta's change to a cached part** (01 §1.1.4):
+
+- **Inverse update, where exact.** A chunk with a delta keeps the version of its base (`Chunk.base_version/1`, its content digest before the delta), under which a cache held the base's part. `Step.update(module, node, part, base_part)` computes the part as `base ⊕ part(inserted) ⊖ part(removed)`: the step's `update/4` is given the parts of the base rows the delta removes and of its side rows, under the context the chunk's part resolved to, and where each base and side row lies in the chunk as read. Its result **equals the part the chunk as read computes**, so every path gives the same result. A delta is always over its base, so successive changes never update an update, and nothing drifts. Only the delta's rows are worked. It applies only to a part of a whole chunk (a view of a run recomputes). The exact domains:
+  - **counts:** `aggregate` with `count`, by groups or none;
+  - **`bin` counts:** `bin` without `fn`, each bin's readings kept in the order they read;
+  - **integer sums:** `sum`, and `aggregate` with `sum`, while every reading is an integer (`retract/3`, §1.2).
+
+  A group's order of first appearance is kept: a group none of whose rows remain is gone, and the groups are ordered by where their first rows read. A group whose first row was removed has its next first row unknown without reading the chunk, so that chunk recomputes.
+- **Recompute otherwise:** a floating-point sum or mean, min and max, M4's extremes, `lttb`'s preselection and every other step recompute that one chunk, once per content digest. Subtraction drifts in floating point, which would break the property that every path gives the same result.
+
+```test:operations-cache-reuse
+a per-chunk run with cached parts equals a full run, for every combine, per-row and global step; a second run over the same table reuses every part and hashes no content; a rebuilt table of the same contents hits every part, and one with a chunk's contents changed computes that chunk alone; a chunk whose digest is pending is warmed before its key is read
+```
+
+```test:operations-cache-inverse
+for generated settled tables and changes to them over about 40 seeds, count by groups, bin counts and an integer sum update each changed chunk by inverse from its base's cached part, equal to the part the chunk as read computes, and the run equal to a full run
+```
+
+```test:operations-cache-recompute
+a float sum, a mean, min, max, m4 and lttb recompute a changed chunk rather than update it, equal to a full run; a group whose first row is removed recomputes its chunk
+```
+
+```test:operations-cache-prune
+prune keeps the parts of the chunks the tables hold, at their version or base version, and drops a chunk's that left the window or a version no chunk has
 ```
 
 ## 2. Packages and the registry {#operations-registry}

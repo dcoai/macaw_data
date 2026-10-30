@@ -134,6 +134,8 @@ defmodule Macaw.Data.Operations.Aggregates do
     def finish(n, _options), do: n
     @impl true
     def merge(a, b, _options), do: a + b
+    @impl true
+    def retract(n, removed, _options), do: {:ok, n - removed}
   end
 
   defmodule Distinct do
@@ -299,6 +301,11 @@ defmodule Macaw.Data.Operations.Aggregates do
     def finish(sum, _options), do: Exact.value(sum)
     @impl true
     def merge(a, b, _options), do: Exact.merge(a, b)
+    # Exact for integers alone: once a float is among the readings, the sum is a float
+    # whatever is removed, where the remaining integers' would be an integer.
+    @impl true
+    def retract({a, nil}, {b, nil}, _options), do: {:ok, {a - b, nil}}
+    def retract(_sum, _removed, _options), do: :inexact
   end
 
   defmodule Mean do

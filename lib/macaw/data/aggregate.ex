@@ -56,5 +56,13 @@ defmodule Macaw.Data.Aggregate do
   """
   @callback merge(term(), term(), options()) :: term()
 
-  @optional_callbacks init: 1, step: 3, finish: 2, merge: 3
+  @doc """
+  The inverse of the combining form, where it is exact (spec/04 §1.2, §1.5): the state of
+  a run of readings with some of them removed, from the run's state and the removed
+  readings' state, `{:ok, state}`; `:inexact` where the subtraction could differ from
+  the state of the remaining readings, as a floating-point sum's would.
+  """
+  @callback retract(term(), term(), options()) :: {:ok, term()} | :inexact
+
+  @optional_callbacks init: 1, step: 3, finish: 2, merge: 3, retract: 3
 end

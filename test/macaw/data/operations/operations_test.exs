@@ -41,7 +41,8 @@ defmodule Macaw.Data.OperationsTest do
                  prepare: 3,
                  reads: 0,
                  reduces: 0,
-                 resolve: 3
+                 resolve: 3,
+                 update: 4
                ]
 
       refute function_exported?(Ops.Double, :reduces, 0)
@@ -74,6 +75,7 @@ defmodule Macaw.Data.OperationsTest do
                finish: 2,
                init: 1,
                merge: 3,
+               retract: 3,
                step: 3
              ]
 
@@ -82,6 +84,27 @@ defmodule Macaw.Data.OperationsTest do
       registry = registry()
       assert Operations.aggregate(registry, "spread", [3, nil, 9, 4], %{}) == {:ok, 6}
       assert Operations.aggregate(registry, :scaled, [1, 2, nil], %{scale: 10}) == {:ok, 30}
+    end
+
+    @tag verifies: "operations-aggregate-callbacks"
+    test "the inverse, where exact, is the state of the readings that remain" do
+      alias Macaw.Data.Operations.Aggregates.{Count, Mean, Sum}
+
+      state = fn module, values ->
+        Enum.reduce(values, module.init(%{}), &module.step(&2, &1, %{}))
+      end
+
+      for {kept, removed} <- [{[1, 2], [3]}, {[], [4, 5]}, {[7], []}] do
+        all = state.(Count, kept ++ removed)
+        assert Count.retract(all, state.(Count, removed), %{}) == {:ok, state.(Count, kept)}
+        all = state.(Sum, kept ++ removed)
+        assert Sum.retract(all, state.(Sum, removed), %{}) == {:ok, state.(Sum, kept)}
+      end
+
+      # A float among the readings: the remaining integers' sum would be an integer.
+      assert Sum.retract(state.(Sum, [1, 2.5]), state.(Sum, [2.5]), %{}) == :inexact
+      assert Sum.retract(state.(Sum, [1, 2.5]), state.(Sum, [1]), %{}) == :inexact
+      refute function_exported?(Mean, :retract, 3)
     end
 
     @tag verifies: "operations-aggregate-callbacks"

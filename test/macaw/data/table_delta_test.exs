@@ -365,6 +365,43 @@ defmodule Macaw.Data.TableDeltaTest do
     end
   end
 
+  describe "the read view" do
+    @tag verifies: "table-read-view"
+    test "a chunk with a delta is read through its state's view, built once" do
+      rows = for t <- 0..9, do: row(Enum.at(["a", "b"], rem(t, 2)), t, t)
+      table = table(rows)
+      [{base, _, _}] = Table.chunks(table)
+
+      once = apply!(table, settled: 10, retract: [row("a", 4, 4)])
+      [{chunk, 0, 9}] = Table.chunks(once)
+      assert Chunk.base_version(chunk) == Chunk.digest(base)
+      refute Chunk.version(chunk) == Chunk.digest(base)
+
+      read =
+        Macaw.Data.Test.Trace.calls({Macaw.Data.Table.Delta, :read, 2}, fn ->
+          assert Chunk.values(chunk, "t", 0, 9) == [0, 1, 2, 3, 5, 6, 7, 8, 9]
+          assert Chunk.at(chunk, "v", 4) == 5
+          gathered = Chunk.gather(chunk, 2, 5, [0, 4], :key)
+          assert Chunk.values(gathered, "t", 0, 2) == [2, 7]
+          registry = Macaw.Data.Operations.registry()
+          window = %{op: "window", field: "t", from: [6, :second]}
+          out = Macaw.Data.Operations.apply!(registry, [window], once)
+          assert Table.column(out, "t") == [3, 5, 6, 7, 8, 9]
+        end)
+
+      assert read == []
+
+      # A later change keeps the base version; compaction makes the read the base.
+      twice = apply!(once, settled: 10, insert: [row("a", 4, 40)])
+      [{again, _, _}] = Table.chunks(twice)
+      assert Chunk.base_version(again) == Chunk.digest(base)
+
+      [{compacted, _, _}] = Table.chunks(Table.compact(twice))
+      assert Chunk.base_version(compacted) == Chunk.digest(compacted)
+      assert Chunk.digest(compacted) == Chunk.digest(again)
+    end
+  end
+
   describe "compaction" do
     @tag verifies: "table-compaction"
     test "a delta that reaches a quarter of its base is compacted, keeping id, digest and version" do

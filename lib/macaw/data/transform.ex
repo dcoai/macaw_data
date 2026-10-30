@@ -106,7 +106,19 @@ defmodule Macaw.Data.Transform do
   """
   @callback keyed(node_map()) :: map()
 
+  @doc """
+  A combine's **inverse update** (spec/04 §1.5): a chunk's part, from its base's part and
+  its delta's changes, `{:ok, part}` equal to the part the chunk as read would compute;
+  `:recompute` where that is not exact. `change` holds `removed` and `inserted`, the
+  parts of the base rows the delta removes and of its side rows, under the context the
+  chunk's part resolved to; `gone`, the removed rows' base indexes; and `base` and
+  `side`, where each base row and each side row lies in the chunk as read (`nil` for a
+  removed row). Only counts, `bin` counts and integer sums have one.
+  """
+  @callback update(node_map(), term(), map(), term()) :: {:ok, term()} | :recompute
+
   @optional_callbacks keyed: 1,
+                      update: 4,
                       reduces: 0,
                       prepare: 3,
                       class: 1,

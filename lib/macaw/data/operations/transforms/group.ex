@@ -59,7 +59,9 @@ defmodule Macaw.Data.Operations.Transforms.Aggregate do
   def bind(node, table, _context), do: group_bind(node, table)
 
   @impl true
-  def resolve(_node, _view, bound), do: bound
+  # The bound context alone: a chunk's part depends not on where it sits (`:at`, `:rows`),
+  # so its step key holds while other chunks come and go.
+  def resolve(_node, _view, bound), do: Map.drop(bound, [:at, :rows])
 
   @impl true
   def chunk(node, view, bound) do
@@ -71,6 +73,15 @@ defmodule Macaw.Data.Operations.Transforms.Aggregate do
 
   @impl true
   def combine(node, a, b), do: group_combine(node["fn"], node, a, b)
+
+  # An inverse update, where the aggregate's is exact: count, and a sum of integers.
+  @impl true
+  def update(node, partial, change, _bound) do
+    case class(node) do
+      :combine -> group_update(node["fn"], node, partial, change)
+      :global -> :recompute
+    end
+  end
 
   @impl true
   def finish(node, partial, at) do
@@ -102,8 +113,9 @@ defmodule Macaw.Data.Operations.Transforms.Aggregate do
   end
 
   @doc false
-  # One chunk's groups: their keys in order of first appearance, and each one's state of
-  # the aggregate's streaming form over its readings, `nil`s dropped.
+  # One chunk's groups: their keys in order of first appearance, each one's state of the
+  # aggregate's streaming form over its readings, `nil`s dropped, and each one's first row
+  # in the view and its count of rows, which an inverse update reads (spec/04 §1.5).
   def group_chunk(node, aggregate, {_chunk, _first, count} = view, bound, op) do
     options = options(node, aggregate)
     readings = view_readings(view, bound.field, op)
@@ -114,40 +126,113 @@ defmodule Macaw.Data.Operations.Transforms.Aggregate do
         by -> by |> Enum.map(&Transforms.view_values(view, &1)) |> Enum.zip_with(& &1)
       end
 
-    {order, groups} =
+    {order, groups, rows, _i} =
       keys
       |> Enum.zip(readings)
-      |> Enum.reduce({[], %{}}, fn {key, reading}, {order, groups} ->
-        {order, state} =
+      |> Enum.reduce({[], %{}, %{}, 0}, fn {key, reading}, {order, groups, rows, i} ->
+        {order, state, rows} =
           case groups do
-            %{^key => state} -> {order, state}
-            _ -> {[key | order], aggregate.init(options)}
+            %{^key => state} ->
+              {order, state, Map.update!(rows, key, fn {first, n} -> {first, n + 1} end)}
+
+            _ ->
+              {[key | order], aggregate.init(options), Map.put(rows, key, {i, 1})}
           end
 
         state = if reading == nil, do: state, else: aggregate.step(state, reading, options)
-        {order, Map.put(groups, key, state)}
+        {order, Map.put(groups, key, state), rows, i + 1}
       end)
 
-    {Enum.reverse(order), groups}
+    {Enum.reverse(order), groups, rows}
   end
 
   @doc false
   # Two runs' groups, the first's before the second's: keys in order of first appearance,
-  # each key's states merged by the aggregate's combining form.
-  def group_combine(aggregate, node, {order_a, groups_a}, {order_b, groups_b}) do
+  # each key's states merged by the aggregate's combining form. The rows are a chunk's
+  # alone, so a merged partial has none.
+  def group_combine(aggregate, node, {order_a, groups_a, _rows_a}, {order_b, groups_b, _rows_b}) do
     options = options(node, aggregate)
 
     groups =
       Map.merge(groups_a, groups_b, fn _key, a, b -> aggregate.merge(a, b, options) end)
 
-    {order_a ++ Enum.reject(order_b, &Map.has_key?(groups_a, &1)), groups}
+    {order_a ++ Enum.reject(order_b, &Map.has_key?(groups_a, &1)), groups, nil}
+  end
+
+  @doc false
+  # An inverse update of one chunk's groups (spec/04 §1.5): the base's partial, less the
+  # removed rows' states and plus the inserted rows', where the aggregate's `retract/3` is
+  # exact. A group none of whose rows remain is gone; the groups are in order of first
+  # appearance in the chunk as read, each first row placed where it reads. A group whose
+  # first row was removed has its next first row unknown here, so it recomputes, as does
+  # an aggregate without an exact inverse.
+  def group_update(aggregate, node, {_order, groups, rows}, change) when is_map(rows) do
+    Code.ensure_loaded!(aggregate)
+    options = options(node, aggregate)
+    {_r_order, r_groups, r_rows} = change.removed
+    {i_order, i_groups, i_rows} = change.inserted
+
+    with true <- function_exported?(aggregate, :retract, 3),
+         {:ok, groups, rows} <-
+           retracted(aggregate, options, groups, rows, r_groups, r_rows, change) do
+      firsts =
+        Map.new(rows, fn {key, {first, n}} -> {key, {elem(change.base, first), n}} end)
+
+      {groups, firsts} =
+        Enum.reduce(i_order, {groups, firsts}, fn key, {groups, firsts} ->
+          {j, n} = Map.fetch!(i_rows, key)
+          at = elem(change.side, j)
+          state = Map.fetch!(i_groups, key)
+
+          case firsts do
+            %{^key => {first, m}} ->
+              {Map.update!(groups, key, &aggregate.merge(&1, state, options)),
+               Map.put(firsts, key, {min(first, at), m + n})}
+
+            _ ->
+              {Map.put(groups, key, state), Map.put(firsts, key, {at, n})}
+          end
+        end)
+
+      order =
+        firsts |> Enum.sort_by(fn {_key, {first, _n}} -> first end) |> Enum.map(&elem(&1, 0))
+
+      {:ok, {order, groups, firsts}}
+    else
+      _inexact -> :recompute
+    end
+  end
+
+  def group_update(_aggregate, _node, _merged, _change), do: :recompute
+
+  defp retracted(aggregate, options, groups, rows, r_groups, r_rows, change) do
+    Enum.reduce_while(r_rows, {:ok, groups, rows}, fn {key, {_j, n}}, {:ok, groups, rows} ->
+      {first, m} = Map.fetch!(rows, key)
+
+      cond do
+        m == n ->
+          {:cont, {:ok, Map.delete(groups, key), Map.delete(rows, key)}}
+
+        MapSet.member?(change.gone, first) ->
+          {:halt, :inexact}
+
+        true ->
+          case aggregate.retract(Map.fetch!(groups, key), Map.fetch!(r_groups, key), options) do
+            {:ok, state} ->
+              {:cont, {:ok, Map.put(groups, key, state), Map.put(rows, key, {first, m - n})}}
+
+            :inexact ->
+              {:halt, :inexact}
+          end
+      end
+    end)
   end
 
   @doc false
   def group_finish(%{"by" => by} = node, aggregate, merged, %{input: input, key: key}) do
     options = options(node, aggregate)
     by_names = by_list(by)
-    {order, groups} = merged || {[], %{}}
+    {order, groups, _rows} = merged || {[], %{}, nil}
     order = if order == [] and by_names == [], do: [[]], else: order
     states = Enum.map(order, &Map.get_lazy(groups, &1, fn -> aggregate.init(options) end))
     columns = group_outputs(node, aggregate, Operations.columns(input))
@@ -275,7 +360,9 @@ defmodule Macaw.Data.Operations.Transforms.Sum do
   def bind(node, table, _context), do: Aggregate.group_bind(node, table)
 
   @impl true
-  def resolve(_node, _view, bound), do: bound
+  # The bound context alone: a chunk's part depends not on where it sits (`:at`, `:rows`),
+  # so its step key holds while other chunks come and go.
+  def resolve(_node, _view, bound), do: Map.drop(bound, [:at, :rows])
 
   @impl true
   def chunk(node, view, bound),
@@ -283,6 +370,11 @@ defmodule Macaw.Data.Operations.Transforms.Sum do
 
   @impl true
   def combine(node, a, b), do: Aggregate.group_combine(Aggregates.Sum, node, a, b)
+
+  # An inverse update while every reading is an integer (spec/04 §1.5).
+  @impl true
+  def update(node, partial, change, _bound),
+    do: Aggregate.group_update(Aggregates.Sum, node, partial, change)
 
   @impl true
   def finish(node, merged, at), do: Aggregate.group_finish(node, Aggregates.Sum, merged, at)

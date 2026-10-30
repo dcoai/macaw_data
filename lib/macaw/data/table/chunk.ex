@@ -31,8 +31,10 @@ defmodule Macaw.Data.Table.Chunk do
     :digest,
     :derivation,
     :base_rows,
+    base_digest: nil,
     header: [],
     delta: nil,
+    read: nil,
     fetch: nil
   ]
 
@@ -47,8 +49,10 @@ defmodule Macaw.Data.Table.Chunk do
             digest: String.t() | nil | :pending,
             derivation: String.t() | nil,
             base_rows: non_neg_integer(),
+            base_digest: String.t() | nil,
             header: [{term(), atom()}],
             delta: Delta.t() | nil,
+            read: %{columns: %{term() => Column.t()}, refs: tuple()} | nil,
             fetch: (-> %{term() => Column.t()}) | nil
           }
 
@@ -85,6 +89,7 @@ defmodule Macaw.Data.Table.Chunk do
       digest: digest,
       derivation: nil,
       base_rows: size,
+      base_digest: digest,
       header: header,
       fetch: fetch
     }
@@ -113,6 +118,16 @@ defmodule Macaw.Data.Table.Chunk do
   def version(%__MODULE__{digest: :pending}), do: nil
   def version(%__MODULE__{digest: nil, derivation: derivation}), do: derivation
   def version(%__MODULE__{digest: digest}), do: digest
+
+  @doc """
+  The version of the chunk's base (spec/04 §1.5): its content digest before its delta,
+  the version a cache held the base's parts under, and an inverse update starts from.
+  The chunk's `version/1` when it has no delta; `nil` for a step's output, which has no
+  delta.
+  """
+  @spec base_version(t()) :: String.t() | nil
+  def base_version(%__MODULE__{delta: nil} = chunk), do: version(chunk)
+  def base_version(%__MODULE__{base_digest: digest}), do: digest
 
   @doc """
   A per-row step's output chunk of `input` (spec/01 §1.1.3): `columns` packed, nothing
@@ -196,6 +211,7 @@ defmodule Macaw.Data.Table.Chunk do
       digest: digest,
       derivation: nil,
       base_rows: size,
+      base_digest: digest,
       header: header
     }
   end
@@ -229,7 +245,29 @@ defmodule Macaw.Data.Table.Chunk do
   # The chunk as read, a row map each with where it is held: `{:base, i}` or `{:side, j}`.
   # A cold chunk is fetched for it.
   @spec read(t()) :: [{map(), {:base | :side, non_neg_integer()}}]
-  def read(%__MODULE__{} = chunk) do
+  def read(%__MODULE__{read: %{columns: columns, refs: refs}} = chunk) do
+    names = for {name, _type} <- chunk.header, do: name
+    n = tuple_size(refs)
+
+    rows =
+      case names do
+        [] ->
+          List.duplicate(%{}, n)
+
+        _ ->
+          names
+          |> Enum.map(&Column.values(Map.fetch!(columns, &1), n))
+          |> Enum.zip_with(&Map.new(Enum.zip(names, &1)))
+      end
+
+    Enum.zip(rows, Tuple.to_list(refs))
+  end
+
+  def read(%__MODULE__{} = chunk), do: read_base(chunk)
+
+  # The chunk as read, from its base and its delta: done once per state, when the state
+  # is made, and for a cold chunk's change that reads it.
+  defp read_base(%__MODULE__{} = chunk) do
     base = base(chunk)
     names = for {name, _type} <- chunk.header, do: name
     n = chunk.base_rows
@@ -263,18 +301,19 @@ defmodule Macaw.Data.Table.Chunk do
   end
 
   def with_delta(%__MODULE__{} = chunk, delta) do
-    state = %{chunk | delta: delta}
-    rows = Enum.map(read(state), &elem(&1, 0))
+    state = %{chunk | delta: delta, read: nil, base_digest: base_version(chunk)}
+    {rows, refs} = state |> read_base() |> Enum.unzip()
     {:ok, read} = pack(chunk.header, rows)
+    size = length(rows)
 
     digest =
       Digest.digest(
         chunk.header,
-        length(rows),
-        for({name, _} <- chunk.header, do: [fn -> {read[name], length(rows)} end])
+        size,
+        for({name, _} <- chunk.header, do: [fn -> {read[name], size} end])
       )
 
-    %{state | size: length(rows), digest: digest}
+    %{state | size: size, digest: digest, read: %{columns: read, refs: List.to_tuple(refs)}}
   end
 
   @doc false
@@ -285,7 +324,10 @@ defmodule Macaw.Data.Table.Chunk do
 
   def warm(%__MODULE__{fetch: fetch, delta: delta} = chunk) do
     loaded = %{chunk | columns: fetch.(), fetch: nil}
-    if delta == nil, do: loaded, else: with_delta(%{loaded | delta: nil}, delta)
+
+    if delta == nil,
+      do: loaded,
+      else: with_delta(%{loaded | delta: nil, digest: chunk.base_digest}, delta)
   end
 
   @doc false
@@ -295,10 +337,15 @@ defmodule Macaw.Data.Table.Chunk do
   def compact(%__MODULE__{delta: nil} = chunk), do: chunk
   def compact(%__MODULE__{fetch: fetch} = chunk) when fetch != nil, do: chunk
 
-  def compact(%__MODULE__{} = chunk) do
-    rows = Enum.map(read(chunk), &elem(&1, 0))
-    {:ok, columns} = pack(chunk.header, rows)
-    %{chunk | columns: columns, delta: nil, size: length(rows), base_rows: length(rows)}
+  def compact(%__MODULE__{read: %{columns: columns}} = chunk) do
+    %{
+      chunk
+      | columns: columns,
+        delta: nil,
+        read: nil,
+        base_rows: chunk.size,
+        base_digest: chunk.digest
+    }
   end
 
   @doc false
@@ -405,15 +452,16 @@ defmodule Macaw.Data.Table.Chunk do
     }
   end
 
-  # Every column's storage for the run, the chunk read through its delta once.
-  defp view_columns(%__MODULE__{delta: nil, fetch: nil, columns: columns}, first, count),
-    do: Map.new(columns, fn {name, col} -> {name, Column.slice(col, first, count)} end)
+  # Every column's storage for the run, as read: the base's, or the state's read view.
+  defp view_columns(%__MODULE__{} = chunk, first, count),
+    do: Map.new(as_read(chunk), fn {name, col} -> {name, Column.slice(col, first, count)} end)
 
-  defp view_columns(%__MODULE__{} = chunk, first, count) do
-    rows = Enum.map(read(chunk), &elem(&1, 0))
-    {:ok, read} = pack(chunk.header, rows)
-    Map.new(read, fn {name, col} -> {name, Column.slice(col, first, count)} end)
-  end
+  # The chunk's columns as read: its base's with no delta; with one, its state's read
+  # view, built once when the state was made (spec/01 §1.1.4), so no read rebuilds it. A
+  # cold chunk is fetched for it, as `Macaw.Data.Table.warm/1` would.
+  defp as_read(%__MODULE__{delta: nil, fetch: nil, columns: columns}), do: columns
+  defp as_read(%__MODULE__{read: %{columns: columns}}), do: columns
+  defp as_read(%__MODULE__{} = chunk), do: chunk |> warm() |> as_read()
 
   # The storage of column `name` sliced to the run of `count` rows from `first`.
   @doc false
@@ -421,13 +469,64 @@ defmodule Macaw.Data.Table.Chunk do
   def storage(%__MODULE__{size: size, columns: columns, delta: nil, fetch: nil}, name, 0, size),
     do: Map.fetch!(columns, name)
 
-  def storage(%__MODULE__{columns: columns, delta: nil, fetch: nil}, name, first, count),
-    do: columns |> Map.fetch!(name) |> Column.slice(first, count)
+  def storage(%__MODULE__{} = chunk, name, first, count),
+    do: chunk |> as_read() |> Map.fetch!(name) |> Column.slice(first, count)
 
-  # Through the delta, or fetched: the chunk as read, packed.
-  def storage(%__MODULE__{} = chunk, name, first, count) do
-    rows = Enum.map(read(chunk), &elem(&1, 0))
-    {:ok, read} = pack(chunk.header, rows)
-    read |> Map.fetch!(name) |> Column.slice(first, count)
+  @doc false
+  # A chunk's delta as the changes an inverse update applies to its base's part
+  # (spec/04 §1.5): `removed`, a view of the base's rows the delta takes out, and
+  # `inserted`, one of its side rows in the order they read, each a chunk of its own,
+  # nothing hashed; `gone`, the removed rows' base indexes; and where each base row and
+  # each inserted row lies in the chunk as read, `base` and `side` (tuples of positions,
+  # `nil` for a removed base row).
+  @spec changes(t()) :: map()
+  def changes(%__MODULE__{delta: delta, read: %{refs: refs}} = chunk) when delta != nil do
+    {base, side} =
+      refs
+      |> Tuple.to_list()
+      |> Enum.with_index()
+      |> Enum.reduce(
+        {Tuple.duplicate(nil, chunk.base_rows), Tuple.duplicate(nil, length(delta.side))},
+        fn
+          {{:base, i}, p}, {base, side} -> {put_elem(base, i, p), side}
+          {{:side, j}, p}, {base, side} -> {base, put_elem(side, j, p)}
+        end
+      )
+
+    gone = for i <- 0..(chunk.base_rows - 1)//1, elem(base, i) == nil, do: i
+    removed = Map.new(chunk.columns, fn {name, col} -> {name, Column.gather(col, gone)} end)
+
+    # The side rows in the order they read, so the inserted part reads them so too.
+    {side_rows, side} =
+      delta.side
+      |> Enum.with_index(&{&1, elem(side, &2)})
+      |> Enum.sort_by(&elem(&1, 1))
+      |> Enum.unzip()
+
+    {:ok, side_columns} = pack(chunk.header, side_rows)
+    removed = local(chunk, removed, length(gone))
+    inserted = local(chunk, side_columns, length(side_rows))
+
+    %{
+      removed: {removed, 0, length(gone)},
+      inserted: {inserted, 0, length(side_rows)},
+      gone: MapSet.new(gone),
+      base: base,
+      side: List.to_tuple(side)
+    }
+  end
+
+  # A chunk of the rows of `columns` under `chunk`'s header, held for a step's part alone:
+  # no id of its own and nothing hashed.
+  defp local(chunk, columns, size) do
+    %__MODULE__{
+      size: size,
+      columns: columns,
+      id: {chunk.id, :changes},
+      digest: nil,
+      derivation: nil,
+      base_rows: size,
+      header: chunk.header
+    }
   end
 end

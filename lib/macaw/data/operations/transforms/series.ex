@@ -80,33 +80,36 @@ defmodule Macaw.Data.Operations.Transforms.Bin do
   end
 
   @impl true
-  def resolve(_node, _view, bound), do: bound
+  # The bound context alone: a chunk's part depends not on where it sits (`:at`, `:rows`),
+  # so its step key holds while other chunks come and go.
+  def resolve(_node, _view, bound), do: Map.drop(bound, [:at, :rows])
 
   # One chunk's bins, under the edges they were binned by: per bin its state (a count, or
-  # the aggregate's) and its readings in order, reversed.
+  # the aggregate's), its readings in order, reversed, and the view's rows they were read
+  # at, reversed alike, which an inverse update reads (spec/04 §1.5).
   @impl true
   def chunk(node, view, %{name: name, field: field, edges: edges}) do
     {first, rest} = bin_state(node)
     last = tuple_size(edges) - 1
 
-    bins =
+    {bins, _row} =
       view
       |> Transforms.view_values(name)
-      |> Enum.reduce(%{}, fn
-        nil, bins ->
-          bins
+      |> Enum.reduce({%{}, 0}, fn
+        nil, {bins, row} ->
+          {bins, row + 1}
 
-        value, bins ->
+        value, {bins, row} ->
           value = Transforms.number!(value, field, name())
 
           case bin_of(edges, value, last) do
             nil ->
-              bins
+              {bins, row + 1}
 
             i ->
-              Map.update(bins, i, {rest.(first, value), [value]}, fn {state, values} ->
-                {rest.(state, value), [value | values]}
-              end)
+              {Map.update(bins, i, {rest.(first, value), [value], [row]}, fn {state, vs, rows} ->
+                 {rest.(state, value), [value | vs], [row | rows]}
+               end), row + 1}
           end
       end)
 
@@ -118,10 +121,47 @@ defmodule Macaw.Data.Operations.Transforms.Bin do
     merge = bin_merge(node)
 
     {edges,
-     Map.merge(a, b, fn _i, {state_a, values_a}, {state_b, values_b} ->
-       {merge.(state_a, state_b), values_b ++ values_a}
+     Map.merge(a, b, fn _i, {state_a, values_a, _rows_a}, {state_b, values_b, _rows_b} ->
+       {merge.(state_a, state_b), values_b ++ values_a, nil}
      end)}
   end
+
+  # An inverse update of a counting chunk's bins (spec/04 §1.5): each bin's readings
+  # without the base rows the delta removes, with its side rows' readings placed where
+  # they read, in order, and its count theirs. The edges are the bound context's, so the
+  # removed and inserted parts were binned by the same ones. A bin left empty is gone, as
+  # a chunk with no reading in it has none. With an aggregate it recomputes.
+  @impl true
+  def update(%{"fn" => nil}, {edges, bins}, change, _bound) do
+    {_edges, inserted} = change.inserted
+
+    kept =
+      Map.new(bins, fn {i, {_n, values, rows}} ->
+        entries =
+          for {value, row} <- Enum.zip(values, rows),
+              at = elem(change.base, row),
+              at != nil,
+              do: {at, value}
+
+        {i, entries}
+      end)
+
+    placed =
+      Enum.reduce(inserted, kept, fn {i, {_n, values, rows}}, kept ->
+        entries = for {value, j} <- Enum.zip(values, rows), do: {elem(change.side, j), value}
+        Map.update(kept, i, entries, &(entries ++ &1))
+      end)
+
+    bins =
+      for {i, entries} <- placed, entries != [], into: %{} do
+        entries = Enum.sort_by(entries, &elem(&1, 0), :desc)
+        {i, {length(entries), Enum.map(entries, &elem(&1, 1)), Enum.map(entries, &elem(&1, 0))}}
+      end
+
+    {:ok, {edges, bins}}
+  end
+
+  def update(_node, _partial, _change, _bound), do: :recompute
 
   @impl true
   def finish(node, partial, %{input: input, key: key}) do
@@ -139,7 +179,7 @@ defmodule Macaw.Data.Operations.Transforms.Bin do
     bins =
       for i <- 0..(tuple_size(edges) - 1)//1 do
         {x0, x1} = elem(edges, i)
-        {state, values} = Map.get(merged, i, {first, []})
+        {state, values, _rows} = Map.get(merged, i, {first, [], nil})
         values = Enum.reverse(values)
         {x0, x1, value.(state, values), values}
       end
@@ -437,7 +477,9 @@ defmodule Macaw.Data.Operations.Transforms.Spectrum do
   end
 
   @impl true
-  def resolve(_node, _view, bound), do: bound
+  # The bound context alone: a chunk's part depends not on where it sits (`:at`, `:rows`),
+  # so its step key holds while other chunks come and go.
+  def resolve(_node, _view, bound), do: Map.drop(bound, [:at, :rows])
 
   @impl true
   def chunk(_node, view, %{field: field, time: time}) do
