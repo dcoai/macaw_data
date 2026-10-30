@@ -245,7 +245,7 @@ defmodule Macaw.Data.Operations.Transforms.Aggregate do
       answer =
         case Native.scheduler(count) do
           :normal ->
-            case call.(Native.sync_entries()) do
+            case call.(Native.entry_limit()) do
               :dirty -> dirty.(0)
               answer -> answer
             end

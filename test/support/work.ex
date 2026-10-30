@@ -28,6 +28,14 @@ defmodule Macaw.Data.Test.Work do
   traced too, and a collection in it is an error that says so, rather than a count with
   the collection in it.
 
+  **A call on a dirty scheduler is charged by its time** (macaw_data#60). A native kernel
+  called on a normal scheduler costs its caller a fixed few reductions, whatever it does;
+  called on a dirty CPU scheduler, the same kernel is charged about four reductions a
+  microsecond it ran, so its count rises with the load (m4's finish: 1,577 to 7,355 for
+  one input). The counted run's scheduling is traced too, and a run that went to a dirty
+  scheduler is an error that names the cause, as a collection is: a count with the kernels
+  in it is taken inside `Macaw.Data.Native.normal_schedulers/1`.
+
   The function must do its work in the process it runs in — everything the suite
   measures this way is synchronous — and must not depend on the caller's process: its
   dictionary, its mailbox or `self()`.
@@ -57,8 +65,13 @@ defmodule Macaw.Data.Test.Work do
     heap = words + div(words, @margin) + @floor
 
     case run(fun, min_heap_size: heap, min_bin_vheap_size: @bin_vheap) do
-      %{collections: 0, work: work, result: result} ->
+      %{collections: 0, dirty: 0, work: work, result: result} ->
         {work, result}
+
+      %{dirty: n} when n > 0 ->
+        raise "the counted run made #{n} calls on a dirty scheduler, each charged by its " <>
+                "time, so the count moves with the load: count the kernels inside " <>
+                "Macaw.Data.Native.normal_schedulers/1 (Macaw.Data.Test.Work, macaw_data#60)"
 
       %{collections: n} ->
         raise "the counted run collected #{n} times in a heap of #{heap} words, sized " <>
@@ -67,10 +80,11 @@ defmodule Macaw.Data.Test.Work do
     end
   end
 
-  # `fun` run in a process spawned for it alone, with `options`, its collections traced to
-  # this process: the reductions it spent, its result, how many times it collected and
-  # how many words it allocated — each collection's young heap at its start, less what
-  # the one before it left, and what the last one left against the heap at the end. The
+  # `fun` run in a process spawned for it alone, with `options`, its collections and its
+  # scheduling traced to this process: the reductions it spent, its result, how many times
+  # it collected, how many words it allocated — each collection's young heap at its start,
+  # less what the one before it left, and what the last one left against the heap at the
+  # end — and how many times it came back from a dirty scheduler. The
   # process knows its callers as a task does, so a log it writes is captured with the
   # test's. Every wait is on a message, with no `after`: the test's own timeout bounds a
   # run that never ends (spec/12 §6).
@@ -93,7 +107,7 @@ defmodule Macaw.Data.Test.Work do
         [:monitor | options]
       )
 
-    :erlang.trace(pid, true, [:garbage_collection])
+    :erlang.trace(pid, true, [:garbage_collection, :running])
     send(pid, tag)
 
     receive do
@@ -101,26 +115,35 @@ defmodule Macaw.Data.Test.Work do
         receive do: ({:DOWN, ^monitor, :process, ^pid, _reason} -> :ok)
         delivered = :erlang.trace_delivered(pid)
         receive do: ({:trace_delivered, ^pid, ^delivered} -> :ok)
-        {collections, words} = collections(pid, heap, 0, 0, 0)
-        %{work: work, result: result, collections: collections, words: words}
+        {collections, words, dirty} = traced(pid, heap, 0, 0, 0, 0)
+        %{work: work, result: result, collections: collections, words: words, dirty: dirty}
 
       {:DOWN, ^monitor, :process, ^pid, reason} ->
         crashed(reason)
     end
   end
 
-  # The collections traced from `pid`, all delivered: how many, and the words allocated.
-  # `after 0` reads the mailbox as it stands, which `:erlang.trace_delivered/1` has made
-  # complete.
-  defp collections(pid, heap, left, words, n) do
+  # What was traced from `pid`, all delivered: how many collections, the words allocated,
+  # and how many times it was scheduled back in from a dirty scheduler, which a dirty call
+  # returns through (`erts_internal:dirty_nif_finalizer/1`). Every other schedule in or out
+  # is a preemption or a wait, which charges nothing. `after 0` reads the mailbox as it
+  # stands, which `:erlang.trace_delivered/1` has made complete.
+  defp traced(pid, heap, left, words, n, dirty) do
     receive do
       {:trace, ^pid, start, info} when start in [:gc_minor_start, :gc_major_start] ->
-        collections(pid, heap, left, words + info[:heap_size] + info[:mbuf_size] - left, n + 1)
+        words = words + info[:heap_size] + info[:mbuf_size] - left
+        traced(pid, heap, left, words, n + 1, dirty)
 
       {:trace, ^pid, finish, info} when finish in [:gc_minor_end, :gc_major_end] ->
-        collections(pid, heap, info[:heap_size], words, n)
+        traced(pid, heap, info[:heap_size], words, n, dirty)
+
+      {:trace, ^pid, :in, {:erts_internal, :dirty_nif_finalizer, _arity}} ->
+        traced(pid, heap, left, words, n, dirty + 1)
+
+      {:trace, ^pid, running, _mfa} when running in [:in, :out] ->
+        traced(pid, heap, left, words, n, dirty)
     after
-      0 -> {n, words + heap - left}
+      0 -> {n, words + heap - left, dirty}
     end
   end
 

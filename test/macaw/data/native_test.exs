@@ -85,6 +85,44 @@ defmodule Macaw.Data.NativeTest do
     end
   end
 
+  describe "on normal schedulers on request" do
+    @tag verifies: "operations-native-normal-schedulers"
+    test "inside normal_schedulers/1 every kernel call is on a normal scheduler, so its count is fixed" do
+      big = Native.sync_rows() + 1
+      buckets = Native.finish_buckets() + 1
+
+      assert Native.normal_schedulers(fn ->
+               {Native.scheduler(big), Native.finish_scheduler(buckets), Native.entry_limit()}
+             end) == {:normal, :normal, 0}
+
+      assert {Native.scheduler(big), Native.finish_scheduler(buckets)} == {:dirty, :dirty}
+      assert Native.entry_limit() == Native.sync_entries()
+
+      if Native.loaded?() do
+        # The bits of a bitmap of `big` bits at every index: a gather past sync_rows/0, made
+        # dirty outside the scope. Counted dirty, the call is charged by its time and the
+        # count refused; counted inside the scope, it is the gather's plumbing and a call's
+        # fixed few reductions, the same every time.
+        bitmap = :binary.copy(<<0b10101010>>, div(big, 8) + 1)
+        indexes = Enum.to_list(0..(big - 1))
+        take = fn -> Macaw.Data.Table.Bitmap.take(bitmap, indexes, nil) end
+
+        assert_raise RuntimeError, ~r/dirty scheduler.*normal_schedulers/, fn ->
+          Macaw.Data.Test.Work.reductions(take)
+        end
+
+        counted = fn ->
+          Macaw.Data.Test.Work.reductions(fn -> Native.normal_schedulers(take) end)
+        end
+
+        {once, bits} = counted.()
+        assert bits == take.()
+        assert for(_ <- 1..5, do: elem(counted.(), 0)) == List.duplicate(once, 5)
+        assert once < 1_000, "the gather counted #{once}"
+      end
+    end
+  end
+
   describe "a panic" do
     @tag verifies: "operations-native-panic"
     test "a kernel's panic takes its node down with the panic's message, never silently" do

@@ -207,10 +207,14 @@ prune keeps the parts of the chunks the tables hold, at their version or base ve
 | every part reused (merges alone) | 552,014 → ~175,000 | 23–40 → 6.5–10 | 9 → 5–7 |
 | recomputed in full | 1,931,845 → ~186,000 | 55–58 → 9–11 | 30–33 → 7.4–11.4 |
 
-So with the kernels a frame is within visualize's ~17 ms budget at the default heap, per chunk and recomputed in full: sizing the frame process's heap (§1.5) is no longer needed to meet it, though it still trims a millisecond or two. Without them, the Elixir path's cost and pins above stand. The kernels' work counts no reductions, so the frame's reductions with them are pinned too, as a guard that the kernels keep answering it:
+So with the kernels a frame is within visualize's ~17 ms budget at the default heap, per chunk and recomputed in full: sizing the frame process's heap (§1.5) is no longer needed to meet it, though it still trims a millisecond or two. Without them, the Elixir path's cost and pins above stand. A kernel call on a normal scheduler counts a fixed few reductions, so the frame's reductions with the kernels are pinned too, as a guard that the kernels keep answering it. They are counted with every kernel call on a normal scheduler (`Native.normal_schedulers/1`, §1.7): a frame's `m4` and `lttb` finishes read more than `finish_buckets/0` buckets and run dirty, and a dirty call is charged by its time, so counted as they serve the frame's reductions rose with the load, from about 180,000 idle to 264,775 on a loaded box (macaw_data#60). Counted on normal schedulers they are the same idle and loaded, within a few reductions (#60, on a box at load 6: per chunk 168,617–168,620, merges alone 167,549–167,553, in full 179,210–179,211, idle and with every scheduler saturated):
 
 ```test:operations-cache-native-frame-budget
-with the kernels loaded, the synthetic frame loop's per-chunk frame, its merges alone and its full recompute each cost at most 250,000 reductions, so a kernel that stops answering a step of the frame fails the default suite
+with the kernels loaded, the synthetic frame loop's per-chunk frame, its merges alone and its full recompute, every kernel call on a normal scheduler, each cost at most 250,000 reductions, so a kernel that stops answering a step of the frame fails the default suite
+```
+
+```test:operations-cache-native-frame-load
+with the kernels loaded and every kernel call on a normal scheduler, the frame loop's per-chunk frame, its merges alone and its full recompute count the same reductions, within 100, idle and with every scheduler saturated, each at most 250,000
 ```
 
 ### 1.6 Execution: inline by default, parallel on request {#operations-parallel}
@@ -238,7 +242,8 @@ asked for parallel, a run above parallel_rows/0 with two chunks or more works it
 - **Optional, and visible.** The kernels are built when the build has Zigler and a Zig of the version Zigler targets (`.tool-versions`: Zigler 0.16.0, Zig 0.16.0). Zigler is an optional dependency: an adopter that wants the kernels lists `{:zigler, "~> 0.16.0", runtime: false}`. Without the toolchain the build prints a warning, not a compiler diagnostic, so a `--warnings-as-errors` build without Zig still succeeds, and every step runs its Elixir path. **`Macaw.Data.Native.loaded?/0`** is decided once, when the application starts, by asking the kernels their interface version, and held in `:persistent_term`.
 - **`config :macaw_data, native: :optional | :required`**, default `:optional`. It is read at compile time. The deployer knows whether this build is expected to be fast. Set wrong, it fails loudly: `:required` without the toolchain fails the build, and `:required` with kernels that don't load fails the application's start. `:optional` degrades to the Elixir path, visible through `loaded?/0`.
 - **The 1 ms rule.** A kernel reads a row in nanoseconds, and builds its answer's terms at tens of nanoseconds each, so a call's time follows its rows and the size of its answer. A call over at most `Native.sync_rows/0` rows (8,192, one canonical chunk) runs on a normal scheduler, within the BEAM's 1 ms even when every row answers a term of its own. A larger one, a one-chunk table built from rows, runs the same kernel on a dirty CPU scheduler (`Native.scheduler/1`). Each kernel's test states its call's time.
-- **Reductions count no kernel's work.** A statement of work in reductions, such as the frame's (§1.5), is measured on the Elixir path: `Native.elixir/1` runs a function with every step in its process on its Elixir path, and `Native.active?/0`, which each step with a kernel asks, is false inside it. The Elixir path is also the reference each kernel is held equal to.
+- **Reductions count no kernel's work on a normal scheduler.** A statement of work in reductions, such as the frame's (§1.5), is measured on the Elixir path: `Native.elixir/1` runs a function with every step in its process on its Elixir path, and `Native.active?/0`, which each step with a kernel asks, is false inside it. The Elixir path is also the reference each kernel is held equal to.
+- **A dirty call is charged by its time** (macaw_data#60). A kernel called on a normal scheduler costs its caller a fixed few reductions (7 for `ladder` or `take`, whatever they read). The same kernel on a dirty CPU scheduler is charged about four reductions a microsecond it ran, so its count moves with the load: `m4_finish` over one partial counted 1,577 to 7,355. So a count with the kernels in it, such as the frame's pinned budget (§1.5.1), is taken inside **`Native.normal_schedulers/1`**: every kernel call in the process runs on a normal scheduler while it runs. `scheduler/1` and `finish_scheduler/1` answer `:normal`, and `entry_limit/0` lifts the limit past which a normal `group_sum` call hands itself to a dirty one. The same kernel runs; only the scheduler changes. A call past the 1 ms rule then holds a normal scheduler longer than the rule allows, so the scope is for measuring, never for serving. The suite's counter, `Macaw.Data.Test.Work`, traces the counted run's scheduling and refuses a count with a dirty call in it, as it refuses one with a collection.
 - **A panic is never silent.** The kernels are built ReleaseSafe in every environment, so a bounds or overflow fault panics rather than reading past a buffer. Each kernel checks its buffers' sizes and returns an error, raised in Elixir, for a malformed input. A panic is then a bug, and it takes the node down with its message and stack trace on standard error.
 
 ```test:operations-native-loaded
@@ -255,6 +260,10 @@ a kernel call over at most sync_rows/0 rows, 8,192, runs on a normal scheduler, 
 
 ```test:operations-native-elixir
 active? is loaded? outside Native.elixir/1 and false inside it, and back after it; a step with a kernel run inside it takes its Elixir path, whose work reductions count
+```
+
+```test:operations-native-normal-schedulers
+inside Native.normal_schedulers/1 every kernel call is on a normal scheduler whatever its size, and outside it the schedulers are sync_rows/0's and finish_buckets/0's again; a count with a dirty kernel call in it is refused, naming the cause, and the same call counted inside the scope counts the same every time
 ```
 
 ```test:operations-native-panic

@@ -12,6 +12,10 @@ defmodule Macaw.Data.Native do
     built kernels don't load; `:optional` warns at compile time and runs the Elixir path.
   - **The 1 ms rule:** a call over at most `sync_rows/0` rows runs on a normal scheduler,
     well within a millisecond; a larger one on a dirty CPU scheduler (`scheduler/1`).
+  - **Counted on normal schedulers:** a call on a normal scheduler is charged a few
+    reductions whatever its time, and one on a dirty scheduler is charged by its time, so
+    `normal_schedulers/1` makes every call in its process on a normal scheduler for a
+    statement of work in reductions with the kernels (spec/04 §1.7, macaw_data#60).
   """
 
   require Logger
@@ -20,6 +24,7 @@ defmodule Macaw.Data.Native do
 
   @key {__MODULE__, :loaded?}
   @elixir {__MODULE__, :elixir}
+  @normal {__MODULE__, :normal_schedulers}
   # The interface version kernels.zig answers (`abi/0`), so a stale library is not used.
   @abi 6
   @sync_rows 8_192
@@ -51,6 +56,28 @@ defmodule Macaw.Data.Native do
     result
   end
 
+  @doc """
+  `fun`'s result, every kernel call in this process made on a normal scheduler while it
+  runs, whatever its size: `scheduler/1` and `finish_scheduler/1` answer `:normal`, and
+  `entry_limit/0` lifts the limit past which a normal `group_sum` call hands itself to a
+  dirty one. The same kernel runs either way; only the scheduler changes.
+
+  A kernel call on a normal scheduler is charged a fixed few reductions, whatever its
+  time; one on a dirty CPU scheduler is charged by its time, about four a microsecond on
+  the box #60 measured, so it counts more on a loaded host. A statement of work in
+  reductions with the kernels, such as the frame's (spec/04 §1.5.1), is measured here, and
+  `Macaw.Data.Test.Work` refuses a count with a dirty call in it. A call past the 1 ms rule
+  then holds its scheduler longer than the rule allows, so this is for measuring, never
+  for serving. Not nested: the flag is cleared when `fun` returns.
+  """
+  @spec normal_schedulers((-> result)) :: result when result: term()
+  def normal_schedulers(fun) when is_function(fun, 0) do
+    Process.put(@normal, true)
+    result = fun.()
+    Process.delete(@normal)
+    result
+  end
+
   @doc "Whether this build compiled the native kernels (the toolchain was present)."
   @spec built?() :: boolean()
   def built?, do: Kernels.built?()
@@ -67,10 +94,13 @@ defmodule Macaw.Data.Native do
   @spec sync_rows() :: pos_integer()
   def sync_rows, do: @sync_rows
 
-  @doc "Where a kernel call over `rows` rows runs: `:normal` up to `sync_rows/0`, else `:dirty`."
+  @doc """
+  Where a kernel call over `rows` rows runs: `:normal` up to `sync_rows/0`, else `:dirty`;
+  `:normal` inside `normal_schedulers/1`.
+  """
   @spec scheduler(non_neg_integer()) :: :normal | :dirty
   def scheduler(rows) when rows <= @sync_rows, do: :normal
-  def scheduler(_rows), do: :dirty
+  def scheduler(_rows), do: if(normal?(), do: :normal, else: :dirty)
 
   @doc """
   The most buckets a finish kernel (`m4`'s columns, `lttb`'s selection) reads on a normal
@@ -80,10 +110,13 @@ defmodule Macaw.Data.Native do
   @spec finish_buckets() :: pos_integer()
   def finish_buckets, do: @finish_buckets
 
-  @doc "Where a finish kernel over `buckets` runs: `:normal` up to `finish_buckets/0`, else `:dirty`."
+  @doc """
+  Where a finish kernel over `buckets` runs: `:normal` up to `finish_buckets/0`, else
+  `:dirty`; `:normal` inside `normal_schedulers/1`.
+  """
   @spec finish_scheduler(non_neg_integer()) :: :normal | :dirty
   def finish_scheduler(buckets) when buckets <= @finish_buckets, do: :normal
-  def finish_scheduler(_buckets), do: :dirty
+  def finish_scheduler(_buckets), do: if(normal?(), do: :normal, else: :dirty)
 
   @doc """
   The most entries, groups and their float exponents' sums, an exact sum by group
@@ -94,6 +127,16 @@ defmodule Macaw.Data.Native do
   """
   @spec sync_entries() :: pos_integer()
   def sync_entries, do: @sync_entries
+
+  @doc """
+  The limit a normal `group_sum` call is given: `sync_entries/0`, past which it answers
+  `:dirty` and is made again on a dirty scheduler; `0`, no limit, inside
+  `normal_schedulers/1`.
+  """
+  @spec entry_limit() :: non_neg_integer()
+  def entry_limit, do: if(normal?(), do: 0, else: @sync_entries)
+
+  defp normal?, do: Process.get(@normal) == true
 
   @doc false
   # At the application's start: whether the kernels loaded, held in `:persistent_term`. A
