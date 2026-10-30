@@ -54,10 +54,25 @@ defmodule Macaw.Data.Operations.FrameLoopTest do
       assert per_chunk - merges <= one, "changed chunks #{per_chunk - merges}, one chunk #{one}"
       assert 2 * per_chunk <= full, "per chunk #{per_chunk}, full #{full}"
     end
+
+    @tag verifies: "operations-cache-frame-budget"
+    test "a per-chunk frame costs at most 1,100,000 reductions, its merges alone 600,000" do
+      {window, cache} = loop(1)
+      {_, warm, _} = FrameLoop.cached(window, cache)
+      {per_chunk, _} = Work.reductions(fn -> FrameLoop.cached(window, cache) end)
+      {merges, _} = Work.reductions(fn -> FrameLoop.cached(window, warm) end)
+
+      assert per_chunk <= 1_100_000, "per chunk #{per_chunk}"
+      assert merges <= 600_000, "merges alone #{merges}"
+    end
   end
 
   describe "the wall clock" do
     defp next_of(window), do: FrameLoop.next(window)
+
+    # A frame process's minimum heap that holds the frame loop's cache (about 824,000
+    # words) with room for a frame's garbage (macaw_data#41).
+    @heap_words 4_000_000
 
     # macaw_data#9 item 7: stated, not gated. `mix test --only benchmark`.
     @tag :benchmark
@@ -71,15 +86,29 @@ defmodule Macaw.Data.Operations.FrameLoopTest do
         {us / 1000, result}
       end
 
-      {_, rows} =
-        Enum.reduce(1..frames, {{window, cache}, []}, fn _frame, {{window, cache}, rows} ->
-          {full_ms, _} = ms.(fn -> FrameLoop.full(window) end)
+      run = fn ->
+        {_, rows} =
+          Enum.reduce(1..frames, {{window, cache}, []}, fn _frame, {{window, cache}, rows} ->
+            {full_ms, _} = ms.(fn -> FrameLoop.full(window) end)
 
-          {cached_ms, {_, next_cache, counts}} = ms.(fn -> FrameLoop.cached(window, cache) end)
-          {merge_ms, _} = ms.(fn -> FrameLoop.cached(window, next_cache) end)
-          row = {full_ms, cached_ms, merge_ms, counts.computed}
-          {{FrameLoop.next(window), next_cache}, [row | rows]}
-        end)
+            {cached_ms, {_, next_cache, counts}} =
+              ms.(fn -> FrameLoop.cached(window, cache) end)
+
+            {merge_ms, _} = ms.(fn -> FrameLoop.cached(window, next_cache) end)
+            row = {full_ms, cached_ms, merge_ms, counts.computed}
+            {{FrameLoop.next(window), next_cache}, [row | rows]}
+          end)
+
+        rows
+      end
+
+      rows = run.()
+
+      # The same frames in a process whose minimum heap holds the cache (spec/04 §1.5):
+      # what a frame costs once its caller sizes the garbage collection it pays.
+      me = self()
+      :erlang.spawn_opt(fn -> send(me, {:sized, run.()}) end, min_heap_size: @heap_words)
+      sized = receive do: ({:sized, rows} -> rows)
 
       median = fn values -> values |> Enum.sort() |> Enum.at(div(length(values), 2)) end
 
@@ -117,6 +146,7 @@ defmodule Macaw.Data.Operations.FrameLoopTest do
         end
 
       column = fn i -> median.(Enum.map(rows, &elem(&1, i))) end
+      sized_column = fn i -> Float.round(median.(Enum.map(sized, &elem(&1, i))), 1) end
 
       steps =
         for chain <- FrameLoop.chains(), node <- chain do
@@ -131,6 +161,7 @@ defmodule Macaw.Data.Operations.FrameLoopTest do
         per-chunk recompute:      #{Float.round(column.(1), 1)} ms (#{column.(3)} parts computed)
         of which merges alone:    #{Float.round(column.(2), 1)} ms (every part reused)
         steps: #{steps |> Enum.map(&elem(&1, 0)) |> Enum.uniq() |> Enum.join("; ")}
+        in a process with a #{@heap_words}-word minimum heap: full #{sized_column.(0)} ms, per chunk #{sized_column.(1)} ms, merges alone #{sized_column.(2)} ms
 
       By step (ms, median of 5): full · per chunk · merge alone · full, parallel
       #{Enum.map_join(by_step, "\n", fn {op, f, c, m, p} -> "  #{op}: #{f} · #{c} · #{m} · #{p}" end)}
