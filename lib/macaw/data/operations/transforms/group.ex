@@ -116,34 +116,95 @@ defmodule Macaw.Data.Operations.Transforms.Aggregate do
   # One chunk's groups: their keys in order of first appearance, each one's state of the
   # aggregate's streaming form over its readings, `nil`s dropped, and each one's first row
   # in the view and its count of rows, which an inverse update reads (spec/04 §1.5).
-  def group_chunk(node, aggregate, {_chunk, _first, count} = view, bound, op) do
+  def group_chunk(node, aggregate, view, bound, op) do
     options = options(node, aggregate)
     readings = view_readings(view, bound.field, op)
+    step = &aggregate.step(&1, &2, options)
+    init = aggregate.init(options)
 
-    keys =
-      case bound.by do
-        [] -> List.duplicate([], count)
-        by -> by |> Enum.map(&Transforms.view_values(view, &1)) |> Enum.zip_with(& &1)
-      end
+    case bound.by do
+      [] ->
+        readings |> fold_all(step, init, 0, nil) |> one_group()
 
-    {order, groups, rows, _i} =
-      keys
-      |> Enum.zip(readings)
-      |> Enum.reduce({[], %{}, %{}, 0}, fn {key, reading}, {order, groups, rows, i} ->
-        {order, state, rows} =
-          case groups do
-            %{^key => state} ->
-              {order, state, Map.update!(rows, key, fn {first, n} -> {first, n + 1} end)}
+      [name] ->
+        case coded(view, name) do
+          {codes, strings} ->
+            codes
+            |> fold(readings, step, init, 0, %{}, [])
+            |> named(&[if(&1 == nil, do: nil, else: elem(strings, &1))])
 
-            _ ->
-              {[key | order], aggregate.init(options), Map.put(rows, key, {i, 1})}
-          end
+          :values ->
+            view
+            |> Transforms.view_values(name)
+            |> fold(readings, step, init, 0, %{}, [])
+            |> named(&[&1])
+        end
 
-        state = if reading == nil, do: state, else: aggregate.step(state, reading, options)
-        {order, Map.put(groups, key, state), rows, i + 1}
+      by ->
+        by
+        |> Enum.map(&Transforms.view_values(view, &1))
+        |> Enum.zip()
+        |> Enum.map(&Tuple.to_list/1)
+        |> fold(readings, step, init, 0, %{}, [])
+        |> named(& &1)
+    end
+  end
+
+  # Each row's group by its key, one map update a row: the map holds a key's state, its
+  # first row and its count of rows together, and the keys in order of first appearance
+  # are kept newest first.
+  defp fold([key | keys], [reading | readings], step, init, i, groups, order) do
+    case groups do
+      %{^key => {state, first, n}} ->
+        state = if reading == nil, do: state, else: step.(state, reading)
+        fold(keys, readings, step, init, i + 1, %{groups | key => {state, first, n + 1}}, order)
+
+      _ ->
+        state = if reading == nil, do: init, else: step.(init, reading)
+
+        fold(keys, readings, step, init, i + 1, Map.put(groups, key, {state, i, 1}), [key | order])
+    end
+  end
+
+  defp fold([], [], _step, _init, _i, groups, order), do: {Enum.reverse(order), groups}
+
+  # Without `by`: one group, every row's.
+  defp fold_all([reading | readings], step, state, n, _first) when n == 0,
+    do: fold_all(readings, step, read(step, state, reading), 1, 0)
+
+  defp fold_all([reading | readings], step, state, n, first),
+    do: fold_all(readings, step, read(step, state, reading), n + 1, first)
+
+  defp fold_all([], _step, state, n, first), do: {state, first, n}
+
+  defp read(_step, state, nil), do: state
+  defp read(step, state, reading), do: step.(state, reading)
+
+  defp one_group({_state, _first, 0}), do: {[], %{}, %{}}
+  defp one_group({state, first, n}), do: {[[]], %{[] => state}, %{[] => {first, n}}}
+
+  # The groups under their keys as the step names them, `name` a fold key's.
+  defp named({order, groups}, name) do
+    {groups, rows} =
+      Enum.reduce(groups, {%{}, %{}}, fn {key, {state, first, n}}, {gs, rs} ->
+        key = name.(key)
+        {Map.put(gs, key, state), Map.put(rs, key, {first, n})}
       end)
 
-    {Enum.reverse(order), groups, rows}
+    {Enum.map(order, name), groups, rows}
+  end
+
+  # A dictionary column's rows as their codes, `nil` where a value is missing, and its
+  # strings by code: one group a code, named once. A column of another form is read as
+  # its values.
+  defp coded({chunk, first, count}, name) do
+    case Macaw.Data.Table.Chunk.storage(chunk, name, first, count) do
+      {:dictionary, _codes, _validity, _dictionary, nil} = column ->
+        Macaw.Data.Table.Column.codes(column, count)
+
+      _other ->
+        :values
+    end
   end
 
   @doc false

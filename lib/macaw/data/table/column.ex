@@ -626,6 +626,44 @@ defmodule Macaw.Data.Table.Column do
   defp valid(validity, n),
     do: if(Bitmap.all?(validity, n), do: :all, else: Bitmap.bits(validity, n))
 
+  @doc false
+  # The rows of a packed number column with no value missing whose value compares with
+  # the number `value` as `test` says (`:lt`, `:lte`, `:gt`, `:gte`), ascending, the values
+  # buffer scanned as it lies: `{:ok, rows}`. `:general` for any other column, test or
+  # value, which a caller reads value by value.
+  @spec where(t(), non_neg_integer(), atom(), term()) :: {:ok, [non_neg_integer()]} | :general
+  def where({form, data, validity}, n, test, value)
+      when form in [:int64, :float64] and test in [:lt, :lte, :gt, :gte] and is_number(value) do
+    if Bitmap.all?(validity, n), do: {:ok, where(form, test, data, value, 0, [])}, else: :general
+  end
+
+  def where(_column, _n, _test, _value), do: :general
+
+  for {test, op} <- [lt: :<, lte: :<=, gt: :>, gte: :>=] do
+    defp where(:float64, unquote(test), <<v::float-little-64, rest::binary>>, x, i, acc)
+         when unquote(op)(v, x),
+         do: where(:float64, unquote(test), rest, x, i + 1, [i | acc])
+
+    defp where(:int64, unquote(test), <<v::signed-little-64, rest::binary>>, x, i, acc)
+         when unquote(op)(v, x),
+         do: where(:int64, unquote(test), rest, x, i + 1, [i | acc])
+  end
+
+  defp where(form, test, <<_::64, rest::binary>>, x, i, acc),
+    do: where(form, test, rest, x, i + 1, acc)
+
+  defp where(_form, _test, <<>>, _x, _i, acc), do: :lists.reverse(acc)
+
+  @doc false
+  # A dictionary column's codes, `nil` where a value is missing, and its strings by code:
+  # a grouping reads the codes and names a group once (spec/04 §4.10).
+  @spec codes(t(), non_neg_integer()) :: {[non_neg_integer() | nil], tuple()}
+  def codes({:dictionary, codes, validity, {offsets, data}, nil}, n) do
+    offsets = for <<o::signed-little-32 <- offsets>>, do: o
+    strings = data |> strings(offsets, :all) |> List.to_tuple()
+    {gaps(for(<<c::little-32 <- codes>>, do: c), valid(validity, n)), strings}
+  end
+
   defp gaps(values, :all), do: values
   defp gaps([v | values], [1 | bits]), do: [v | gaps(values, bits)]
   defp gaps([_ | values], [0 | bits]), do: [nil | gaps(values, bits)]

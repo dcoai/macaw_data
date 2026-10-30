@@ -175,14 +175,20 @@ defmodule Macaw.Data.Operations.StepsTest do
       table = Storage.chunked(source(30), 10)
       [{a, 0, 10}, {b, 0, 10}, {c, 0, 10}] = Table.chunks(table)
 
-      # The first chunk fails `v >= 5` partly, the others pass whole.
+      # The first chunk fails `v >= 5` partly, its passing rows one run, cut without
+      # copying; the others pass whole.
       filtered = run(table, %{op: "filter", field: "v", test: :gte, value: 5})
-      node = checked(%{op: "filter", field: "v", test: :gte, value: 5})
+      assert Table.chunks(filtered) == [{a, 5, 5}, {b, 0, 10}, {c, 0, 10}]
+      assert Table.column(filtered, "t") == Enum.to_list(5..29)
+
+      # Rows that pass apart are gathered into a chunk named {input id, step key}.
+      spread = run(table, %{op: "filter", field: "k", test: :eq, value: "k0"})
+      node = checked(%{op: "filter", field: "k", test: :eq, value: "k0"})
       [part | _] = Step.parts(Filter, node, table, %{})
-      [{gathered, 0, 5}, {^b, 0, 10}, {^c, 0, 10}] = Table.chunks(filtered)
+      [{gathered, 0, 4} | _] = Table.chunks(spread)
       assert Chunk.id(gathered) == {Chunk.id(a), part.key}
       assert Chunk.digest(gathered) == nil
-      assert Table.column(filtered, "t") == Enum.to_list(5..29)
+      assert Table.column(spread, "t") == Enum.filter(0..29, &(rem(&1, 3) == 0))
 
       # A run is cut without copying: the same chunk, read from another row.
       taken = run(table, %{op: "take", n: 15})

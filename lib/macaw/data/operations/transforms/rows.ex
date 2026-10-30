@@ -9,6 +9,7 @@ defmodule Macaw.Data.Operations.Transforms.Filter do
 
   alias Macaw.Data.{Operations, Table}
   alias Macaw.Data.Operations.{Option, Step, Transforms}
+  alias Macaw.Data.Table.{Chunk, Column}
 
   @tests [:eq, :ne, :lt, :lte, :gt, :gte, :present, :absent]
 
@@ -49,12 +50,35 @@ defmodule Macaw.Data.Operations.Transforms.Filter do
   def resolve(_node, _view, %{name: name}), do: name
 
   @impl true
-  def chunk(%{"test" => test, "value" => value}, {_chunk, _first, count} = view, name) do
-    view
-    |> Transforms.view_values(name)
-    |> Enum.with_index()
-    |> Enum.flat_map(fn {reading, i} -> if passes?(test, reading, value), do: [i], else: [] end)
-    |> Transforms.selection(count)
+  def chunk(%{"test" => test, "value" => value}, {chunk, first, count} = view, name) do
+    packed =
+      if name, do: Column.where(Chunk.storage(chunk, name, first, count), count, test, value)
+
+    kept =
+      case packed do
+        {:ok, kept} -> kept
+        _general -> view |> Transforms.view_values(name) |> kept(test, value, 0, [])
+      end
+
+    selected(kept, count)
+  end
+
+  # The rows whose readings pass, ascending: one pass, no index list built beside them.
+  defp kept([reading | readings], test, value, i, acc) do
+    acc = if passes?(test, reading, value), do: [i | acc], else: acc
+    kept(readings, test, value, i + 1, acc)
+  end
+
+  defp kept([], _test, _value, _i, acc), do: :lists.reverse(acc)
+
+  # The rows kept as a selection: every row, none, one run of them, cut without copying,
+  # or the rows gathered.
+  defp selected([], _count), do: :none
+  defp selected(kept, count) when length(kept) == count, do: :all
+
+  defp selected([a | _] = kept, _count) do
+    n = length(kept)
+    if List.last(kept) == a + n - 1, do: {:run, a, n}, else: {:rows, kept}
   end
 
   defp passes?(:present, reading, _value), do: reading != nil

@@ -317,7 +317,11 @@ the table operations are macaw_data's transforms, in the table's order, each nee
 - `eq` keeps a reading equal to `value` and `ne` one that is not. A category is one value whichever spelling a row or the node gives it, so `:ok` equals `"ok"` (an atom and a string are equal when the atom's string is the string; `Macaw.Data.Operations.same?/2`);
 - `lt`, `lte`, `gt` and `gte` keep a reading that is not `nil` and stands so to `value` under Elixir's term ordering, as `sort` orders. **A `nil` reading never passes an ordering.**
 
-The test is `test`, not `op`, because `op` names the step. A column the rows lack reads `nil`, so `filter(field: "height", test: :eq, value: 0)` after a hierarchy keeps its leaves. **Outputs:** the input's columns. **Class:** per row (§1.4), each chunk decided from `field`'s column alone: a chunk every row of which passes is passed through, one none of which passes is dropped, and any other gathers the rows that pass.
+The test is `test`, not `op`, because `op` names the step. A column the rows lack reads `nil`, so `filter(field: "height", test: :eq, value: 0)` after a hierarchy keeps its leaves. **Outputs:** the input's columns. **Class:** per row (§1.4), each chunk decided from `field`'s column alone: a chunk every row of which passes is passed through, one none of which passes is dropped, one whose passing rows are one run is cut to that run without copying, and any other gathers the rows that pass. **A packed number column with no value missing** is tested by an ordering against a number by scanning its values buffer as it lies, nothing decoded (macaw_data#41); any other column or test reads the values one by one, in one pass.
+
+```test:operations-filter-scan
+for generated number columns with and without gaps, integer and float, every test and value keeps exactly the rows reading value by value keeps; rows that pass as one run are cut from the chunk, rows apart gathered; an ordering over an all-valid float column costs at most 3 reductions a row
+```
 
 ```test:operations-filter-tests
 each test keeps exactly its rows in order: present and absent by nil, eq and ne by value with an atom equal to its string, the orderings by term order with nil never passing; a missing column reads nil
@@ -508,7 +512,11 @@ bin splits the extent into n equal bins or at the given thresholds, each reading
 
 `sum` is **`aggregate` with `fn: "sum"`**: `field`, `by` and `as` (`"sum"`), no `fn`. It is vocabulary a design writes, not an alias kept for compatibility, so it is never deprecated.
 
-**Outputs:** `by`'s columns with their input types, then `as` of the aggregate's output type. **Class:** `sum`, and `aggregate` with an `fn` that has the combining form (§1.2: `count`, `sum`, `mean`, `min`, `max`, `extent`), is a combine (§1.4): each chunk's groups in order of first appearance, each with its state, and two runs' groups merged, the first run's order first and each group's states by the combining form. With any other `fn` it is global (§1.4): each chunk's keys and readings, and every group's readings reduced at once in the merge.
+**Outputs:** `by`'s columns with their input types, then `as` of the aggregate's output type. **Class:** `sum`, and `aggregate` with an `fn` that has the combining form (§1.2: `count`, `sum`, `mean`, `min`, `max`, `extent`), is a combine (§1.4): each chunk's groups in order of first appearance, each with its state, and two runs' groups merged, the first run's order first and each group's states by the combining form. With any other `fn` it is global (§1.4): each chunk's keys and readings, and every group's readings reduced at once in the merge. **A chunk's groups are found in one pass** (macaw_data#41): a row's group is looked up and its state, first row and count updated together, once a row; grouped by one category column, the rows are grouped by the column's dictionary codes and each group named by its string once.
+
+```test:operations-group-chunk
+for generated rows, aggregate with count, sum and mean by a category column, by a number column, by two columns and by none gives each chunk's groups in order, their states, first rows and counts as grouping row by row does; summing a chunk of 8192 rows by a category column costs at most 16 reductions a row
+```
 
 ```test:operations-group-rows
 aggregate makes one row per distinct by value in order of first appearance, or one row without by, holding the named aggregate of the group's non-nil readings; a pair field reads points; sum equals aggregate with fn sum
@@ -556,7 +564,7 @@ Each is an aggregate of `macaw_data`'s package implementing §1.2 (`Macaw.Data.O
 - **A unit carries** where the value is of the reading's own kind: a min, a mean or a deviation of milliseconds is milliseconds. Where it is not, it is dropped: a count, the square of a unit, a rate per sample. A host drawing a sum still holds it to the quantity's additivity ([03 §10](03-units.md#quantities-additivity)): a sum of a quantity that does not add across or over time is the host's to refuse, not the statistic's.
 - **A reading of the wrong kind raises `ArgumentError`** naming the aggregate and the reading: `sum` of a string, `mean` of a time.
 - **The streaming form** (§1.2) is given by `count`, `distinct`, `min`, `max`, `extent`, `sum`, `mean`, `variance`, `deviation`, `slope` and `delta`. `median` and `quantile` need every reading, so they give none. A streaming statistic's `reduce/2` **is** its streaming form folded over the readings, so the two agree exactly: the mean is a running sum over a count, and the variance, the deviation and the slope are Welford's one-pass updates, numerically stable and equal to visualize's two-pass values to within floating-point rounding.
-- **The combining form** (§1.2) is given by `count`, `min`, `max`, `extent`, `sum` and `mean`: their states merge exactly. A floating-point sum is not associative, so a sum over chunks would change with the chunking; `sum` and `mean` therefore sum exactly (each float as the integer multiple of 2^-1074 it is), and every order and grouping of the same readings gives the same bits. `min` and `max` keep the first run's on a tie. `distinct`, `variance`, `deviation`, `slope` and `delta` give none: their merges would be inexact in floating point or would grow with the readings. `median` and `quantile` need every reading: a quantile is exact here, never a sketch's approximation, so a step reducing by one reads every reading at once.
+- **The combining form** (§1.2) is given by `count`, `min`, `max`, `extent`, `sum` and `mean`: their states merge exactly. A floating-point sum is not associative, so a sum over chunks would change with the chunking; `sum` and `mean` therefore sum exactly (each float as the integer multiple of 2^-1074 it is), and every order and grouping of the same readings gives the same bits. The state sums each float's signed mantissa with its binary exponent's, exactly, and counts the sums in units of 2^-1074 once, when the value is read (macaw_data#41), so adding a float shifts no integer. `min` and `max` keep the first run's on a tie. `distinct`, `variance`, `deviation`, `slope` and `delta` give none: their merges would be inexact in floating point or would grow with the readings. `median` and `quantile` need every reading: a quantile is exact here, never a sketch's approximation, so a step reducing by one reads every reading at once.
 - **spec/02 §4 still holds.** A statistic of a delivery's rows is the statistic of those rows: a quantile of a reduced or rolled-up delivery is not the quantile of the raw readings ("a p95 of p95s is not a p95"), so a percentile from raw rows stays in the source.
 
 ```test:operations-statistics-values
@@ -565,6 +573,10 @@ each statistic answers visualize's value on its fixtures, its empty value for no
 
 ```test:operations-statistics-combine
 the combining form of count, min, max, extent, sum and mean merges two runs' states into the state of both, for every split; sum is exact, the same bits in any order, an integer of integers and the exact sum rounded once with a float; exactly those statistics give it
+```
+
+```test:operations-statistics-exact
+for generated floats, normal, subnormal and near the largest, and integers, sum's value is the exact sum of their multiples of 2^-1074 rounded once, ties to even, the same bits an oracle summing those multiples gives; adding a float costs at most 5 reductions
 ```
 
 ```test:operations-statistics-stream
