@@ -30,7 +30,9 @@ defmodule Macaw.Data.Delivery do
     - `note`: a line for a person (`"coarsened from raw"`), or `nil`;
     - `position`: for a snapshot taken for a push subscription, the sequence number of
       the last increment it reflects (`0` for none); `nil` for any other answer
-      (spec/01 §4.1).
+      (spec/01 §4.1);
+    - `complete_until`: a value of the window field, a time or a number, below which the
+      source expects no further change, or `nil` for no claim (spec/01 §4.4).
   - `origin`: where it came from, `%{source: name, request: digest, as_of: time | nil}`,
     or `nil`;
   - `retracted` and `replace`: the changes a pushed increment carries beside its inserted
@@ -55,7 +57,7 @@ defmodule Macaw.Data.Delivery do
   """
 
   alias Macaw.Data.Source.Request
-  alias Macaw.Data.Table
+  alias Macaw.Data.{Table, Window}
 
   # `table` is optional: `new/2` asks its protocol about a struct only when it is loaded.
   @compile {:no_warn_undefined, [Elixir.Table.Reader]}
@@ -79,7 +81,8 @@ defmodule Macaw.Data.Delivery do
     reduced_by: nil,
     params: %{},
     note: nil,
-    position: nil
+    position: nil,
+    complete_until: nil
   }
 
   @typedoc "A window as served: a range, a box over positions, or none."
@@ -96,7 +99,8 @@ defmodule Macaw.Data.Delivery do
           reduced_by: :source | :runtime | nil,
           params: map(),
           note: String.t() | nil,
-          position: non_neg_integer() | nil
+          position: non_neg_integer() | nil,
+          complete_until: term()
         }
 
   @typedoc "A range replacement (spec/01 §4.2): over `[from, to)`, limited to `identities`, exactly `rows`."
@@ -291,6 +295,18 @@ defmodule Macaw.Data.Delivery do
   defp check(:params, params) when is_map(params) and not is_struct(params), do: :ok
   defp check(:note, note) when is_nil(note) or is_binary(note), do: :ok
   defp check(:position, p) when is_nil(p) or (is_integer(p) and p >= 0), do: :ok
+
+  defp check(:complete_until, t) when is_nil(t) or is_number(t), do: :ok
+
+  defp check(:complete_until, t) do
+    if Window.instant?(t),
+      do: :ok,
+      else:
+        raise(
+          ArgumentError,
+          "not a delivery's served complete_until: #{inspect(t)} (spec/01 §4.4)"
+        )
+  end
 
   defp check(key, value),
     do: raise(ArgumentError, "not a delivery's served #{key}: #{inspect(value)} (spec/01 §3)")

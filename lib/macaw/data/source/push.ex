@@ -65,7 +65,8 @@ defmodule Macaw.Data.Source.Push do
     limit: 100_000,
     position: 0,
     waiting: %{},
-    refetch: nil
+    refetch: nil,
+    lateness: nil
   ]
 
   @typedoc "A buffered message: a snapshot, or an increment and its number."
@@ -82,18 +83,28 @@ defmodule Macaw.Data.Source.Push do
           limit: pos_integer(),
           position: non_neg_integer(),
           waiting: %{pos_integer() => Delivery.t()},
-          refetch: term()
+          refetch: term(),
+          lateness: Duration.t() | number() | nil
         }
 
   @doc """
   A subscription to the source named `name` under `ref`, holding nothing yet, at
   position `0`. Options: `cache:` a `Schema.Cache` to start from, `limit:` the most rows
-  held for a schema with no window field (`100_000`).
+  held for a schema with no window field (`100_000`), `lateness:` the source's
+  description's hard bound (spec/01 §4.4), `nil` by default, accepting a change of any
+  age.
   """
   @spec new(term(), reference(), keyword()) :: t()
   def new(name, ref, opts \\ []) when is_reference(ref) do
-    opts = Keyword.validate!(opts, cache: %Cache{}, limit: 100_000)
-    %__MODULE__{name: name, ref: ref, cache: opts[:cache], limit: opts[:limit]}
+    opts = Keyword.validate!(opts, cache: %Cache{}, limit: 100_000, lateness: nil)
+
+    %__MODULE__{
+      name: name,
+      ref: ref,
+      cache: opts[:cache],
+      limit: opts[:limit],
+      lateness: opts[:lateness]
+    }
   end
 
   @doc "The message a source sends with its schema, first and on every change."
@@ -179,7 +190,9 @@ defmodule Macaw.Data.Source.Push do
     case resolve(push, delivery, describe) do
       {:ok, _schema, push} ->
         waiting = Map.reject(push.waiting, fn {seq, _d} -> seq <= p end)
-        advance(%{push | held: delivery, position: p, waiting: waiting, refetch: nil}, describe)
+        {claim, push} = claim(push, delivery)
+        held = put_claim(delivery, claim)
+        advance(%{push | held: held, position: p, waiting: waiting, refetch: nil}, describe)
 
       {:error, reason, push} ->
         fault(push, reason)
@@ -276,7 +289,18 @@ defmodule Macaw.Data.Source.Push do
   defp merge(push, delivery, schema) do
     held = push.held || %{delivery | rows: empty(delivery.rows), retracted: [], replace: []}
     old = Delivery.named_rows(held)
-    {rows, inserted, faults, unheld} = Changes.apply(old, delivery, schema, thinned?(push.held))
+    # Late changes are judged against the claim held before this increment.
+    {bound, push} =
+      case bound(claimed(push.held), push.lateness) do
+        {:incompatible, claim} -> {nil, fault(push, {:lateness, :incompatible, claim})}
+        bound -> {bound, push}
+      end
+
+    {claim, push} = claim(push, delivery)
+
+    {rows, inserted, faults, unheld} =
+      Changes.apply(old, delivery, schema, thinned?: thinned?(push.held), bound: bound)
+
     version = delivery.schema || held.schema
 
     held =
@@ -295,12 +319,46 @@ defmodule Macaw.Data.Source.Push do
           %{rebuild(held, rows, delivery) | schema: version, served: served}
       end
 
-    push = %{push | held: held, errors: push.errors ++ faults}
+    push = %{push | held: put_claim(held, claim), errors: push.errors ++ faults}
 
     if unheld > 0,
       do: Enum.reduce(1..unheld, push, fn _, push -> ignore(push, :unheld) end),
       else: push
   end
+
+  # The source's watermark (spec/01 §4.4): carried forward, advanced by a delivery that
+  # states a later one, and never moved back: a smaller one is a fault, the held claim
+  # kept.
+  defp claim(push, %Delivery{served: %{complete_until: given}}) do
+    held = claimed(push.held)
+
+    cond do
+      given == nil -> {held, push}
+      held == nil or Window.position(given) >= Window.position(held) -> {given, push}
+      true -> {held, fault(push, {:complete_until, :backwards, held, given})}
+    end
+  end
+
+  defp claimed(nil), do: nil
+  defp claimed(%Delivery{served: served}), do: served.complete_until
+
+  defp put_claim(%Delivery{served: served} = held, claim),
+    do: %{held | served: %{served | complete_until: claim}}
+
+  # `complete_until − lateness`, in the window field's terms; `nil` without both.
+  defp bound(nil, _lateness), do: nil
+  defp bound(_claim, nil), do: nil
+  defp bound(claim, lateness) when is_number(claim) and is_number(lateness), do: claim - lateness
+  defp bound(%DateTime{} = claim, %Duration{} = d), do: DateTime.shift(claim, Duration.negate(d))
+
+  defp bound(%NaiveDateTime{} = claim, %Duration{} = d),
+    do: NaiveDateTime.shift(claim, Duration.negate(d))
+
+  defp bound(%Date{} = claim, %Duration{} = d), do: Date.shift(claim, Duration.negate(d))
+
+  # A claim the lateness can't be taken from (a time against a number): recorded, and
+  # no bound applied.
+  defp bound(claim, _lateness), do: {:incompatible, claim}
 
   # A holding from a capped or reduced delivery may lack rows (spec/01 §4.2).
   defp thinned?(nil), do: false

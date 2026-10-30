@@ -112,7 +112,8 @@ defmodule Macaw.Data.DeliveryTest do
              reduced_by: :source,
              params: %{"region" => "eu"},
              note: "coarsened from raw",
-             position: nil
+             position: nil,
+             complete_until: nil
            }
 
     assert Delivery.new(@rows).served == %{
@@ -122,7 +123,8 @@ defmodule Macaw.Data.DeliveryTest do
              reduced_by: nil,
              params: %{},
              note: nil,
-             position: nil
+             position: nil,
+             complete_until: nil
            }
 
     assert Delivery.new(@rows, served: %{reduced_by: :runtime}).served.reduced_by == :runtime
@@ -180,6 +182,22 @@ defmodule Macaw.Data.DeliveryTest do
           [replace: %{from: 0}]
         ] do
       assert_raise ArgumentError, fn -> Delivery.new(@rows, bad) end
+    end
+  end
+
+  @tag verifies: "delivery-complete-until"
+  test "served holds complete_until, a time or a number" do
+    assert Delivery.new(@rows).served.complete_until == nil
+    assert Delivery.new(@rows, served: [complete_until: 7]).served.complete_until == 7
+
+    for t <- [~U[2026-10-30 00:00:00Z], ~N[2026-10-30 00:00:00], ~D[2026-10-30], 2.5] do
+      assert Delivery.new(@rows, served: [complete_until: t]).served.complete_until == t
+    end
+
+    for bad <- ["2026-10-30", :now, [1, 2]] do
+      assert_raise ArgumentError, ~r/complete_until/, fn ->
+        Delivery.new(@rows, served: [complete_until: bad])
+      end
     end
   end
 

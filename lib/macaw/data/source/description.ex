@@ -10,7 +10,11 @@ defmodule Macaw.Data.Source.Description do
     Macaw finishes what a source does not honor (spec/01 §2.4);
   - `viewer_independent`: `true` declares the source answers every viewer the same, which
     only allows pooling across viewers, fetched with the anonymous viewer (spec/01 §6).
-    `false` by default.
+    `false` by default;
+  - `lateness`: a hard bound on how late a change may be, declared only by a source that
+    refuses changes past some age (spec/01 §4.4): a `Duration` over a `:time` window
+    field, a non-negative number in the field's units over a `:number` one; `nil` by
+    default, accepting a change of any age.
 
   `new/1` builds one and reports every fault at once.
   """
@@ -20,7 +24,7 @@ defmodule Macaw.Data.Source.Description do
   @capabilities [:window, :box, :region, :latest, :budget, :push, :as_of]
 
   @enforce_keys [:schema]
-  defstruct [:schema, params: %{}, supports: [], viewer_independent: false]
+  defstruct [:schema, params: %{}, supports: [], viewer_independent: false, lateness: nil]
 
   @typedoc "A capability a source may honor."
   @type capability :: :window | :box | :region | :latest | :budget | :push | :as_of
@@ -29,7 +33,8 @@ defmodule Macaw.Data.Source.Description do
           schema: Schema.t(),
           params: %{String.t() => Parameter.t()},
           supports: [capability()],
-          viewer_independent: boolean()
+          viewer_independent: boolean(),
+          lateness: Duration.t() | number() | nil
         }
 
   @doc "The capabilities, in the order spec/01 §2.1 lists them."
@@ -53,7 +58,8 @@ defmodule Macaw.Data.Source.Description do
 
     faults =
       Enum.flat_map(given, fn {key, value} -> field(key, value) end) ++
-        if(Map.has_key?(given, :schema), do: [], else: [{[:schema], :required}])
+        if(Map.has_key?(given, :schema), do: [], else: [{[:schema], :required}]) ++
+        lateness(Map.get(given, :lateness), Map.get(given, :schema))
 
     case Enum.sort_by(faults, &elem(&1, 0)) do
       [] -> {:ok, struct!(__MODULE__, given)}
@@ -106,5 +112,29 @@ defmodule Macaw.Data.Source.Description do
   defp field(:supports, _), do: [{[:supports], {:type, :list}}]
   defp field(:viewer_independent, b) when is_boolean(b), do: []
   defp field(:viewer_independent, _), do: [{[:viewer_independent], {:type, :boolean}}]
+  # Judged against the schema's window field by `lateness/2`.
+  defp field(:lateness, _), do: []
   defp field(key, _), do: [{[key], :unknown_key}]
+
+  # A hard bound in the window field's terms: a `Duration` back from a time, a
+  # non-negative number back from a number (spec/01 §4.4).
+  defp lateness(nil, _schema), do: []
+
+  defp lateness(lateness, %Schema{} = schema) do
+    case Schema.window_field(schema) && schema.fields[Schema.window_field(schema)].type do
+      nil ->
+        [{[:lateness], :no_window_field}]
+
+      :time ->
+        if match?(%Duration{}, lateness), do: [], else: [{[:lateness], {:type, :duration}}]
+
+      :number ->
+        if is_number(lateness) and lateness >= 0, do: [], else: [{[:lateness], {:type, :number}}]
+
+      _box ->
+        [{[:lateness], :no_window_field}]
+    end
+  end
+
+  defp lateness(_lateness, _no_schema), do: []
 end

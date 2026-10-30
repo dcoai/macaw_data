@@ -386,11 +386,12 @@ describer/1 answers a named source's schema, no_source for an unknown name, and 
 
 ### 2.1 The description {#sources-description}
 
-`%Macaw.Data.Source.Description{schema, params, supports, viewer_independent}`, built by `new/1`, which reports every fault at once by path:
+`%Macaw.Data.Source.Description{schema, params, supports, viewer_independent, lateness}`, built by `new/1`, which reports every fault at once by path:
 - **`schema`**, required, a `Macaw.Data.Schema` (§1.2).
 - **`params`**: the parameters the source takes, by name, each a parameter (§2.2); `%{}` by default. A name is a non-empty string.
 - **`supports`**: the capabilities it honors, distinct, among `:window`, `:box`, `:region`, `:latest`, `:budget`, `:push` and `:as_of`; `[]` by default. **Every capability is optional:** Macaw finishes a window, box, region, latest or budget the source did not honor, and reports it (§2.4). (visualize.md C1, D-140.)
 - **`viewer_independent`**: `true` declares that the source answers every viewer the same. It only allows pooling across viewers (§6), which fetches with the anonymous viewer, so a wrong declaration shows everyone the anonymous answer and never one person's rows to another. The conformance kit checks it by asking two viewers. `false` by default.
+- **`lateness`**: a hard bound on how late a change may be, for a source that refuses changes past some age (§4.4); `nil` by default, accepting a change of any age.
 
 There is no other key: the earlier `reveals`, a declaration of what a result tells about the viewer for a page's privacy note, was removed (the owner's decision, 2026-10-27): a page notice of what it shows had no use case, and viewer dependence is what `viewer_independent` and the kit already check.
 
@@ -548,7 +549,8 @@ the held relation is the integral of the changelog: for a generated changelog of
   - `reduced_by`: who brought the rows within budget: **`:source`** (the source honored the budget) or **`:runtime`** (Macaw reduced a pooled delivery to this reader's budget, finished a budget the source didn't honor, or clamped a budget to the host ceiling); `nil` when nobody had to. A component that draws fewer rows than it was handed says so in its own drawn state ([macaw_compose 05](https://github.com/dcoai/macaw/blob/main/spec/05-components.md#components-states)), not in the delivery;
   - `params`: the parameters it was answered for, a map, `%{}` by default;
   - `note`: a line for a person (`"coarsened from raw"`), or `nil`;
-  - `position`: for a snapshot taken for a push subscription, the number of the last increment it reflects, a non-negative integer (`0` for none); `nil` for any other answer (§4.1).
+  - `position`: for a snapshot taken for a push subscription, the number of the last increment it reflects, a non-negative integer (`0` for none); `nil` for any other answer (§4.1);
+  - `complete_until`: a value of the window field, a time or a number, below which the source expects no further change, or `nil` for no claim (§4.4).
 - **`origin`**: `%{source: name, request: digest, as_of: time}`, the source, a digest of the request (`Macaw.Layers.Document.digest/1` of it), and the `DateTime` it is as of when used, else `nil`; or `nil`.
 - **`retracted`** and **`replace`**: the changes a pushed increment carries beside its inserted rows (§4.2), `[]` by default.
 
@@ -712,8 +714,6 @@ an increment at another resolution than what is held is not merged, is recorded 
 
 ### 4.4 Settled ranges {#sources-push-settled}
 
-<!-- surfex: deferred dco-tek/macaw/macaw_data#14: complete_until and the optional lateness bound -->
-
 **`served.complete_until` is a watermark the source declares** (§3): a value of the window field, a time or a number, below which it expects no further change, or `nil` for no claim. It is an assertion the source makes on each delivery, not a setting.
 - **It means settled, not final.** It marks where changes are expected, and so which results downstream are provisional. A change before it is still accepted, unless a hard bound refuses it (below), and lands in that range's delta (§2.6).
 - **It never moves backwards within a subscription.** A later delivery, snapshot or increment, with a smaller value is `{:complete_until, :backwards, held, given}` in `errors`; the held claim is kept and the delivery's changes still apply. A new subscription, a new `Push`, starts afresh.
@@ -724,6 +724,7 @@ an increment at another resolution than what is held is not merged, is recorded 
 **A description may declare `lateness`, a hard bound** (§2.1, `nil` by default), only for a source that really refuses changes past some age: a `Duration` over a `:time` window field, a non-negative number in the field's units over a `:number` one. Another value is `{[:lateness], {:type, :duration}}` or `{[:lateness], {:type, :number}}` from `Description.new/1`, and a `lateness` with no window field `{[:lateness], :no_window_field}`. The holder gives it to `Push.new/3` (`lateness:`).
 - **Where declared,** a change whose window value is older than `complete_until − lateness`, the claim held when the increment is applied, is refused: `{:late, row, bound}` in `errors`. A replacement whose range reaches before the bound (`from` earlier, or `nil`) is refused whole, `{:late, range, bound}`, never clipped.
 - **Where not declared, a change of any age is accepted.** metresis declares none.
+- **A claim the bound can't be taken from,** a time against a number `lateness`, is `{:lateness, :incompatible, claim}` in `errors`, and bounds nothing.
 - **A snapshot is the relation itself,** and is never refused.
 
 **What it serves:** a chart draws the part after `complete_until` as provisional; the chunked table marks the chunks wholly before it settled (§2.6); its cold tier prefers settled chunks.

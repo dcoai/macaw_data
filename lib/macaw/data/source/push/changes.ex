@@ -11,12 +11,16 @@ defmodule Macaw.Data.Source.Push.Changes do
   @doc false
   # `{rows, inserted, faults, unheld}`: the rows after the increment (the held ones left,
   # then the inserted ones), the rows inserted, the faults in order, and how many
-  # retractions named a row a thinned holding lacks.
-  def apply(held, %Delivery{} = increment, %Schema{} = schema, thinned?) do
-    ctx = %{schema: schema, time: Schema.window_field(schema), thinned?: thinned?}
+  # retractions named a row a thinned holding lacks. `bound` is the lateness bound in
+  # force (spec/01 §4.4), `nil` for none: a change older than it is refused, and a
+  # replacement reaching before it refused whole.
+  def apply(held, %Delivery{} = increment, %Schema{} = schema, thinned?: thinned?, bound: bound) do
+    ctx = %{schema: schema, time: Schema.window_field(schema), thinned?: thinned?, bound: bound}
 
-    {replacements, faults} = replacements(increment.replace, ctx)
-    {retractions, faults} = outside(increment.retracted, replacements, ctx, faults)
+    {replacements, faults} = timely_ranges(increment.replace, ctx)
+    {replacements, faults} = replacements(replacements, ctx, faults)
+    {retractions, faults} = timely(increment.retracted, ctx, faults)
+    {retractions, faults} = outside(retractions, replacements, ctx, faults)
 
     {held, faults, unheld} =
       Enum.reduce(retractions, {held, faults, 0}, &retract(&1, &2, ctx))
@@ -29,15 +33,16 @@ defmodule Macaw.Data.Source.Push.Changes do
         {rows ++ inside, faults ++ Enum.map(out, &{:outside, &1})}
       end)
 
-    {others, faults} = outside(Delivery.named_rows(increment), replacements, ctx, faults)
+    {others, faults} = timely(Delivery.named_rows(increment), ctx, faults)
+    {others, faults} = outside(others, replacements, ctx, faults)
     inserted = replaced ++ others
     {held ++ inserted, inserted, faults, unheld}
   end
 
   # The replacements that apply: a range other than the whole one needs a window field,
   # and one overlapping an earlier replacement of the increment is refused.
-  defp replacements(given, ctx) do
-    Enum.reduce(given, {[], []}, fn r, {kept, faults} ->
+  defp replacements(given, ctx, faults) do
+    Enum.reduce(given, {[], faults}, fn r, {kept, faults} ->
       cond do
         ctx.time == nil and (r.from != nil or r.to != nil) ->
           {kept, faults ++ [{:replace, :no_window_field}]}
@@ -49,6 +54,29 @@ defmodule Macaw.Data.Source.Push.Changes do
           {kept ++ [r], faults}
       end
     end)
+  end
+
+  # Under a lateness bound, a row whose window value is older is refused, and a range
+  # reaching before it refused whole, never clipped.
+  defp timely(rows, %{bound: nil}, faults), do: {rows, faults}
+
+  defp timely(rows, %{bound: bound} = ctx, faults) do
+    {late, timely} = Enum.split_with(rows, &before?(Table.get(&1, ctx.time), bound))
+    {timely, faults ++ Enum.map(late, &{:late, &1, bound})}
+  end
+
+  defp timely_ranges(ranges, %{bound: nil}), do: {ranges, []}
+
+  defp timely_ranges(ranges, %{bound: bound}) do
+    {late, timely} = Enum.split_with(ranges, &(&1.from == nil or before?(&1.from, bound)))
+    {timely, Enum.map(late, &{:late, {&1.from, &1.to}, bound})}
+  end
+
+  defp before?(value, bound) do
+    case position(value) do
+      nil -> false
+      t -> t < position(bound)
+    end
   end
 
   # Changes that fall inside a replaced range are conflicts, never applied.

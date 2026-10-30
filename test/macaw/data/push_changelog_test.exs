@@ -8,7 +8,7 @@ defmodule Macaw.Data.PushChangelogTest do
 
   alias Macaw.Data.{Delivery, Schema, Table}
   alias Macaw.Data.Schema.Cache
-  alias Macaw.Data.Source.Push
+  alias Macaw.Data.Source.{Description, Push}
 
   @schema Schema.new!(%{"t" => %{type: :number, window: true}, "v" => %{type: :number}})
   @version Schema.version(@schema)
@@ -508,5 +508,145 @@ defmodule Macaw.Data.PushChangelogTest do
   defp in_scope?(row, %{from: from, to: to, identities: ids}) do
     t = row["t"]
     (ids == nil or row["id"] in ids) and (from == nil or t >= from) and (to == nil or t < to)
+  end
+
+  # -- settled ranges (spec/01 §4.4) --------------------------------------------------------
+
+  @tag verifies: "push-settled"
+  test "complete_until is carried forward and never moves backwards within a subscription" do
+    s = tapped() |> start([tap("a", 1, 1)], complete_until: 5)
+    assert Push.held(elem(s, 0)).served.complete_until == 5
+
+    # Carried forward over an increment that states none, advanced by one that does.
+    s = s |> change(1, rows: [tap("a", 6, 1)])
+    assert Push.held(elem(s, 0)).served.complete_until == 5
+    s = s |> change(2, rows: [tap("a", 7, 1)], served: [complete_until: 8])
+    assert Push.held(elem(s, 0)).served.complete_until == 8
+
+    # A smaller one is recorded, the held claim kept, and the changes still apply.
+    s = s |> change(3, rows: [tap("a", 2, 1)], served: [complete_until: 6])
+    assert Push.held(elem(s, 0)).served.complete_until == 8
+    assert faults(s) == [{:complete_until, :backwards, 8, 6}]
+    assert tap("a", 2, 1) in holding(s)
+
+    # A snapshot is held to the same check.
+    {push, _} = s
+
+    back =
+      Delivery.new([tap("a", 1, 1)],
+        schema: Schema.version(@tapped),
+        served: [position: 3, complete_until: 4]
+      )
+
+    push = push |> Push.snapshot(back) |> drain()
+    assert Push.held(push).served.complete_until == 8
+    assert List.last(push.errors) == {:complete_until, :backwards, 8, 4}
+
+    # A new subscription starts afresh; with none there is no claim.
+    fresh = tapped() |> start([tap("a", 1, 1)], complete_until: 2)
+    assert Push.held(elem(fresh, 0)).served.complete_until == 2
+    none = tapped() |> start([tap("a", 1, 1)]) |> change(1, rows: [tap("a", 2, 1)])
+    assert Push.held(elem(none, 0)).served.complete_until == nil
+  end
+
+  @tag verifies: "push-lateness"
+  test "a declared lateness refuses changes past its bound; without it any age is accepted" do
+    base = [tap("a", 1, 1), tap("a", 50, 1)]
+
+    # Without lateness, a change of any age is accepted, before complete_until too.
+    any = tapped() |> start(base, complete_until: 100)
+    any = any |> change(1, rows: [tap("a", 0, 9)], retracted: [tap("a", 1, 1)])
+    assert faults(any) == [] and tap("a", 0, 9) in holding(any)
+
+    # With lateness 10 and complete_until 100 the bound is 90.
+    late = fn ->
+      {Push.new(:taps, make_ref(), cache: Cache.new([{:taps, @tapped}]), lateness: 10), []}
+    end
+
+    s = late.() |> start(base, complete_until: 100)
+
+    r =
+      s
+      |> change(1,
+        rows: [tap("a", 89, 2), tap("a", 90, 2)],
+        retracted: [tap("a", 50, 1)]
+      )
+
+    assert faults(r) == [{:late, tap("a", 50, 1), 90}, {:late, tap("a", 89, 2), 90}]
+    assert holding(r) == [tap("a", 1, 1), tap("a", 50, 1), tap("a", 90, 2)]
+
+    # A replacement reaching past the bound is refused whole, never clipped.
+    whole = s |> change(1, replace: [%{from: 80, to: nil, rows: [tap("a", 95, 3)]}])
+    assert faults(whole) == [{:late, {80, nil}, 90}]
+    assert holding(whole) == base
+    open = s |> change(1, replace: [%{rows: []}])
+    assert faults(open) == [{:late, {nil, nil}, 90}]
+    fine = s |> change(1, replace: [%{from: 90, rows: [tap("a", 95, 3)]}])
+    assert faults(fine) == [] and tap("a", 95, 3) in holding(fine)
+
+    # A snapshot is the relation itself: never refused.
+    {push, _} = s
+
+    snap =
+      Delivery.new([tap("a", 1, 7)],
+        schema: Schema.version(@tapped),
+        served: [position: 0, complete_until: 100]
+      )
+
+    push = push |> Push.snapshot(snap) |> drain()
+    assert held(push) == [tap("a", 1, 7)] and push.errors == []
+
+    # Over a time window field the bound is a Duration back from the claim.
+    timed = Schema.new!(%{"at" => %{type: :time}, "v" => %{type: :number}})
+    t0 = ~U[2026-10-30 12:00:00Z]
+
+    p =
+      Push.new(:timed, make_ref(),
+        cache: Cache.new([{:timed, timed}]),
+        lateness: Duration.new!(hour: 1)
+      )
+
+    snap =
+      Delivery.new([], schema: Schema.version(timed), served: [position: 0, complete_until: t0])
+
+    rows = [
+      %{"at" => ~U[2026-10-30 10:59:59Z], "v" => 1},
+      %{"at" => ~U[2026-10-30 11:00:00Z], "v" => 2}
+    ]
+
+    inc = Delivery.new(rows, schema: Schema.version(timed))
+    p = p |> Push.snapshot(snap) |> send_in(Push.increment_message(p.ref, 1, inc)) |> drain()
+    assert p.errors == [{:late, hd(rows), ~U[2026-10-30 11:00:00Z]}]
+    assert Delivery.named_rows(Push.held(p)) == tl(rows)
+
+    # A lateness that can't be taken from the claim (a number from a time) is recorded,
+    # and bounds nothing.
+    q = Push.new(:timed, make_ref(), cache: Cache.new([{:timed, timed}]), lateness: 10)
+    q = q |> Push.snapshot(snap) |> send_in(Push.increment_message(q.ref, 1, inc)) |> drain()
+    assert q.errors == [{:lateness, :incompatible, t0}]
+    assert Delivery.named_rows(Push.held(q)) == rows
+
+    # A description's lateness: a Duration over a time window field, a number over a
+    # number one, refused with no window field.
+    numbered = Schema.new!(%{"t" => %{type: :number, window: true}})
+    assert {:ok, %{lateness: 5}} = Description.new(schema: numbered, lateness: 5)
+    assert {:ok, %{lateness: nil}} = Description.new(schema: numbered)
+
+    assert {:ok, %{lateness: %Duration{}}} =
+             Description.new(schema: timed, lateness: Duration.new!(day: 2))
+
+    assert Description.new(schema: numbered, lateness: Duration.new!(day: 2)) ==
+             {:error, [{[:lateness], {:type, :number}}]}
+
+    assert Description.new(schema: numbered, lateness: -1) ==
+             {:error, [{[:lateness], {:type, :number}}]}
+
+    assert Description.new(schema: timed, lateness: 60) ==
+             {:error, [{[:lateness], {:type, :duration}}]}
+
+    windowless = Schema.new!(%{"msg" => %{type: :text}})
+
+    assert Description.new(schema: windowless, lateness: 5) ==
+             {:error, [{[:lateness], :no_window_field}]}
   end
 end
