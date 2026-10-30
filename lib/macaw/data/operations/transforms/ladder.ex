@@ -26,6 +26,8 @@ defmodule Macaw.Data.Operations.Transforms.Ladder do
     finer partials.
   """
 
+  import Bitwise
+
   alias Macaw.Data.Table
   alias Macaw.Data.Table.Chunk
   alias Macaw.Data.Operations.Transforms
@@ -197,9 +199,7 @@ defmodule Macaw.Data.Operations.Transforms.Ladder do
 
   @doc "The bucket of `s` at level `k`: `floor(s / 2^k)`, exactly."
   @spec bucket(number(), integer()) :: integer()
-  def bucket(s, k) when is_integer(s) and k >= 0, do: Integer.floor_div(s, Integer.pow(2, k))
-  def bucket(s, k) when is_integer(s), do: s * Integer.pow(2, -k)
-  def bucket(s, k), do: floor(s / pow2(k))
+  def bucket(s, k), do: at_bucket(s, k, pow2(k))
 
   # -- partials -------------------------------------------------------------------------------
 
@@ -208,46 +208,88 @@ defmodule Macaw.Data.Operations.Transforms.Ladder do
   piece of view 0. A run's buckets are ascending by bucket, each once.
   """
   @spec partial(Table.view(), map(), integer(), String.t()) :: partial()
-  def partial(view, %{x_name: x_name, y_name: y_name} = bound, k, op) do
+  def partial(view, %{x_name: x_name, y_name: y_name, kind: kind} = bound, k, op) do
     xs = Transforms.view_values(view, x_name)
     ys = Transforms.view_values(view, y_name)
-    {k, [view], [{0, walk(xs, ys, 0, bound, k, op, nil, nil, [])}]}
+    {k, [view], [{0, walk(xs, ys, 0, {kind, k, pow2(k), bound, op}, nil, nil, [])}]}
   end
 
-  # One pass over the rows. The open bucket, `{b, summary}`, is carried until a row lands
-  # in another; the run's closed buckets are kept newest first, `{entries, ordered?}`,
-  # `ordered?` while each bucket closed is above the one before (rows in x order), so a
-  # run in x order is reversed and any other made ascending through a map once.
-  defp walk([], [], _i, _bound, _k, _op, open, run, segments),
+  # One pass over the rows, `at` the scale's kind, the level, its bucket's width, the
+  # bound context and the step's name, read once. Between gaps, `open/12` carries the
+  # open bucket's first point, its last row, space and y, and its least and greatest
+  # points as arguments, so a row that lands in the open bucket allocates nothing unless it
+  # is a new extreme. The run's closed buckets are kept newest first, `{entries,
+  # ordered?}`, `ordered?` while each bucket closed is above the one before (rows in x
+  # order), so a run in x order is reversed and any other made ascending through a map
+  # once.
+  defp walk([], [], _i, _at, open, run, segments),
     do: Enum.reverse(close_run(put_open(open, run), segments))
 
-  defp walk([x | xs], [y | ys], i, bound, k, op, open, run, segments)
-       when x == nil or y == nil do
+  defp walk([x | xs], [y | ys], i, at, open, run, segments) when x == nil or y == nil do
     segments =
       case close_run(put_open(open, run), segments) do
         [{:gap, _} | _] = segments -> segments
         segments -> [{:gap, i} | segments]
       end
 
-    walk(xs, ys, i + 1, bound, k, op, nil, nil, segments)
+    walk(xs, ys, i + 1, at, nil, nil, segments)
   end
 
-  defp walk([x | xs], [y | ys], i, bound, k, op, open, run, segments) do
-    s = space(x, bound, op)
-    point = {i, s, Transforms.number!(y, bound.y, op)}
-    b = bucket(s, k)
+  defp walk([x | xs], [y | ys], i, {kind, k, w, bound, op} = at, open, run, segments) do
+    s = at_space(x, kind, bound, op)
+    y = if is_number(y), do: y, else: Transforms.number!(y, bound.y, op)
+    point = {i, s, y}
+    run = put_open(open, run)
+    open(xs, ys, i + 1, at, at_bucket(s, k, w), point, i, s, y, point, point, run, segments)
+  end
 
-    case open do
-      {^b, {first, _last, low, high}} ->
-        low = if elem(point, 2) < elem(low, 2), do: point, else: low
-        high = if elem(point, 2) > elem(high, 2), do: point, else: high
-        walk(xs, ys, i + 1, bound, k, op, {b, {first, point, low, high}}, run, segments)
+  # The rows while a bucket is open: `b` its bucket, `first` its first point, `li`, `ls`
+  # and `ly` its last row's, `low` and `high` its least and greatest points.
+  defp open(
+         [x | xs],
+         [y | ys],
+         i,
+         {kind, k, w, bound, op} = at,
+         b,
+         first,
+         li,
+         ls,
+         ly,
+         low,
+         high,
+         run,
+         segments
+       )
+       when x != nil and y != nil do
+    s = at_space(x, kind, bound, op)
+    y = if is_number(y), do: y, else: Transforms.number!(y, bound.y, op)
 
-      _other_or_none ->
-        run = put_open(open, run)
-        walk(xs, ys, i + 1, bound, k, op, {b, {point, point, point, point}}, run, segments)
+    case at_bucket(s, k, w) do
+      ^b ->
+        low = if y < elem(low, 2), do: {i, s, y}, else: low
+        high = if y > elem(high, 2), do: {i, s, y}, else: high
+        open(xs, ys, i + 1, at, b, first, i, s, y, low, high, run, segments)
+
+      next ->
+        run = put_open({b, {first, {li, ls, ly}, low, high}}, run)
+        point = {i, s, y}
+        open(xs, ys, i + 1, at, next, point, i, s, y, point, point, run, segments)
     end
   end
+
+  defp open(xs, ys, i, at, b, first, li, ls, ly, low, high, run, segments),
+    do: walk(xs, ys, i, at, {b, {first, {li, ls, ly}, low, high}}, run, segments)
+
+  # `space/3` for a number on a linear or time scale, read without a call; any other
+  # reading through it.
+  defp at_space(x, :linear, _bound, _op) when is_number(x), do: x
+  defp at_space(x, :time, _bound, _op) when is_number(x), do: x * 1_000_000
+  defp at_space(x, _kind, bound, op), do: space(x, bound, op)
+
+  # `bucket/2` with the bucket's width `w` (`2^k`) computed once.
+  defp at_bucket(s, k, _w) when is_integer(s) and k >= 0, do: s >>> k
+  defp at_bucket(s, k, _w) when is_integer(s), do: s <<< -k
+  defp at_bucket(s, _k, w), do: floor(s / w)
 
   defp put_open(nil, run), do: run
   defp put_open(entry, nil), do: {[entry], true}

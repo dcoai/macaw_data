@@ -363,6 +363,104 @@ defmodule Macaw.Data.Operations.LadderTest do
     end
   end
 
+  describe "a chunk's partial in one pass (spec/04 §4.5.1; #41)" do
+    # The partial as the ladder defines it: rows split into runs by gaps (each run of gap
+    # rows its first row), each run's rows grouped by bucket floor(s / 2^k), computed
+    # exactly, each bucket's first and last row and its least and greatest y, the earlier
+    # on a tie, ascending by bucket.
+    defp defined(xs, ys, bound, k) do
+      rows = Enum.zip([xs, ys, 0..(length(xs) - 1)//1])
+
+      rows
+      |> Enum.chunk_by(fn {x, y, _i} -> x == nil or y == nil end)
+      |> Enum.map(fn
+        [{x, y, i} | _] when x == nil or y == nil ->
+          {:gap, i}
+
+        run ->
+          buckets =
+            run
+            |> Enum.map(fn {x, y, i} ->
+              s = Ladder.space(x, bound, "m4")
+              {exact_bucket(s, k), {i, s, y}}
+            end)
+            |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
+            |> Enum.map(fn {b, points} ->
+              {b,
+               {List.first(points), List.last(points), Enum.min_by(points, &elem(&1, 2)),
+                Enum.max_by(points, &elem(&1, 2))}}
+            end)
+            |> Enum.sort()
+
+          {:run, buckets}
+      end)
+    end
+
+    defp exact_bucket(s, k) when is_integer(s) and k >= 0, do: Integer.floor_div(s, 2 ** k)
+    defp exact_bucket(s, k) when is_integer(s), do: s * 2 ** -k
+    defp exact_bucket(s, k), do: floor(s / if(k >= 0, do: 2 ** k, else: :math.pow(2, k)))
+
+    @tag verifies: "operations-ladder-walk"
+    property "a chunk's partial equals the one the ladder defines, on every scale" do
+      check all(
+              kind <- member_of([:linear, :time, :log]),
+              k <- integer(-4..8),
+              rows <-
+                list_of(
+                  tuple(
+                    {frequency([
+                       {6, integer(1..5_000)},
+                       {3, float(min: 0.5, max: 5_000.0)},
+                       {1, constant(nil)}
+                     ]),
+                     frequency([
+                       {8, float(min: -100.0, max: 100.0)},
+                       {2, integer(-5..5)},
+                       {1, constant(nil)}
+                     ])}
+                  ),
+                  min_length: 1,
+                  max_length: 300
+                ),
+              sorted? <- boolean(),
+              max_runs: 300
+            ) do
+        rows = if sorted?, do: Enum.sort_by(rows, &(elem(&1, 0) || 0)), else: rows
+        {xs, ys} = Enum.unzip(rows)
+
+        input =
+          Table.new!([
+            {"t", :number, xs},
+            {"v", :number, ys}
+          ])
+
+        [view] = Table.chunks(input)
+        bound = %{x: "t", y: "v", x_name: "t", y_name: "v", kind: kind}
+
+        for x <- xs, x != nil do
+          s = Ladder.space(x, bound, "m4")
+          assert Ladder.bucket(s, k) == exact_bucket(s, k)
+        end
+
+        assert Ladder.partial(view, bound, k, "m4") ==
+                 {k, [view], [{0, defined(xs, ys, bound, k)}]}
+      end
+    end
+
+    @tag verifies: "operations-ladder-walk"
+    test "a sorted chunk of integer x and float y costs at most 12 reductions a row" do
+      n = Table.chunk_rows()
+      input = table(for i <- 0..(n - 1), do: {i * 3, :math.sin(i / 50) * 100})
+      [view] = Table.chunks(input)
+      bound = %{x: "t", y: "v", x_name: "t", y_name: "v", kind: :linear}
+
+      for k <- [0, 4, 9] do
+        {reductions, _} = Work.reductions(fn -> Ladder.partial(view, bound, k, "m4") end)
+        assert reductions <= 12 * n, "#{reductions} reductions for #{n} rows at level #{k}"
+      end
+    end
+  end
+
   describe "gaps at chunk edges (spec/04 §4.5.1)" do
     @tag verifies: "operations-ladder-gaps"
     test "a gap on a chunk boundary survives m4 and lttb, as over one chunk" do
