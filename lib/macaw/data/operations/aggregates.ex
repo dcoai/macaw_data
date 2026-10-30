@@ -132,6 +132,8 @@ defmodule Macaw.Data.Operations.Aggregates do
     def step(n, _value, _options), do: n + 1
     @impl true
     def finish(n, _options), do: n
+    @impl true
+    def merge(a, b, _options), do: a + b
   end
 
   defmodule Distinct do
@@ -183,6 +185,12 @@ defmodule Macaw.Data.Operations.Aggregates do
 
     @impl true
     def finish(least, _options), do: least
+
+    # The earlier run's least on a tie, as the stream keeps the first.
+    @impl true
+    def merge(least, nil, _options), do: least
+    def merge(nil, other, _options), do: other
+    def merge(least, other, options), do: step(least, other, options)
   end
 
   defmodule Max do
@@ -211,6 +219,12 @@ defmodule Macaw.Data.Operations.Aggregates do
 
     @impl true
     def finish(greatest, _options), do: greatest
+
+    # The earlier run's greatest on a tie, as the stream keeps the first.
+    @impl true
+    def merge(greatest, nil, _options), do: greatest
+    def merge(nil, other, _options), do: other
+    def merge(greatest, other, options), do: step(greatest, other, options)
   end
 
   defmodule Extent do
@@ -248,11 +262,23 @@ defmodule Macaw.Data.Operations.Aggregates do
 
     @impl true
     def finish(extent, _options), do: extent
+
+    @impl true
+    def merge(extent, nil, _options), do: extent
+    def merge(nil, other, _options), do: other
+
+    def merge(extent, [low, high], options),
+      do: extent |> step(low, options) |> step(high, options)
   end
 
   defmodule Sum do
-    @moduledoc "`sum`: the sum of numbers, `0` of none (spec/04 §5)."
+    @moduledoc """
+    `sum`: the sum of numbers, `0` of none (spec/04 §5): exact, so any order and any
+    grouping of the readings give the same value. Integers add as integers; with a float
+    among them, the exact sum is rounded once to the nearest float.
+    """
     @behaviour Macaw.Data.Aggregate
+    alias Macaw.Data.Exact
     alias Macaw.Data.Operations.Aggregates
 
     @impl true
@@ -266,16 +292,19 @@ defmodule Macaw.Data.Operations.Aggregates do
     @impl true
     def reduce(values, options), do: Aggregates.fold(__MODULE__, values, options)
     @impl true
-    def init(_options), do: 0
+    def init(_options), do: Exact.zero()
     @impl true
-    def step(sum, value, _options), do: sum + Aggregates.number!(name(), value)
+    def step(sum, value, _options), do: Exact.add(sum, Aggregates.number!(name(), value))
     @impl true
-    def finish(sum, _options), do: sum
+    def finish(sum, _options), do: Exact.value(sum)
+    @impl true
+    def merge(a, b, _options), do: Exact.merge(a, b)
   end
 
   defmodule Mean do
-    @moduledoc "`mean`: the arithmetic mean, a float (spec/04 §5)."
+    @moduledoc "`mean`: the arithmetic mean, a float, the exact sum over the count (spec/04 §5)."
     @behaviour Macaw.Data.Aggregate
+    alias Macaw.Data.Exact
     alias Macaw.Data.Operations.Aggregates
 
     @impl true
@@ -289,12 +318,16 @@ defmodule Macaw.Data.Operations.Aggregates do
     @impl true
     def reduce(values, options), do: Aggregates.fold(__MODULE__, values, options)
     @impl true
-    def init(_options), do: {0, 0}
+    def init(_options), do: {Exact.zero(), 0}
     @impl true
-    def step({sum, n}, value, _options), do: {sum + Aggregates.number!(name(), value), n + 1}
+    def step({sum, n}, value, _options),
+      do: {Exact.add(sum, Aggregates.number!(name(), value)), n + 1}
+
     @impl true
     def finish({_sum, 0}, _options), do: nil
-    def finish({sum, n}, _options), do: sum / n
+    def finish({sum, n}, _options), do: Exact.value(sum) / n
+    @impl true
+    def merge({a, m}, {b, n}, _options), do: {Exact.merge(a, b), m + n}
   end
 
   defmodule Median do

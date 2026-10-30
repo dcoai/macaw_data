@@ -33,12 +33,13 @@ defmodule Macaw.Data.Operations.Transforms.Window do
   def outputs(_node, columns), do: columns
 
   @impl true
-  def run(%{"latest" => true} = node, table, context), do: run_latest(node, table, context)
   def run(node, table, context), do: Step.run(__MODULE__, node, table, context)
 
   # Without `latest`, a per-row step (spec/04 §1.4): a chunk wholly inside the window
   # passes through, one wholly outside is dropped, and only an edge chunk is cut, a sorted
-  # window field binary-searched and any other column scanned. With it, a combine.
+  # window field binary-searched and any other column scanned. With it, a combine: each
+  # chunk's newest row per identity of the rows it selects, merged in chunk order, the
+  # later chunk's on a tie.
   @impl true
   def class(%{"latest" => true}), do: :combine
   def class(_node), do: :row
@@ -49,6 +50,11 @@ defmodule Macaw.Data.Operations.Transforms.Window do
   # The window's bounds over the whole input, once: `now` the context's, else the newest
   # reading, found from the end of a sorted column or by a scan of any other.
   @impl true
+  def bind(%{"latest" => true} = node, table, context) do
+    ids = identity!(Map.get(context, :schema), Table.names(table))
+    node |> Map.put("latest", false) |> bind(table, context) |> Map.put(:ids, ids)
+  end
+
   def bind(%{"field" => field, "from" => from, "to" => to}, table, context) do
     name = Transforms.name_in(Table.names(table), field)
     sorted? = name != nil and Table.sorted(table) == name
@@ -73,6 +79,11 @@ defmodule Macaw.Data.Operations.Transforms.Window do
   # inside or outside the window, so its key holds no `now`; else its slice bounds, a run
   # of a sorted column, or the window over any other.
   @impl true
+  def resolve(%{"latest" => true} = node, view, %{ids: ids} = bound) do
+    selection = resolve(Map.put(node, "latest", false), view, Map.delete(bound, :ids))
+    {:latest, selection, %{name: bound[:name], field: bound[:field], ids: ids}}
+  end
+
   def resolve(_node, _view, %{bounds: nil}), do: :none
 
   def resolve(_node, {_chunk, _first, count} = view, %{bounds: {lo, hi}, sorted?: true} = bound) do
@@ -112,6 +123,18 @@ defmodule Macaw.Data.Operations.Transforms.Window do
   end
 
   @impl true
+  def chunk(node, view, {:latest, selection, %{name: name, field: field, ids: ids}}) do
+    rows =
+      case chunk(node, view, selection) do
+        :none -> []
+        :all -> Enum.to_list(0..(elem(view, 2) - 1)//1)
+        {:run, a, n} -> Enum.to_list(a..(a + n - 1)//1)
+        {:rows, kept} -> kept
+      end
+
+    {[view], newest_by_identity(view, rows, name, field, ids)}
+  end
+
   def chunk(_node, {_chunk, _first, count} = view, {:between, name, field, lo, hi}) do
     view
     |> readings(name, field)
@@ -179,35 +202,88 @@ defmodule Macaw.Data.Operations.Transforms.Window do
 
   defp seconds([n, unit]), do: n * Keyword.fetch!(Option.units(), unit)
 
-  # `latest` over the rows the window selects, by the declared identity: the rows' path
-  # until the combine of spec/04 §1.4 takes it over.
-  defp run_latest(%{"field" => field} = node, table, context) do
-    selected = Step.run(__MODULE__, %{node | "latest" => false}, table, context)
+  # `latest`'s two runs merged, the first's chunks before the second's: each identity's
+  # newest row, the later on a tie, as `Macaw.Data.Window.latest_rows/3` keeps it.
+  @impl true
+  def combine(_node, {views_a, newest_a}, {views_b, newest_b}) do
+    shift = length(views_a)
 
-    selected
-    |> Table.rows()
-    |> Enum.flat_map(fn row ->
-      case Table.get(row, field) do
-        nil -> []
-        reading -> [{row, Transforms.seconds!(reading, field, name())}]
+    newest =
+      Enum.reduce(newest_b, newest_a, fn {id, {t, k, i}}, newest ->
+        case newest do
+          %{^id => {held, _k, _i}} when held > t -> newest
+          _later_or_first -> Map.put(newest, id, {t, k + shift, i})
+        end
+      end)
+
+    {views_a ++ views_b, newest}
+  end
+
+  # The rows kept, in their order: each chunk's gathered, named by the output's key and
+  # the rows taken, so its id and version name exactly those rows.
+  @impl true
+  def finish(_node, merged, %{input: input, key: key}) do
+    {views, newest} = merged || {[], %{}}
+    by_view = Enum.group_by(Map.values(newest), &elem(&1, 1), &elem(&1, 2))
+
+    kept =
+      for {{chunk, first, count}, k} <- Enum.with_index(views), rows = by_view[k], rows != nil do
+        rows = Enum.sort(rows)
+        {Chunk.gather(chunk, first, count, rows, {key, rows}), 0, length(rows)}
+      end
+
+    header = for name <- Table.names(input), do: {name, Table.column_type(input, name)}
+    {:ok, table} = Table.from_chunks(header, kept, sorted: Table.sorted(input))
+    table
+  end
+
+  # Of a view's rows at `rows`, each identity's newest: `{reading, 0, row}`, the later row
+  # on a tie; a row whose identity is `nil` names nothing.
+  defp newest_by_identity(view, rows, name, field, ids) do
+    readings = view |> Transforms.view_values(name) |> List.to_tuple()
+
+    columns =
+      Enum.map(ids, fn {id, found} -> {id, List.to_tuple(Transforms.view_values(view, found))} end)
+
+    Enum.reduce(rows, %{}, fn i, newest ->
+      case identity_at(columns, i) do
+        nil ->
+          newest
+
+        id ->
+          t = Transforms.seconds!(elem(readings, i), field, name())
+
+          case newest do
+            %{^id => {held, 0, _i}} when held > t -> newest
+            _later_or_first -> Map.put(newest, id, {t, 0, i})
+          end
       end
     end)
-    |> latest(Map.get(context, :schema))
-    |> Transforms.answer(__MODULE__, node, table)
   end
 
-  # Each identity the schema declares, never an inferred one (spec/04 §4.3).
-  defp latest(selected, %Schema{} = schema) do
-    Schema.identity(schema) != [] ||
-      raise ArgumentError,
-            "transform \"window\": latest over a schema that declares no identity (spec/04 §4.3)"
+  # A row's identity as `Macaw.Data.Schema.identity/2` reads it: the one field's value, or a
+  # map of every field's by the schema's names; `nil` when one is missing.
+  defp identity_at([{_id, values}], i), do: elem(values, i)
 
-    selected
-    |> Macaw.Data.Window.latest_rows(&elem(&1, 1), &Schema.identity(schema, elem(&1, 0)))
-    |> Enum.map(&elem(&1, 0))
+  defp identity_at(columns, i) do
+    values = Map.new(columns, fn {id, values} -> {id, elem(values, i)} end)
+    if Enum.any?(values, fn {_id, v} -> v == nil end), do: nil, else: values
   end
 
-  defp latest(_selected, _no_schema) do
+  # The identity the schema declares, each field by the name the table spells it with;
+  # never an inferred one (spec/04 §4.3).
+  defp identity!(%Schema{} = schema, names) do
+    case Schema.identity(schema) do
+      [] ->
+        raise ArgumentError,
+              "transform \"window\": latest over a schema that declares no identity (spec/04 §4.3)"
+
+      fields ->
+        Enum.map(fields, &{&1, Transforms.name_in(names, &1)})
+    end
+  end
+
+  defp identity!(_no_schema, _names) do
     raise ArgumentError,
           "transform \"window\": latest needs the schema of its rows in the context, whose " <>
             "declared identity it groups by (spec/04 §4.3)"

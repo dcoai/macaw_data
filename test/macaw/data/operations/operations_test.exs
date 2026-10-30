@@ -31,7 +31,17 @@ defmodule Macaw.Data.OperationsTest do
       assert {:run, 3} in callbacks and {:outputs, 2} in callbacks and {:needs, 0} in callbacks
       # spelling: allow, behaviour_info/1 is Elixir's
       assert Enum.sort(Transform.behaviour_info(:optional_callbacks)) ==
-               [bind: 3, chunk: 3, class: 1, prepare: 3, reads: 0, reduces: 0, resolve: 3]
+               [
+                 bind: 3,
+                 chunk: 3,
+                 class: 1,
+                 combine: 3,
+                 finish: 3,
+                 prepare: 3,
+                 reads: 0,
+                 reduces: 0,
+                 resolve: 3
+               ]
 
       refute function_exported?(Ops.Double, :reduces, 0)
       refute function_exported?(Ops.Double, :class, 1)
@@ -62,6 +72,7 @@ defmodule Macaw.Data.OperationsTest do
       assert Enum.sort(Aggregate.behaviour_info(:optional_callbacks)) == [
                finish: 2,
                init: 1,
+               merge: 3,
                step: 3
              ]
 

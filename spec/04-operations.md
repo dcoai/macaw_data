@@ -54,9 +54,10 @@ a transform declares its name, options, needs and outputs and runs a checked nod
 | `keeps_unit?() :: boolean()` | whether the input's unit and quantity carry to the output (§5) |
 | `reduce(values, options) :: term()` | the value of the readings, **`nil` readings already dropped**: a gap is absence, never zero (01 §1.1) |
 | `init(options)`, `step(state, value, options)`, `finish(state, options)` *(optional, together)* | the streaming form chunked windows use, over the same readings in the same order: `finish(Enum.reduce(values, init(options), &step(&2, &1, options)), options)` equals `reduce(values, options)` |
+| `merge(state, state, options)` *(optional, with the streaming form)* | the **combining form**: the state of two runs of readings, the first before the second, from each run's state. It is associative, so a step's per-chunk states merge under any grouping (§1.4): `merge(state(a), state(b))` finishes to the value of `state(a ++ b)` |
 
 ```test:operations-aggregate-callbacks
-an aggregate declares its name, options, output type and whether it keeps the unit, and reduces readings with nils dropped; where it has the streaming form, the stream equals reduce on every fixture, chunked at every split
+an aggregate declares its name, options, output type and whether it keeps the unit, and reduces readings with nils dropped; where it has the streaming form, the stream equals reduce on every fixture, chunked at every split; where it has the combining form, merging the states of two runs equals the state of both
 ```
 
 ### 1.3 Options {#operations-options}
@@ -105,11 +106,16 @@ A column-native step declares, beside §1.1's callbacks (each optional, together
 A view is `{chunk, first, count}`, the run of a chunk the input reads (`Table.chunks/1`).
 
 - **Per row** (`:row`): `filter`, `take` and `window` without `latest`. Each chunk is worked by itself, and **the merge is concatenation**. A per-row step's part is a selection of its view's rows: `:all`, the view passed through unchanged, its chunk the input's; `:none`, dropped; `{:run, first, count}`, a run of it, cut without copying; or `{:rows, indexes}`, those rows, every column gathered into a new chunk by copying its slots (`Table.Chunk.gather/5`), whose id is `{input's id, step key}`. The output keeps the input's columns and the column it is known to be sorted by (`Table.sorted/1`).
-- **The step key** of a chunk is the step's identity (`step_digest/2`'s, the kernel's digest of its module and its checked node), the context as it resolved for the chunk, and the run of the chunk the view reads when that is not the whole chunk. Keying on raw context would miss on every frame, so the key changes only when the chunk's part could: a cache keys a part by `{Chunk.id/1, Chunk.version/1, step key}`. `Step.parts/4` lists each chunk's view, resolved context and key, computing no part; `Step.chunk/3` computes one and `Step.merge/4` merges them; `Step.run/4` is the three.
+- **A combine** (`:combine`): `sum`; `aggregate` and `bin` with no `fn` or one with the combining form (§1.2: `count`, `sum`, `mean`, `min`, `max`, `extent`); and `window` with `latest`. Each chunk's part is a **partial**, and the step declares `combine(node, a, b)`, the partials of two runs merged, the first's chunks before the second's, and `finish(node, merged, %{input, key})`, its table from the merged partial (`nil` for an input of no chunks). `combine/3` is **associative**: the partials are merged in the input's chunk order, and any grouping of them, any tree, gives the same merged partial, so per-chunk partials may be kept and merged again, and any chunking gives `Table.equal?/2` results. Where a step's order matters (groups in order of first appearance, `latest`'s ties, `bin`'s readings) the merge keeps it: the first run's before the second's. A combine's output is one chunk over every input chunk (`Step.output/3`, `Table.Chunk.combine/3`), its key the step's identity over every part's key, or gathered rows named by the rows they hold (`latest`). An exact sum is what makes a floating-point sum combine: any grouping of the same readings gives the same bits (§5).
+- **The step key** of a chunk is the step's identity (`step_digest/2`'s, the kernel's digest of its module and its checked node), the context as it resolved for the chunk, and the run of the chunk the view reads when that is not the whole chunk. Keying on raw context would miss on every frame, so the key changes only when the chunk's part could: a cache keys a part by `{Chunk.id/1, Chunk.version/1, step key}`. `Step.parts/4` lists each chunk's view, resolved context and key, computing no part; `Step.chunk/3` computes one and `Step.merge/5` merges them, given the parts' keys; `Step.run/4` is the three.
 - **The chunking never changes a result:** the same rows chunked any way give `Table.equal?/2` results.
 
 ```test:operations-step-classes
 every column-native step declares its class and the context it reads, and only that context reaches it; a per-row step's merge is concatenation, its output's chunks the input's passed through, cut to a run, or gathered under the id {input id, step key}, in order, the input's sorted column kept
+```
+
+```test:operations-step-combine
+for generated rows over about 40 seeds, sum, aggregate with count, sum, mean, min and max by groups, bin counting and reducing, and window with latest give equal? results under every chunking and every grouping of their partials merged in chunk order, equal to the rows' answer; a float sum is the same bits whatever the grouping
 ```
 
 ```test:operations-step-chunking
@@ -259,7 +265,7 @@ So four windows of decreasing span partition a column exactly.
 - **`now`** is the context's `now` (§3.2) when given, else the newest reading of `field` over the rows entering the step. A live dashboard means the wall clock and a test means the data's own end, and only the caller knows which. A derived source's context has no clock (02 §2.3), so in a stored function a window is measured from its data's newest reading.
 - **Readings** are seconds: a `DateTime`, a `NaiveDateTime` (as UTC) and a `Date` (at midnight UTC) by their instant, an ISO 8601 string as `Table.temporal?/1` reads one, a number as it is. A `nil` reading is skipped. Any other reading raises `ArgumentError` naming the step and the field.
 
-**`latest: true`** asks for each entity's current state: of the rows the window selects, for each identity value, the one row whose reading of `field` is greatest, the later row in order where two tie, kept in their order. It is what a request's `latest` gives (01 §2.4), by the same function, `Macaw.Data.Window.latest_rows/3`. The identity is the one the context's `schema` **declares** (`Macaw.Data.Schema.identity/2`), never inferred, and a row whose identity is `nil` names nothing and is dropped. A `latest` step without a schema in its context, or over a schema declaring no identity, raises `ArgumentError` naming the step. Dropping the entities that are gone is a `filter` after it.
+**`latest: true`** asks for each entity's current state: of the rows the window selects, for each identity value, the one row whose reading of `field` is greatest, the later row in order where two tie, kept in their order. It is what a request's `latest` gives (01 §2.4), by the same function, `Macaw.Data.Window.latest_rows/3`. The identity is the one the context's `schema` **declares** (`Macaw.Data.Schema.identity/2`), never inferred, and a row whose identity is `nil` names nothing and is dropped. A `latest` step without a schema in its context, or over a schema declaring no identity, raises `ArgumentError` naming the step. Dropping the entities that are gone is a `filter` after it. **Class:** a combine (§1.4). Each chunk's partial is, of the rows the window selects in it, each identity's newest; two runs' partials merge by keeping the greater reading, the second run's on a tie, so ties are broken by chunk order and then by row order, as the rows' order breaks them. The rows kept are gathered from their chunks, in their order.
 
 **Outputs:** the input's columns.
 
@@ -371,7 +377,7 @@ every order and offset matches d3-shape's on the reference fixtures, keys fixed 
 
 `as` holds the bin's count, or, with `fn`, the named aggregate of the bin's readings (`bin(field: "latency", fn: "median")`), an empty bin's being that aggregate's empty value (§5). No readings yield no rows; a reading that is not a number raises `ArgumentError` naming the step.
 
-**Outputs:** `x0`, `x1`, `y0` (`:number`), `as` (`:number`, or the aggregate's output type) and `values` (`:term`).
+**Outputs:** `x0`, `x1`, `y0` (`:number`), `as` (`:number`, or the aggregate's output type) and `values` (`:term`). **Class:** counting, or with an `fn` that has the combining form (§1.2), a combine (§1.4): the bins are bound over the whole input's extent once, each chunk's readings are binned into each bin's count or state and its readings in order, and the bins merge, states by the combining form and readings in chunk order. With any other `fn` (`median`, `quantile`, `distinct`, …) it reads every reading at once.
 
 ```test:operations-bin-counts
 bin splits the extent into n equal bins or at the given thresholds, each reading in its half-open bin and the maximum in the last, counting by default or reducing each bin's readings by fn; no readings yield no rows
@@ -385,7 +391,7 @@ bin splits the extent into n equal bins or at the given thresholds, each reading
 
 `sum` is **`aggregate` with `fn: "sum"`**: `field`, `by` and `as` (`"sum"`), no `fn`. It is vocabulary a design writes, not an alias kept for compatibility, so it is never deprecated.
 
-**Outputs:** `by`'s columns with their input types, then `as` of the aggregate's output type.
+**Outputs:** `by`'s columns with their input types, then `as` of the aggregate's output type. **Class:** `sum`, and `aggregate` with an `fn` that has the combining form (§1.2: `count`, `sum`, `mean`, `min`, `max`, `extent`), is a combine (§1.4): each chunk's groups in order of first appearance, each with its state, and two runs' groups merged, the first run's order first and each group's states by the combining form. With any other `fn` it reads every reading at once.
 
 ```test:operations-group-rows
 aggregate makes one row per distinct by value in order of first appearance, or one row without by, holding the named aggregate of the group's non-nil readings; a pair field reads points; sum equals aggregate with fn sum
@@ -421,8 +427,8 @@ Each is an aggregate of `macaw_data`'s package implementing §1.2 (`Macaw.Data.O
 | `min` | | the least reading, numbers or times | `nil` | the input's | kept |
 | `max` | | the greatest | `nil` | the input's | kept |
 | `extent` | | `[min, max]` | `nil` | `:term` | kept |
-| `sum` | | the sum of numbers | `0` | `:number` | kept |
-| `mean` | | the arithmetic mean, a float | `nil` | `:number` | kept |
+| `sum` | | the sum of numbers, exact: integers as an integer; with a float among them, the exact sum rounded once to the nearest float, ties to even | `0` | `:number` | kept |
+| `mean` | | the arithmetic mean, a float: the exact sum over the count | `nil` | `:number` | kept |
 | `median` | | the middle of the sorted readings; of an even count, the mean of the two middles | `nil` | `:number` | kept |
 | `quantile` | `p` (`{:number, 0, 1}`, required) | linear interpolation between the sorted readings: at `i = (n − 1) · p`, `v[⌊i⌋] + (v[⌊i⌋+1] − v[⌊i⌋]) · (i − ⌊i⌋)`, the last index clamped | `nil` | `:number` | kept |
 | `variance` | | the sample variance, `Σ(v − mean)² / (n − 1)` | `nil`, and `nil` of one | `:number` | dropped |
@@ -433,10 +439,15 @@ Each is an aggregate of `macaw_data`'s package implementing §1.2 (`Macaw.Data.O
 - **A unit carries** where the value is of the reading's own kind: a min, a mean or a deviation of milliseconds is milliseconds. Where it is not, it is dropped: a count, the square of a unit, a rate per sample. A host drawing a sum still holds it to the quantity's additivity ([03 §10](03-units.md#quantities-additivity)): a sum of a quantity that does not add across or over time is the host's to refuse, not the statistic's.
 - **A reading of the wrong kind raises `ArgumentError`** naming the aggregate and the reading: `sum` of a string, `mean` of a time.
 - **The streaming form** (§1.2) is given by `count`, `distinct`, `min`, `max`, `extent`, `sum`, `mean`, `variance`, `deviation`, `slope` and `delta`. `median` and `quantile` need every reading, so they give none. A streaming statistic's `reduce/2` **is** its streaming form folded over the readings, so the two agree exactly: the mean is a running sum over a count, and the variance, the deviation and the slope are Welford's one-pass updates, numerically stable and equal to visualize's two-pass values to within floating-point rounding.
+- **The combining form** (§1.2) is given by `count`, `min`, `max`, `extent`, `sum` and `mean`: their states merge exactly. A floating-point sum is not associative, so a sum over chunks would change with the chunking; `sum` and `mean` therefore sum exactly (each float as the integer multiple of 2^-1074 it is), and every order and grouping of the same readings gives the same bits. `min` and `max` keep the first run's on a tie. `distinct`, `variance`, `deviation`, `slope` and `delta` give none: their merges would be inexact in floating point or would grow with the readings. `median` and `quantile` need every reading: a quantile is exact here, never a sketch's approximation, so a step reducing by one reads every reading at once.
 - **spec/02 §4 still holds.** A statistic of a delivery's rows is the statistic of those rows: a quantile of a reduced or rolled-up delivery is not the quantile of the raw readings ("a p95 of p95s is not a p95"), so a percentile from raw rows stays in the source.
 
 ```test:operations-statistics-values
 each statistic answers visualize's value on its fixtures, its empty value for no readings, and its output type; the unit carries exactly for the keeping statistics; a reading of the wrong kind raises naming the aggregate
+```
+
+```test:operations-statistics-combine
+the combining form of count, min, max, extent, sum and mean merges two runs' states into the state of both, for every split; sum is exact, the same bits in any order, an integer of integers and the exact sum rounded once with a float; exactly those statistics give it
 ```
 
 ```test:operations-statistics-stream

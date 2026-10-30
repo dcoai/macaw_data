@@ -11,8 +11,8 @@ defmodule Macaw.Data.Operations.Transforms.Aggregate do
   """
   @behaviour Macaw.Data.Transform
 
-  alias Macaw.Data.Operations
-  alias Macaw.Data.Operations.{Option, Transforms}
+  alias Macaw.Data.{Operations, Table}
+  alias Macaw.Data.Operations.{Option, Step, Transforms}
 
   @impl true
   def name, do: "aggregate"
@@ -44,7 +44,131 @@ defmodule Macaw.Data.Operations.Transforms.Aggregate do
   def outputs(node, columns), do: group_outputs(node, node["fn"], columns)
 
   @impl true
-  def run(node, table, _context), do: group(node, node["fn"], table, name())
+  def run(node, table, context), do: run_group(__MODULE__, node, node["fn"], table, context)
+
+  # A combine (spec/04 §1.4) when the aggregate has the combining form; any other is
+  # run whole until spec/04 §1.4's global steps take it.
+  @impl true
+  def class(node), do: group_class(node["fn"])
+
+  @impl true
+  def reads, do: []
+
+  @impl true
+  def bind(node, table, _context), do: group_bind(node, table)
+
+  @impl true
+  def resolve(_node, _view, bound), do: bound
+
+  @impl true
+  def chunk(node, view, bound), do: group_chunk(node, node["fn"], view, bound, name())
+
+  @impl true
+  def combine(node, a, b), do: group_combine(node["fn"], node, a, b)
+
+  @impl true
+  def finish(node, merged, at), do: group_finish(node, node["fn"], merged, at)
+
+  # -- the grouping, a combine --------------------------------------------------------------
+
+  @doc false
+  def run_group(module, node, aggregate, table, context) do
+    case group_class(aggregate) do
+      :combine -> Step.run(module, node, table, context)
+      :global -> group(node, aggregate, table, module.name())
+    end
+  end
+
+  @doc false
+  def group_class(aggregate) do
+    Code.ensure_loaded!(aggregate)
+    if function_exported?(aggregate, :merge, 3), do: :combine, else: :global
+  end
+
+  @doc false
+  # The columns the step reads, by the names the table spells them with: the field (or the
+  # pair's two) and `by`'s.
+  def group_bind(%{"field" => field, "by" => by}, table) do
+    names = Table.names(table)
+    found = &Transforms.name_in(names, &1)
+
+    field =
+      if is_list(field), do: Enum.map(field, &{&1, found.(&1)}), else: {field, found.(field)}
+
+    %{field: field, by: Enum.map(by_list(by), found)}
+  end
+
+  @doc false
+  # One chunk's groups: their keys in order of first appearance, and each one's state of
+  # the aggregate's streaming form over its readings, `nil`s dropped.
+  def group_chunk(node, aggregate, {_chunk, _first, count} = view, bound, op) do
+    options = options(node, aggregate)
+    readings = view_readings(view, bound.field, op)
+
+    keys =
+      case bound.by do
+        [] -> List.duplicate([], count)
+        by -> by |> Enum.map(&Transforms.view_values(view, &1)) |> Enum.zip_with(& &1)
+      end
+
+    {order, groups} =
+      keys
+      |> Enum.zip(readings)
+      |> Enum.reduce({[], %{}}, fn {key, reading}, {order, groups} ->
+        {order, state} =
+          case groups do
+            %{^key => state} -> {order, state}
+            _ -> {[key | order], aggregate.init(options)}
+          end
+
+        state = if reading == nil, do: state, else: aggregate.step(state, reading, options)
+        {order, Map.put(groups, key, state)}
+      end)
+
+    {Enum.reverse(order), groups}
+  end
+
+  @doc false
+  # Two runs' groups, the first's before the second's: keys in order of first appearance,
+  # each key's states merged by the aggregate's combining form.
+  def group_combine(aggregate, node, {order_a, groups_a}, {order_b, groups_b}) do
+    options = options(node, aggregate)
+
+    groups =
+      Map.merge(groups_a, groups_b, fn _key, a, b -> aggregate.merge(a, b, options) end)
+
+    {order_a ++ Enum.reject(order_b, &Map.has_key?(groups_a, &1)), groups}
+  end
+
+  @doc false
+  def group_finish(%{"by" => by} = node, aggregate, merged, %{input: input, key: key}) do
+    options = options(node, aggregate)
+    by_names = by_list(by)
+    {order, groups} = merged || {[], %{}}
+    order = if order == [] and by_names == [], do: [[]], else: order
+    states = Enum.map(order, &Map.get_lazy(groups, &1, fn -> aggregate.init(options) end))
+    columns = group_outputs(node, aggregate, Operations.columns(input))
+
+    values =
+      Enum.with_index(by_names, fn _name, i -> Enum.map(order, &Enum.at(&1, i)) end) ++
+        [Enum.map(states, &aggregate.finish(&1, options))]
+
+    Step.output(input, key, Enum.zip_with(columns, values, fn {n, t}, v -> {n, t, v} end))
+  end
+
+  defp options(node, aggregate), do: Map.take(node, Enum.map(aggregate.options(), &elem(&1, 0)))
+
+  # A view's readings of the field, or of the pair as points `[x, y]`, `nil` where either
+  # is `nil`.
+  defp view_readings(view, {_field, name}, _op), do: Transforms.view_values(view, name)
+
+  defp view_readings(view, [{x, x_name}, {_y, y_name}], op) do
+    Enum.zip_with(Transforms.view_values(view, x_name), Transforms.view_values(view, y_name), fn
+      nil, _y -> nil
+      _x, nil -> nil
+      x_reading, y_reading -> [Transforms.seconds!(x_reading, x, op), y_reading]
+    end)
+  end
 
   @doc false
   # The columns of a grouping step: `by`'s, with their types, then the value's.
@@ -131,5 +255,29 @@ defmodule Macaw.Data.Operations.Transforms.Sum do
   def outputs(node, columns), do: Aggregate.group_outputs(node, Aggregates.Sum, columns)
 
   @impl true
-  def run(node, table, _context), do: Aggregate.group(node, Aggregates.Sum, table, name())
+  def run(node, table, context),
+    do: Aggregate.run_group(__MODULE__, node, Aggregates.Sum, table, context)
+
+  # A combine (spec/04 §1.4): each chunk's groups summed exactly, the sums merged.
+  @impl true
+  def class(_node), do: :combine
+
+  @impl true
+  def reads, do: []
+
+  @impl true
+  def bind(node, table, _context), do: Aggregate.group_bind(node, table)
+
+  @impl true
+  def resolve(_node, _view, bound), do: bound
+
+  @impl true
+  def chunk(node, view, bound),
+    do: Aggregate.group_chunk(node, Aggregates.Sum, view, bound, name())
+
+  @impl true
+  def combine(node, a, b), do: Aggregate.group_combine(Aggregates.Sum, node, a, b)
+
+  @impl true
+  def finish(node, merged, at), do: Aggregate.group_finish(node, Aggregates.Sum, merged, at)
 end

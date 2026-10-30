@@ -8,8 +8,9 @@ defmodule Macaw.Data.Operations.Transforms.Bin do
   """
   @behaviour Macaw.Data.Transform
 
-  alias Macaw.Data.Operations
-  alias Macaw.Data.Operations.{Option, Transforms}
+  alias Macaw.Data.{Operations, Table}
+  alias Macaw.Data.Operations.{Option, Step, Transforms}
+  alias Macaw.Data.Operations.Transforms.Aggregate
 
   @impl true
   def name, do: "bin"
@@ -44,7 +45,165 @@ defmodule Macaw.Data.Operations.Transforms.Bin do
   end
 
   @impl true
-  def run(%{"field" => field, "thresholds" => thresholds, "as" => as} = node, table, _context) do
+  def run(node, table, context) do
+    case class(node) do
+      :combine -> Step.run(__MODULE__, node, table, context)
+      :global -> run_whole(node, table)
+    end
+  end
+
+  # A combine (spec/04 §1.4) counting, or reducing by an aggregate with the combining form:
+  # the bins are bound over the whole input's extent once, each chunk's readings are
+  # binned into per-bin states, and the states merge. With any other aggregate, run whole
+  # until spec/04 §1.4's global steps take it.
+  @impl true
+  def class(%{"fn" => nil}), do: :combine
+  def class(%{"fn" => aggregate}), do: Aggregate.group_class(aggregate)
+
+  @impl true
+  def reads, do: []
+
+  @impl true
+  def bind(%{"field" => field, "thresholds" => thresholds}, table, _context) do
+    name = Transforms.name_in(Table.names(table), field)
+
+    extent =
+      table
+      |> Table.chunks()
+      |> Enum.reduce(nil, fn view, extent ->
+        view
+        |> Transforms.view_values(name)
+        |> Enum.reduce(extent, fn
+          nil, extent -> extent
+          v, nil -> {Transforms.number!(v, field, name()), v}
+          v, {lo, hi} -> {min(lo, Transforms.number!(v, field, name())), max(hi, v)}
+        end)
+      end)
+
+    %{name: name, field: field, edges: edges(extent, thresholds)}
+  end
+
+  @impl true
+  def resolve(_node, _view, bound), do: bound
+
+  # One chunk's bins, under the edges they were binned by: per bin its state (a count, or
+  # the aggregate's) and its readings in order, reversed.
+  @impl true
+  def chunk(node, view, %{name: name, field: field, edges: edges}) do
+    {first, rest} = bin_state(node)
+    last = tuple_size(edges) - 1
+
+    bins =
+      view
+      |> Transforms.view_values(name)
+      |> Enum.reduce(%{}, fn
+        nil, bins ->
+          bins
+
+        value, bins ->
+          value = Transforms.number!(value, field, name())
+
+          case bin_of(edges, value, last) do
+            nil ->
+              bins
+
+            i ->
+              Map.update(bins, i, {rest.(first, value), [value]}, fn {state, values} ->
+                {rest.(state, value), [value | values]}
+              end)
+          end
+      end)
+
+    {edges, bins}
+  end
+
+  @impl true
+  def combine(node, {edges, a}, {_edges, b}) do
+    merge = bin_merge(node)
+
+    {edges,
+     Map.merge(a, b, fn _i, {state_a, values_a}, {state_b, values_b} ->
+       {merge.(state_a, state_b), values_b ++ values_a}
+     end)}
+  end
+
+  @impl true
+  def finish(node, merged, %{input: input, key: key}) do
+    {edges, merged} = merged || {{}, %{}}
+    {first, _step} = bin_state(node)
+    value = bin_value(node)
+
+    bins =
+      for i <- 0..(tuple_size(edges) - 1)//1 do
+        {x0, x1} = elem(edges, i)
+        {state, values} = Map.get(merged, i, {first, []})
+        {x0, x1, value.(state), Enum.reverse(values)}
+      end
+
+    columns = outputs(node, Operations.columns(input))
+
+    values = [
+      Enum.map(bins, &elem(&1, 0)),
+      Enum.map(bins, &elem(&1, 1)),
+      Enum.map(bins, fn _ -> 0 end),
+      Enum.map(bins, &elem(&1, 2)),
+      Enum.map(bins, &elem(&1, 3))
+    ]
+
+    Step.output(input, key, Enum.zip_with(columns, values, fn {n, t}, v -> {n, t, v} end))
+  end
+
+  # The bins over the extent `{d0, d1}`: `n` equal-width ones, or at the inner thresholds
+  # given, as a tuple of `{x0, x1}`; none without readings.
+  defp edges(nil, _thresholds), do: {}
+
+  defp edges({d0, d1}, thresholds) do
+    inner =
+      case thresholds do
+        n when is_integer(n) -> for i <- 1..(n - 1)//1, do: d0 + i * (d1 - d0) / n
+        list -> list
+      end
+
+    ([d0] ++ inner ++ [d1])
+    |> Enum.chunk_every(2, 1, :discard)
+    |> Enum.map(fn [x0, x1] -> {x0, x1} end)
+    |> List.to_tuple()
+  end
+
+  # The first bin `[x0, x1)` holding the value, or the last when it is the last bin's x1.
+  defp bin_of(edges, value, last) do
+    Enum.find(0..last//1, fn i ->
+      {x0, x1} = elem(edges, i)
+      value >= x0 and value < x1
+    end) || if(last >= 0 and value == elem(elem(edges, last), 1), do: last)
+  end
+
+  # A bin's state: its first state and the state after one more reading.
+  defp bin_state(%{"fn" => nil}), do: {0, fn n, _value -> n + 1 end}
+
+  defp bin_state(%{"fn" => aggregate} = node) do
+    options = options(node, aggregate)
+    {aggregate.init(options), &aggregate.step(&1, &2, options)}
+  end
+
+  defp bin_merge(%{"fn" => nil}), do: &(&1 + &2)
+
+  defp bin_merge(%{"fn" => aggregate} = node) do
+    options = options(node, aggregate)
+    &aggregate.merge(&1, &2, options)
+  end
+
+  defp bin_value(%{"fn" => nil}), do: & &1
+
+  defp bin_value(%{"fn" => aggregate} = node) do
+    options = options(node, aggregate)
+    &aggregate.finish(&1, options)
+  end
+
+  defp options(node, aggregate), do: Map.take(node, Enum.map(aggregate.options(), &elem(&1, 0)))
+
+  # A bin's rows with an aggregate that does not combine: every reading read at once.
+  defp run_whole(%{"field" => field, "thresholds" => thresholds, "as" => as} = node, table) do
     values =
       table
       |> Transforms.column(field)
@@ -62,10 +221,8 @@ defmodule Macaw.Data.Operations.Transforms.Bin do
     |> Operations.table(outputs(node, Operations.columns(table)))
   end
 
-  defp reducer(%{"fn" => nil}), do: &length/1
-
   defp reducer(%{"fn" => aggregate} = node) do
-    options = Map.take(node, Enum.map(aggregate.options(), &elem(&1, 0)))
+    options = options(node, aggregate)
     &aggregate.reduce(&1, options)
   end
 
@@ -74,28 +231,17 @@ defmodule Macaw.Data.Operations.Transforms.Bin do
   defp bins([], _thresholds), do: []
 
   defp bins(values, thresholds) do
-    {d0, d1} = Enum.min_max(values)
+    edges = edges(Enum.min_max(values), thresholds)
+    last = tuple_size(edges) - 1
 
-    inner =
-      case thresholds do
-        n when is_integer(n) -> for i <- 1..(n - 1)//1, do: d0 + i * (d1 - d0) / n
-        list -> list
-      end
-
-    bins =
-      ([d0] ++ inner ++ [d1])
-      |> Enum.chunk_every(2, 1, :discard)
-      |> Enum.map(fn [x0, x1] -> %{x0: x0, x1: x1, values: []} end)
-
-    last = length(bins) - 1
+    bins = for {x0, x1} <- Tuple.to_list(edges), do: %{x0: x0, x1: x1, values: []}
 
     values
     |> Enum.reduce(bins, fn value, bins ->
-      index =
-        Enum.find_index(bins, &(value >= &1.x0 and value < &1.x1)) ||
-          if(value == List.last(bins).x1, do: last)
-
-      if index, do: List.update_at(bins, index, &%{&1 | values: [value | &1.values]}), else: bins
+      case bin_of(edges, value, last) do
+        nil -> bins
+        index -> List.update_at(bins, index, &%{&1 | values: [value | &1.values]})
+      end
     end)
     |> Enum.map(&%{&1 | values: Enum.reverse(&1.values)})
   end

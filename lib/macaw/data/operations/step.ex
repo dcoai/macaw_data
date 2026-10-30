@@ -59,8 +59,10 @@ defmodule Macaw.Data.Operations.Step do
   """
   @spec run(module(), map(), Table.t(), map()) :: Table.t()
   def run(module, node, %Table{} = table, context) when is_map(context) do
+    table = warmed(table)
     parts = parts(module, node, table, context)
-    merge(module, node, Enum.map(parts, &chunk(module, node, &1)), table)
+    partials = Enum.map(parts, &chunk(module, node, &1))
+    merge(module, node, partials, table, Enum.map(parts, & &1.key))
   end
 
   @doc """
@@ -100,11 +102,15 @@ defmodule Macaw.Data.Operations.Step do
 
   @doc """
   One chunk's part. A per-row step's is the views its selection keeps: none, the input's
-  view or a run of it, or one gathered chunk named `{input id, step key}`.
+  view or a run of it, or one gathered chunk named `{input id, step key}`. Any other
+  class's is the step's own partial.
   """
   @spec chunk(module(), map(), part()) :: term()
   def chunk(module, node, %{view: view, context: context, key: key}) do
-    row_part(module.chunk(node, view, context), view, key)
+    case module.class(node) do
+      :row -> row_part(module.chunk(node, view, context), view, key)
+      _class -> module.chunk(node, view, context)
+    end
   end
 
   defp row_part(:all, view, _key), do: [view]
@@ -120,16 +126,50 @@ defmodule Macaw.Data.Operations.Step do
     do: [{Chunk.gather(chunk, first, count, indexes, key), 0, length(indexes)}]
 
   @doc """
-  The parts merged into the step's table, as its class says: a per-row step's parts
-  concatenated in order, under the input's columns and keeping its order (`sorted/1`).
+  The parts merged into the step's table, as its class says, given in the input's chunk
+  order with their step keys (`parts/4`):
+
+  - **per row:** concatenated in order, under the input's columns and keeping its order
+    (`sorted/1`);
+  - **a combine:** folded in chunk order by the step's `combine/3`, associative, so any
+    grouping of the same partials gives the same table, then answered by its `finish/3`,
+    given the input and the output's step key: the step's identity over the parts' keys.
   """
-  @spec merge(module(), map(), [term()], Table.t()) :: Table.t()
-  def merge(_module, _node, partials, %Table{} = input) do
-    header = for name <- Table.names(input), do: {name, Table.column_type(input, name)}
+  @spec merge(module(), map(), [term()], Table.t(), [term()]) :: Table.t()
+  def merge(module, node, partials, %Table{} = input, keys \\ []) do
+    case module.class(node) do
+      :row ->
+        {:ok, table} =
+          Table.from_chunks(header(input), Enum.concat(partials), sorted: Table.sorted(input))
 
-    {:ok, table} =
-      Table.from_chunks(header, Enum.concat(partials), sorted: Table.sorted(input))
+        table
 
+      :combine ->
+        merged =
+          case partials do
+            [] -> nil
+            [first | rest] -> Enum.reduce(rest, first, &module.combine(node, &2, &1))
+          end
+
+        identity = Document.digest(%{"module" => module, "node" => node})
+        module.finish(node, merged, %{input: input, key: {identity, keys}})
+    end
+  end
+
+  @doc """
+  A combine's or a global step's output: one chunk of `columns` (`{name, type, values}`)
+  over every chunk of `input`, named by `key` over the inputs' ids and versions
+  (`Macaw.Data.Table.Chunk.combine/3`), nothing hashed.
+  """
+  @spec output(Table.t(), term(), [{Table.name(), Table.type(), [term()]}]) :: Table.t()
+  def output(%Table{} = input, key, columns) do
+    inputs = for {chunk, _first, _count} <- Table.chunks(input), do: chunk
+    header = for {name, type, _values} <- columns, do: {name, type}
+    {:ok, chunk} = Chunk.combine(inputs, key, columns)
+    {:ok, table} = Table.from_chunks(header, [chunk])
     table
   end
+
+  defp header(input),
+    do: for(name <- Table.names(input), do: {name, Table.column_type(input, name)})
 end

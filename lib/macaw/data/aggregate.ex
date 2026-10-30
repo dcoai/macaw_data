@@ -10,6 +10,10 @@ defmodule Macaw.Data.Aggregate do
       finish(Enum.reduce(values, init(options), &step(&2, &1, options)), options)
       == reduce(values, options)
 
+  An aggregate with the streaming form may also give the combining form, `merge/3`: the
+  state of two runs of readings from each run's state, associative, so a table's chunks
+  are reduced one by one and their states merged (spec/04 §1.4).
+
   Its options are checked as a transform's are (`Macaw.Data.Operations.Option`), and may
   not be a key of a step that names it (`Macaw.Data.Operations.step_keys/0`): the registry
   refuses one that is.
@@ -45,5 +49,12 @@ defmodule Macaw.Data.Aggregate do
   @doc "The streaming form's value of its state."
   @callback finish(term(), options()) :: term()
 
-  @optional_callbacks init: 1, step: 3, finish: 2
+  @doc """
+  The combining form (spec/04 §1.2): the state of two runs of readings, the first
+  before the second, from each run's state. Associative, so a step's per-chunk partials
+  merge under any grouping: `merge(state(a), state(b)) == state(a ++ b)` by value.
+  """
+  @callback merge(term(), term(), options()) :: term()
+
+  @optional_callbacks init: 1, step: 3, finish: 2, merge: 3
 end

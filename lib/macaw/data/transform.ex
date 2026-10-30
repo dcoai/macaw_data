@@ -88,5 +88,25 @@ defmodule Macaw.Data.Transform do
   @doc "One chunk's part, from its view and the context resolved for it."
   @callback chunk(node_map(), Table.view(), term()) :: term()
 
-  @optional_callbacks reduces: 0, prepare: 3, class: 1, reads: 0, bind: 3, resolve: 3, chunk: 3
+  @doc """
+  A combine's two partials merged, the first's chunks before the second's: associative,
+  so any grouping of a table's partials gives the same merged partial.
+  """
+  @callback combine(node_map(), term(), term()) :: term()
+
+  @doc """
+  A combine's table from its merged partial (`nil` for an input of no chunks), given
+  `%{input: table, key: step_key}`, the key naming its output (`Step.output/3`).
+  """
+  @callback finish(node_map(), term(), map()) :: Table.t()
+
+  @optional_callbacks reduces: 0,
+                      prepare: 3,
+                      class: 1,
+                      reads: 0,
+                      bind: 3,
+                      resolve: 3,
+                      chunk: 3,
+                      combine: 3,
+                      finish: 3
 end

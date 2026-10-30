@@ -187,4 +187,51 @@ defmodule Macaw.Data.Operations.AggregatesTest do
       end
     end
   end
+
+  describe "the combining form (spec/04 §5)" do
+    @combining ~w(count min max extent sum mean)
+
+    @tag verifies: "operations-statistics-combine"
+    test "exactly count, min, max, extent, sum and mean give it" do
+      for module <- Aggregates.all() do
+        Code.ensure_loaded!(module)
+        assert function_exported?(module, :merge, 3) == module.name() in @combining
+      end
+    end
+
+    @tag verifies: "operations-statistics-combine"
+    property "merging two runs' states is the state of both, for every split" do
+      check all(
+              values <-
+                list_of(one_of([integer(), float(min: -1.0e6, max: 1.0e6)]), max_length: 30),
+              cut <- integer(0..30)
+            ) do
+        {a, b} = Enum.split(values, cut)
+
+        for module <- Aggregates.all(), module.name() in @combining do
+          state = fn run -> Enum.reduce(run, module.init(%{}), &module.step(&2, &1, %{})) end
+          merged = module.merge(state.(a), state.(b), %{})
+          assert module.finish(merged, %{}) === module.reduce(values, %{})
+        end
+      end
+    end
+
+    @tag verifies: "operations-statistics-combine"
+    test "sum is exact: an integer of integers, else the exact sum rounded once" do
+      assert agg("sum", [1, 2, 3]) === 6
+      assert agg("sum", [1.0e16, 1.0, -1.0e16]) === 1.0
+      assert agg("sum", [0.1, 0.2]) === 0.30000000000000004
+      assert agg("sum", [1.0e308, 1.0e308, -1.0e308]) === 1.0e308
+      assert agg("sum", [5.0e-324, 5.0e-324]) === 1.0e-323
+      assert agg("mean", [1.0e16, 1.0, -1.0e16]) === 1 / 3
+
+      values = for i <- 1..200, do: :math.sin(i) * :math.pow(10, rem(i, 17) - 8)
+      sum = agg("sum", values)
+
+      for seed <- 1..20 do
+        :rand.seed(:exsss, {seed, seed, seed})
+        assert agg("sum", Enum.shuffle(values)) === sum
+      end
+    end
+  end
 end

@@ -232,6 +232,191 @@ defmodule Macaw.Data.Operations.StepsTest do
     end
   end
 
+  describe "the combines (spec/04 §1.4)" do
+    @schema Macaw.Data.Schema.new!(%{
+              "k" => %{type: :category, identity: true},
+              "t" => %{type: :number}
+            })
+
+    # The partials of every chunk, merged by a random tree in chunk order.
+    defp tree(_module, _node, [one]), do: one
+
+    defp tree(module, node, partials) do
+      {a, b} = Enum.split(partials, :rand.uniform(length(partials) - 1))
+      module.combine(node, tree(module, node, a), tree(module, node, b))
+    end
+
+    defp grouped(table, node, context) do
+      {:ok, registered} = Operations.transform(@registry, node.op)
+      checked = checked(node)
+      parts = Step.parts(registered, checked, table, context)
+      partials = Enum.map(parts, &Step.chunk(registered, checked, &1))
+      merged = if partials == [], do: nil, else: tree(registered, checked, partials)
+      registered.finish(checked, merged, %{input: table, key: :key})
+    end
+
+    defp combine_gen, do: map(combine_nodes(), &Map.reject(&1, fn {_k, v} -> v == nil end))
+
+    defp combine_nodes do
+      one_of([
+        gen all(by <- member_of([nil, "k", ["k", "s"]])) do
+          %{op: "sum", field: "v", by: by}
+        end,
+        gen all(
+              f <- member_of(~w(count sum mean min max extent)),
+              by <- member_of([nil, "k"])
+            ) do
+          %{op: "aggregate", field: "v", fn: f, by: by}
+        end,
+        gen all(
+              thresholds <- one_of([integer(1..6), constant([-2, 0, 2.5])]),
+              f <- member_of([nil, "sum", "mean", "max"])
+            ) do
+          %{op: "bin", field: "v", thresholds: thresholds, fn: f}
+        end,
+        gen all(from <- one_of([constant(nil), integer(0..300)])) do
+          %{op: "window", field: "t", latest: true, from: from && [from, :second]}
+          |> Enum.reject(fn {_key, value} -> value == nil end)
+          |> Map.new()
+        end
+      ])
+    end
+
+    # The rows' answer, each step as it was written over rows (spec/04 §4.3, §4.9, §4.10).
+    defp combined(rows, %{op: "sum"} = node),
+      do: combined(rows, Map.merge(node, %{op: "aggregate", fn: "sum", as: "sum"}))
+
+    defp combined(rows, %{op: "aggregate", fn: f} = node) do
+      {:ok, aggregate} = Operations.aggregate(@registry, f)
+      by = List.wrap(node[:by])
+      key = fn row -> Enum.map(by, &row[&1]) end
+      order = rows |> Enum.map(key) |> Enum.uniq()
+      order = if order == [] and by == [], do: [[]], else: order
+      as = node[:as] || f
+
+      for k <- order do
+        values = for row <- rows, key.(row) == k, row["v"] != nil, do: row["v"]
+        by |> Enum.zip(k) |> Map.new() |> Map.put(as, aggregate.reduce(values, %{}))
+      end
+    end
+
+    defp combined(rows, %{op: "bin", thresholds: thresholds} = node) do
+      f = node[:fn]
+      values = for row <- rows, row["v"] != nil, do: row["v"]
+
+      reduce =
+        case f do
+          nil ->
+            &length/1
+
+          f ->
+            {:ok, aggregate} = Operations.aggregate(@registry, f)
+            &aggregate.reduce(&1, %{})
+        end
+
+      case values do
+        [] ->
+          []
+
+        values ->
+          {d0, d1} = Enum.min_max(values)
+
+          inner =
+            if is_integer(thresholds),
+              do: for(i <- 1..(thresholds - 1)//1, do: d0 + i * (d1 - d0) / thresholds),
+              else: thresholds
+
+          edges = Enum.chunk_every([d0] ++ inner ++ [d1], 2, 1, :discard)
+          last = length(edges) - 1
+
+          held =
+            Enum.group_by(values, fn v ->
+              Enum.find_index(edges, fn [x0, x1] -> v >= x0 and v < x1 end) ||
+                if(v == d1, do: last)
+            end)
+
+          for {[x0, x1], i} <- Enum.with_index(edges) do
+            in_bin = Map.get(held, i, [])
+            %{"x0" => x0, "x1" => x1, "y0" => 0, "count" => reduce.(in_bin), "values" => in_bin}
+          end
+      end
+    end
+
+    defp combined(rows, %{op: "window", latest: true} = node) do
+      rows
+      |> oracle(Map.put(node, :to, nil))
+      |> Macaw.Data.Window.latest_rows(& &1["t"], & &1["k"])
+    end
+
+    defp expected(table, rows, %{op: "window"}), do: rows |> of_rows() |> then(&{table, &1})
+
+    defp expected(table, rows, node) do
+      columns = Operations.columns(Operations.apply!(@registry, [node], table))
+
+      {table,
+       Table.new!(for {name, type} <- columns, do: {name, type, Enum.map(rows, & &1[name])})}
+    end
+
+    @tag verifies: "operations-step-combine"
+    property "every chunking and every grouping of the partials give the rows' answer" do
+      check all(
+              table <- table_gen(),
+              node <- combine_gen(),
+              seed <- integer(1..1000),
+              max_runs: 40
+            ) do
+        :rand.seed(:exsss, {seed, seed, seed})
+        context = %{schema: @schema}
+        rows = table |> Table.rows() |> Enum.map(&Map.update!(&1, "k", fn k -> k end))
+        {_, expected} = expected(table, combined(rows, node), node)
+
+        for size <- [1, 7, :one] do
+          chunked = Storage.chunked(table, size)
+          assert Table.equal?(run(chunked, node, context), expected)
+          assert Table.equal?(grouped(chunked, node, context), expected)
+        end
+
+        assert Table.equal?(run(table, node, context), expected)
+      end
+    end
+
+    @tag verifies: "operations-step-combine"
+    test "latest breaks a tie by chunk order, then by row order" do
+      rows = [
+        %{"t" => 5, "v" => 1, "k" => "a", "s" => "first"},
+        %{"t" => 5, "v" => 2, "k" => "a", "s" => "second"},
+        %{"t" => 5, "v" => 3, "k" => "a", "s" => "third"},
+        %{"t" => 4, "v" => 4, "k" => "b", "s" => "b"}
+      ]
+
+      table =
+        Table.new!(for({name, type} <- header(), do: {name, type, Enum.map(rows, & &1[name])}))
+
+      node = %{op: "window", field: "t", latest: true}
+
+      for size <- [1, 2, 3, :one] do
+        kept = run(Storage.chunked(table, size), node, %{schema: @schema})
+        assert Table.column(kept, "s") == ["third", "b"]
+      end
+    end
+
+    @tag verifies: "operations-step-combine"
+    test "a float sum is the same bits whatever the chunking" do
+      values = for i <- 1..500, do: :math.sin(i) * :math.pow(10, rem(i, 13) - 6)
+      table = Table.new!([{"v", :number, values}])
+      node = %{op: "sum", field: "v"}
+      [sum] = Table.column(run(table, node), "sum")
+
+      for size <- [1, 3, 7, 64, :one] do
+        assert Table.column(run(Storage.chunked(table, size), node), "sum") == [sum]
+      end
+
+      assert sum ===
+               Enum.reduce(values, Macaw.Data.Exact.zero(), &Macaw.Data.Exact.add(&2, &1))
+               |> Macaw.Data.Exact.value()
+    end
+  end
+
   describe "step keys (spec/04 §1.4)" do
     @tag verifies: "operations-step-keys"
     test "a key is the step's identity, its context as resolved for the chunk, and its run" do
