@@ -463,6 +463,12 @@ defmodule Macaw.Data.Table.Chunk do
   defp as_read(%__MODULE__{read: %{columns: columns}}), do: columns
   defp as_read(%__MODULE__{} = chunk), do: chunk |> warm() |> as_read()
 
+  # The storage of column `name` as read, whole: its buffers for a kernel to read in place,
+  # a view's rows counted from the view's first (spec/04 §1.7). A cold chunk is fetched.
+  @doc false
+  @spec packed(t(), term()) :: Column.t()
+  def packed(%__MODULE__{} = chunk, name), do: chunk |> as_read() |> Map.fetch!(name)
+
   # The storage of column `name` sliced to the run of `count` rows from `first`.
   @doc false
   @spec storage(t(), term(), non_neg_integer(), non_neg_integer()) :: Column.t()

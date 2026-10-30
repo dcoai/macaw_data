@@ -19,13 +19,35 @@ defmodule Macaw.Data.Native do
   alias Macaw.Data.Native.Kernels
 
   @key {__MODULE__, :loaded?}
+  @elixir {__MODULE__, :elixir}
   # The interface version kernels.zig answers (`abi/0`), so a stale library is not used.
-  @abi 1
-  @sync_rows 16_384
+  @abi 2
+  @sync_rows 8_192
 
   @doc "Whether the native kernels are built and loaded: decided once, at the application's start."
   @spec loaded?() :: boolean()
   def loaded?, do: :persistent_term.get(@key, false)
+
+  @doc """
+  Whether a step in this process runs its kernels: they are loaded and the process is not
+  inside `elixir/1`. Each step with a kernel asks this.
+  """
+  @spec active?() :: boolean()
+  def active?, do: loaded?() and Process.get(@elixir) == nil
+
+  @doc """
+  `fun`'s result, every step in this process run on its Elixir path while it runs, kernels
+  loaded or not. Reductions count no kernel's work, so a statement of work in reductions
+  is measured here; and the Elixir path is the reference a kernel is held equal to. Not
+  nested: the flag is cleared when `fun` returns.
+  """
+  @spec elixir((-> result)) :: result when result: term()
+  def elixir(fun) when is_function(fun, 0) do
+    Process.put(@elixir, true)
+    result = fun.()
+    Process.delete(@elixir)
+    result
+  end
 
   @doc "Whether this build compiled the native kernels (the toolchain was present)."
   @spec built?() :: boolean()
@@ -36,8 +58,9 @@ defmodule Macaw.Data.Native do
   def mode, do: Kernels.mode()
 
   @doc """
-  The most rows a kernel call works on a normal scheduler, 16,384, two canonical chunks:
-  at a few nanoseconds a row, well under the BEAM's 1 ms rule.
+  The most rows a kernel call works on a normal scheduler, 8,192, one canonical chunk: a
+  few nanoseconds a row, and at worst, every row its own bucket, about half a millisecond
+  building the answer's terms, within the BEAM's 1 ms rule.
   """
   @spec sync_rows() :: pos_integer()
   def sync_rows, do: @sync_rows

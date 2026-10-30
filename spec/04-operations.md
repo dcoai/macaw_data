@@ -217,7 +217,8 @@ asked for parallel, a run above parallel_rows/0 with two chunks or more works it
 - **Identical results.** A kernel answers exactly what the step's Elixir path answers, term for term and bit for bit, so a run with kernels equals one without. Its floating point is Zig's strict mode, its default: no expression is reordered, contracted into a fused multiply-add or assumed finite, and each follows the Elixir path's order of operations. Where the Elixir path would answer with an integer past 64 bits, or raise, the kernel answers `:fallback` and the Elixir path runs, so the edge cases are the Elixir path's own.
 - **Optional, and visible.** The kernels are built when the build has Zigler and a Zig of the version Zigler targets (`.tool-versions`: Zigler 0.16.0, Zig 0.16.0). Zigler is an optional dependency: an adopter that wants the kernels lists `{:zigler, "~> 0.16.0", runtime: false}`. Without the toolchain the build prints a warning, not a compiler diagnostic, so a `--warnings-as-errors` build without Zig still succeeds, and every step runs its Elixir path. **`Macaw.Data.Native.loaded?/0`** is decided once, when the application starts, by asking the kernels their interface version, and held in `:persistent_term`.
 - **`config :macaw_data, native: :optional | :required`**, default `:optional`. It is read at compile time. The deployer knows whether this build is expected to be fast. Set wrong, it fails loudly: `:required` without the toolchain fails the build, and `:required` with kernels that don't load fails the application's start. `:optional` degrades to the Elixir path, visible through `loaded?/0`.
-- **The 1 ms rule.** A kernel works an 8,192-row chunk in tens of microseconds. A call over at most `Native.sync_rows/0` rows (16,384, two canonical chunks) runs on a normal scheduler, within the BEAM's 1 ms. A larger one, a one-chunk table built from rows, runs the same kernel on a dirty CPU scheduler (`Native.scheduler/1`). Each kernel's test states its call's time.
+- **The 1 ms rule.** A kernel reads a row in nanoseconds, and builds its answer's terms at tens of nanoseconds each, so a call's time follows its rows and the size of its answer. A call over at most `Native.sync_rows/0` rows (8,192, one canonical chunk) runs on a normal scheduler, within the BEAM's 1 ms even when every row answers a term of its own. A larger one, a one-chunk table built from rows, runs the same kernel on a dirty CPU scheduler (`Native.scheduler/1`). Each kernel's test states its call's time.
+- **Reductions count no kernel's work.** A statement of work in reductions, such as the frame's (§1.5), is measured on the Elixir path: `Native.elixir/1` runs a function with every step in its process on its Elixir path, and `Native.active?/0`, which each step with a kernel asks, is false inside it. The Elixir path is also the reference each kernel is held equal to.
 - **A panic is never silent.** The kernels are built ReleaseSafe in every environment, so a bounds or overflow fault panics rather than reading past a buffer. Each kernel checks its buffers' sizes and returns an error, raised in Elixir, for a malformed input. A panic is then a bug, and it takes the node down with its message and stack trace on standard error.
 
 ```test:operations-native-loaded
@@ -229,7 +230,11 @@ the toolchain and the native: setting decide the build: built with a toolchain, 
 ```
 
 ```test:operations-native-scheduler
-a kernel call over at most sync_rows/0 rows, 16,384, runs on a normal scheduler, and a larger one on a dirty CPU scheduler
+a kernel call over at most sync_rows/0 rows, 8,192, runs on a normal scheduler, and a larger one on a dirty CPU scheduler
+```
+
+```test:operations-native-elixir
+active? is loaded? outside Native.elixir/1 and false inside it, and back after it; a step with a kernel run inside it takes its Elixir path, whose work reductions count
 ```
 
 ```test:operations-native-panic
@@ -460,6 +465,22 @@ for generated rows on linear, time and log scales, with gaps, repeated and out-o
 
 ```test:operations-ladder-gaps
 a gap on a chunk boundary survives m4 and lttb, which answer under every chunking as over one chunk
+```
+
+#### 4.5.2 The ladder partial's native kernel {#operations-ladder-native}
+
+**A chunk's partial is computed by a native kernel where the kernels are loaded** (§1.7, macaw_data#38). `Ladder.partial/4` hands the view to it when both columns are in a form it reads, on a linear or time scale:
+- **x:** int64, float64, timestamp[us] (a UTC, zoned or naive instant's microseconds) or date32. **y:** int64 or float64. Validity is read from each column's bitmap in place, a view's rows counted from its first slot. The `:log` scale, whose `log2` per row must equal `:math.log2/1`, and every other form stay on the Elixir walk.
+- **Its answer is the Elixir walk's piece, term for term:** the same segments, runs and gaps, each run's buckets ascending and each once (a run out of x order sorted by bucket and each bucket's summaries merged, as `summary/2` merges them), and every point's `s` and `y` an integer where the walk's is one and the same float where it is a float. `s` follows `space/3` operation for operation: microseconds over 1,000,000 as a float on a linear scale, days times 86,400.0, a float x times 1,000,000.0 on a time scale.
+- **It hands the view back** (`:fallback`) where the walk would answer with an integer past 64 bits or raise: an x times 1,000,000 past int64, an integer shifted left past it, a float quotient whose floor is past it, a level whose `2^k` is no float's exact power of two. The Elixir walk then answers, so those edges are its own.
+- **Its cost:** the view's columns are never decoded and no bitmap is expanded; the kernel's time is not counted in reductions. A call over at most `Native.sync_rows/0` rows runs on a normal scheduler: a few nanoseconds a row, and at worst, every row its own bucket, about half a millisecond building the answer. A larger view runs on a dirty CPU scheduler.
+
+```test:operations-ladder-native-identical
+for generated rows of every x form the kernel reads, on linear and time scales, with gaps, unsorted x, integer and float y, views at an offset and levels from far below 0 to past a float's exponent, the partial equals the Elixir walk's term for term, and the kernel answered every view it can
+```
+
+```test:operations-ladder-native-bound
+a call over sync_rows/0 rows, 8,192, each its own bucket, the largest answer a call builds, takes under 1 ms on a normal scheduler, and a view past sync_rows runs on a dirty scheduler with the same answer
 ```
 
 ### 4.6 sort {#operations-sort}

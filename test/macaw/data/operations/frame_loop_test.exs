@@ -8,6 +8,7 @@ defmodule Macaw.Data.Operations.FrameLoopTest do
   """
   use ExUnit.Case, async: true
 
+  alias Macaw.Data.Native
   alias Macaw.Data.Operations.Cache
   alias Macaw.Data.Table
   alias Macaw.Data.Test.{FrameLoop, Work}
@@ -41,15 +42,22 @@ defmodule Macaw.Data.Operations.FrameLoopTest do
           {FrameLoop.next(window), next_cache}
       end
 
-      # In reductions: the frame's changed chunks cost at most a full run over one
-      # chunk's readings, and the whole frame (merges included) under half the full one.
+      # In reductions, on the Elixir path (a kernel's work counts none, spec/04 §1.7): the
+      # frame's changed chunks cost at most a full run over one chunk's readings, and the
+      # whole frame (merges included) under half the full one.
       {_, warm, _} = FrameLoop.cached(window, cache)
-      {full, _} = Work.reductions(fn -> FrameLoop.full(window) end)
-      {per_chunk, _} = Work.reductions(fn -> FrameLoop.cached(window, cache) end)
-      {merges, _} = Work.reductions(fn -> FrameLoop.cached(window, warm) end)
+      {full, _} = Work.reductions(fn -> Native.elixir(fn -> FrameLoop.full(window) end) end)
+
+      {per_chunk, _} =
+        Work.reductions(fn -> Native.elixir(fn -> FrameLoop.cached(window, cache) end) end)
+
+      {merges, _} =
+        Work.reductions(fn -> Native.elixir(fn -> FrameLoop.cached(window, warm) end) end)
 
       {one, _} =
-        Work.reductions(fn -> FrameLoop.full(FrameLoop.readings(0, FrameLoop.step())) end)
+        Work.reductions(fn ->
+          Native.elixir(fn -> FrameLoop.full(FrameLoop.readings(0, FrameLoop.step())) end)
+        end)
 
       assert per_chunk - merges <= one, "changed chunks #{per_chunk - merges}, one chunk #{one}"
       assert 2 * per_chunk <= full, "per chunk #{per_chunk}, full #{full}"
@@ -59,8 +67,12 @@ defmodule Macaw.Data.Operations.FrameLoopTest do
     test "a per-chunk frame costs at most 1,100,000 reductions, its merges alone 600,000" do
       {window, cache} = loop(1)
       {_, warm, _} = FrameLoop.cached(window, cache)
-      {per_chunk, _} = Work.reductions(fn -> FrameLoop.cached(window, cache) end)
-      {merges, _} = Work.reductions(fn -> FrameLoop.cached(window, warm) end)
+
+      {per_chunk, _} =
+        Work.reductions(fn -> Native.elixir(fn -> FrameLoop.cached(window, cache) end) end)
+
+      {merges, _} =
+        Work.reductions(fn -> Native.elixir(fn -> FrameLoop.cached(window, warm) end) end)
 
       assert per_chunk <= 1_100_000, "per chunk #{per_chunk}"
       assert merges <= 600_000, "merges alone #{merges}"

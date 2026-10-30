@@ -18,7 +18,17 @@ case Toolchain.decide(
       @mode Application.compile_env(:macaw_data, :native, :optional)
       @toolchain Toolchain.detect()
 
-      use Zig, otp_app: :macaw_data, zig_code_path: "kernels.zig", optimize: :safe
+      # `ladder_dirty` is `ladder` on a dirty CPU scheduler, for a view past
+      # `Macaw.Data.Native.sync_rows/0` (spec/04 §1.7).
+      use Zig,
+        otp_app: :macaw_data,
+        zig_code_path: "kernels.zig",
+        optimize: :safe,
+        nifs: [
+          abi: [],
+          ladder: [],
+          ladder_dirty: [alias: :ladder, concurrency: :dirty_cpu]
+        ]
 
       @doc false
       def built?, do: true
@@ -51,6 +61,14 @@ case Toolchain.decide(
 
       @doc false
       def abi, do: :erlang.nif_error(:not_built)
+
+      @doc false
+      def ladder(_xf, _xd, _xv, _yf, _yd, _yv, _first, _count, _kind, _k),
+        do: :erlang.nif_error(:not_built)
+
+      @doc false
+      def ladder_dirty(_xf, _xd, _xv, _yf, _yd, _yv, _first, _count, _kind, _k),
+        do: :erlang.nif_error(:not_built)
     end
 
   {:fail, message} ->

@@ -49,12 +49,39 @@ defmodule Macaw.Data.NativeTest do
 
   describe "the scheduler" do
     @tag verifies: "operations-native-scheduler"
-    test "a call over at most sync_rows rows runs on a normal scheduler, a larger one dirty" do
-      assert Native.sync_rows() == 16_384
+    test "a call over at most sync_rows rows, one canonical chunk, runs on a normal scheduler, a larger one dirty" do
+      assert Native.sync_rows() == 8192
       assert Native.scheduler(0) == :normal
       assert Native.scheduler(8192) == :normal
-      assert Native.scheduler(16_384) == :normal
-      assert Native.scheduler(16_385) == :dirty
+      assert Native.scheduler(8193) == :dirty
+      assert Native.scheduler(16_384) == :dirty
+    end
+  end
+
+  describe "the Elixir path on request" do
+    @tag verifies: "operations-native-elixir"
+    test "inside elixir/1 no step runs a kernel, so reductions count the step's whole work" do
+      assert Native.active?() == Native.loaded?()
+      assert Native.elixir(fn -> Native.active?() end) == false
+      assert Native.active?() == Native.loaded?()
+
+      table =
+        Macaw.Data.Table.new!([
+          {"t", :number, Enum.to_list(1..2000)},
+          {"v", :number, List.duplicate(1.0, 2000)}
+        ])
+
+      [view] = Macaw.Data.Table.chunks(table)
+      bound = %{x: "t", y: "v", x_name: "t", y_name: "v", kind: :linear}
+      partial = fn -> Macaw.Data.Operations.Transforms.Ladder.partial(view, bound, 3, "m4") end
+
+      {elixir, walked} = Macaw.Data.Test.Work.reductions(fn -> Native.elixir(partial) end)
+      {native, answered} = Macaw.Data.Test.Work.reductions(partial)
+      assert walked == answered
+
+      # The walk counts a few reductions a row; the kernel, a call.
+      assert elixir > 2000
+      if Native.loaded?(), do: assert(native < 200), else: assert(native > 2000)
     end
   end
 

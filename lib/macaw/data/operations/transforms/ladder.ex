@@ -28,6 +28,8 @@ defmodule Macaw.Data.Operations.Transforms.Ladder do
 
   import Bitwise
 
+  alias Macaw.Data.Native
+  alias Macaw.Data.Native.Kernels
   alias Macaw.Data.Table
   alias Macaw.Data.Table.Chunk
   alias Macaw.Data.Operations.Transforms
@@ -205,14 +207,63 @@ defmodule Macaw.Data.Operations.Transforms.Ladder do
 
   @doc """
   One view's partial at level `k`: its rows' buckets, run by run between gaps, as the one
-  piece of view 0. A run's buckets are ascending by bucket, each once.
+  piece of view 0. A run's buckets are ascending by bucket, each once. Where the native
+  kernels are loaded and both columns are in a form the kernel reads, on a linear or time
+  scale, the kernel computes the piece from the columns' buffers in place, equal term for
+  term to the Elixir walk's (spec/04 §4.5.2).
   """
   @spec partial(Table.view(), map(), integer(), String.t()) :: partial()
-  def partial(view, %{x_name: x_name, y_name: y_name, kind: kind} = bound, k, op) do
+  def partial(view, bound, k, op) do
+    case native(view, bound, k) do
+      :fallback -> partial_elixir(view, bound, k, op)
+      segments -> {k, [view], [{0, segments}]}
+    end
+  end
+
+  @doc false
+  # The partial by the Elixir walk alone, whatever the kernels: the path a build without
+  # them runs, and the reference the native kernel is held equal to (spec/04 §4.5.2).
+  @spec partial_elixir(Table.view(), map(), integer(), String.t()) :: partial()
+  def partial_elixir(view, %{x_name: x_name, y_name: y_name, kind: kind} = bound, k, op) do
     xs = Transforms.view_values(view, x_name)
     ys = Transforms.view_values(view, y_name)
     {k, [view], [{0, walk(xs, ys, 0, {kind, k, pow2(k), bound, op}, nil, nil, [])}]}
   end
+
+  # The piece by the native kernel (spec/04 §4.5.2), reading the view's x and y buffers in
+  # place, where the kernels are loaded and both columns are in a form it reads, on a
+  # linear or time scale; else, or where the kernel hands it back, `:fallback`.
+  defp native({chunk, first, count}, %{x_name: x, y_name: y, kind: kind}, k)
+       when x != nil and y != nil and kind in [:linear, :time] do
+    with true <- Native.active?(),
+         {xf, xd, xv} <- x_buffers(Chunk.packed(chunk, x)),
+         {yf, yd, yv} <- y_buffers(Chunk.packed(chunk, y)) do
+      kd = if kind == :time, do: 1, else: 0
+
+      case Native.scheduler(count) do
+        :normal -> Kernels.ladder(xf, xd, xv, yf, yd, yv, first, count, kd, k)
+        :dirty -> Kernels.ladder_dirty(xf, xd, xv, yf, yd, yv, first, count, kd, k)
+      end
+    else
+      _ -> :fallback
+    end
+  end
+
+  defp native(_view, _bound, _k), do: :fallback
+
+  # An x column's buffers and the kernel's code for its form: int64, float64, an instant's
+  # microseconds (UTC, zoned or naive) or date32's days; any other form is the Elixir path's.
+  defp x_buffers({:int64, data, validity}), do: {0, data, validity}
+  defp x_buffers({:float64, data, validity}), do: {1, data, validity}
+  defp x_buffers({:utc, us, validity, _precision}), do: {2, us, validity}
+  defp x_buffers({:naive, us, validity, _precision}), do: {2, us, validity}
+  defp x_buffers({:zoned, us, validity, _precision, _zones, _codes}), do: {2, us, validity}
+  defp x_buffers({:date, days, validity}), do: {3, days, validity}
+  defp x_buffers(_column), do: :elixir
+
+  defp y_buffers({:int64, data, validity}), do: {0, data, validity}
+  defp y_buffers({:float64, data, validity}), do: {1, data, validity}
+  defp y_buffers(_column), do: :elixir
 
   # One pass over the rows, `at` the scale's kind, the level, its bucket's width, the
   # bound context and the step's name, read once. Between gaps, `open/12` carries the
