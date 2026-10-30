@@ -32,8 +32,8 @@ defmodule Macaw.Data.PushTest do
       ref = make_ref()
       send(pid, Push.schema_message(ref, @schema))
 
-      for row <- rows,
-          do: send(pid, Push.delivery_message(ref, increment([row])))
+      for {row, seq} <- Enum.with_index(rows, 1),
+          do: send(pid, Push.increment_message(ref, seq, increment([row])))
 
       {:ok, ref}
     end
@@ -97,10 +97,10 @@ defmodule Macaw.Data.PushTest do
     push = Push.new(:ticks, ref)
 
     {:ok, push} =
-      Push.receive(push, Push.delivery_message(ref, increment([%{"t" => 1, "v" => 1}])))
+      Push.receive(push, Push.increment_message(ref, 1, increment([%{"t" => 1, "v" => 1}])))
 
     {:ok, push} =
-      Push.receive(push, Push.delivery_message(ref, increment([%{"t" => 2, "v" => 1}])))
+      Push.receive(push, Push.increment_message(ref, 2, increment([%{"t" => 2, "v" => 1}])))
 
     me = self()
     describe = fn name -> send(me, {:described, name}) && {:ok, @schema} end
@@ -113,14 +113,14 @@ defmodule Macaw.Data.PushTest do
     failing = Push.new(:gone, ref)
 
     {:ok, failing} =
-      Push.receive(failing, Push.delivery_message(ref, increment([%{"t" => 1, "v" => 1}])))
+      Push.receive(failing, Push.increment_message(ref, 1, increment([%{"t" => 1, "v" => 1}])))
 
     failing = Push.drain(failing, fn _ -> {:error, :no_source} end)
     assert Push.held(failing) == nil and failing.errors != []
   end
 
   @tag verifies: "push-merge"
-  test "increments merge by the window field: newer appended, late placed, a held row not added twice" do
+  test "increments merge by the window field: newer appended, late placed, an identical row held again" do
     ref = make_ref()
     cache = Cache.new([{:ticks, @schema}])
 
@@ -130,15 +130,16 @@ defmodule Macaw.Data.PushTest do
           increment([%{"t" => 1, "v" => 1}, %{"t" => 3, "v" => 3}], window: [0, 3]),
           increment([%{"t" => 3, "v" => 3}, %{"t" => 5, "v" => 5}]),
           increment([%{"t" => 2, "v" => 2}, %{"t" => 1, "v" => 1}])
-        ],
+        ]
+        |> Enum.with_index(1),
         Push.new(:ticks, ref, cache: cache),
-        fn d, push ->
-          {:ok, push} = Push.receive(push, Push.delivery_message(ref, d))
+        fn {d, seq}, push ->
+          {:ok, push} = Push.receive(push, Push.increment_message(ref, seq, d))
           Push.drain(push, &no_describe/1)
         end
       )
 
-    assert ts(push) == [1, 2, 3, 5]
+    assert ts(push) == [1, 1, 2, 3, 3, 5]
     assert Push.held(push).served.window == [0, 5]
   end
 
@@ -150,7 +151,7 @@ defmodule Macaw.Data.PushTest do
     push =
       Enum.reduce(1..50, push, fn t, push ->
         {:ok, push} =
-          Push.receive(push, Push.delivery_message(ref, increment([%{"t" => t, "v" => t}])))
+          Push.receive(push, Push.increment_message(ref, t, increment([%{"t" => t, "v" => t}])))
 
         push
       end)
@@ -175,7 +176,7 @@ defmodule Macaw.Data.PushTest do
             schema: Schema.version(schema)
           )
 
-        {:ok, push} = Push.receive(push, Push.delivery_message(ref, d))
+        {:ok, push} = Push.receive(push, Push.increment_message(ref, i, d))
         push
       end)
       |> Push.drain(&no_describe/1)
@@ -200,10 +201,12 @@ defmodule Macaw.Data.PushTest do
           n, {acc, left} -> {acc ++ [Enum.take(left, n)], Enum.drop(left, n)}
         end)
 
-      # Each chunk is pushed twice: a repeat at the seam adds nothing.
+      # Each chunk is pushed twice under its number: a repeat adds nothing.
+      numbered = Enum.with_index(chunks, 1)
+
       push =
-        Enum.reduce(chunks ++ chunks, push, fn chunk, push ->
-          {:ok, push} = Push.receive(push, Push.delivery_message(ref, increment(chunk)))
+        Enum.reduce(numbered ++ numbered, push, fn {chunk, seq}, push ->
+          {:ok, push} = Push.receive(push, Push.increment_message(ref, seq, increment(chunk)))
           Push.drain(push, &no_describe/1)
         end)
 

@@ -111,7 +111,8 @@ defmodule Macaw.Data.DeliveryTest do
              capped: true,
              reduced_by: :source,
              params: %{"region" => "eu"},
-             note: "coarsened from raw"
+             note: "coarsened from raw",
+             position: nil
            }
 
     assert Delivery.new(@rows).served == %{
@@ -120,7 +121,8 @@ defmodule Macaw.Data.DeliveryTest do
              capped: false,
              reduced_by: nil,
              params: %{},
-             note: nil
+             note: nil,
+             position: nil
            }
 
     assert Delivery.new(@rows, served: %{reduced_by: :runtime}).served.reduced_by == :runtime
@@ -135,6 +137,19 @@ defmodule Macaw.Data.DeliveryTest do
           [color: "red"]
         ] do
       assert_raise ArgumentError, fn -> Delivery.new(@rows, served: bad) end
+    end
+  end
+
+  @tag verifies: "delivery-position"
+  test "served holds a snapshot's position" do
+    assert Delivery.new(@rows).served.position == nil
+    assert Delivery.new(@rows, served: [position: 0]).served.position == 0
+    assert Delivery.new(@rows, served: [position: 42]).served.position == 42
+
+    for bad <- [-1, 1.0, "3", :first] do
+      assert_raise ArgumentError, ~r/position/, fn ->
+        Delivery.new(@rows, served: [position: bad])
+      end
     end
   end
 

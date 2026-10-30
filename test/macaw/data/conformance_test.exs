@@ -84,6 +84,7 @@ defmodule Macaw.Data.ConformanceTest do
     as_of_origin_lie: {:supports, :as_of_origin},
     no_handshake: {:push, :handshake},
     data_before_schema: {:push, :before_schema},
+    misnumbered: {:push, :numbering},
     raises: {:errors, :raised},
     ticks_as_time: {:deliveries, :window_value},
     no_window_field: {:describe, :no_window_field},

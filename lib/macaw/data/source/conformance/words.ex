@@ -193,6 +193,16 @@ defmodule Macaw.Data.Source.Conformance.Words do
     do:
       "a pushed schema's version #{inspect(version)} is not its content hash #{inspect(computed)}"
 
+  def words({:numbering, expected, got}),
+    do:
+      "a pushed increment is numbered #{inspect(got)}, not #{expected}: increments are numbered " <>
+        "from 1, or one past a snapshot's position, each one past the last"
+
+  def words({:snapshot_position, got}),
+    do:
+      "a pushed snapshot states the position #{inspect(got)}, not the number of the last " <>
+        "increment it reflects (served.position)"
+
   def words({:before_schema, version}),
     do: "a delivery naming #{inspect(version)} arrived before that version's schema"
 

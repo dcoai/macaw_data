@@ -40,6 +40,7 @@ defmodule Macaw.Data.Test.Sources do
       :push_undeclared,
       :no_handshake,
       :data_before_schema,
+      :misnumbered,
       :keeps_pushing,
       :raises,
       :ticks_as_time,
@@ -59,7 +60,9 @@ defmodule Macaw.Data.Test.Sources do
     @doc "The source with a flaw (`nil` for an honest one), its agent linked to the caller."
     def new(flaw \\ nil) when flaw in @flaws do
       {:ok, agent} =
-        Agent.start_link(fn -> %{subscribers: %{}, generation: 0, describes: 0, fetches: 0} end)
+        Agent.start_link(fn ->
+          %{subscribers: %{}, seqs: %{}, generation: 0, describes: 0, fetches: 0}
+        end)
 
       %__MODULE__{agent: agent, flaw: flaw}
     end
@@ -136,10 +139,20 @@ defmodule Macaw.Data.Test.Sources do
 
     @doc "One new row pushed to every subscriber, under a new version of the schema."
     def emit(%__MODULE__{agent: agent, flaw: flaw}) do
+      # Each subscription's increments are numbered from 1, one past the last; the
+      # misnumbered flaw skips one.
+      step = if flaw == :misnumbered, do: 2, else: 1
+
       {generation, subscribers} =
         Agent.get_and_update(agent, fn state ->
-          state = %{state | generation: state.generation + 1}
-          {{state.generation, state.subscribers}, state}
+          seqs =
+            Map.new(state.subscribers, fn {ref, _pid} ->
+              {ref, Map.get(state.seqs, ref, 0) + step}
+            end)
+
+          state = %{state | generation: state.generation + 1, seqs: seqs}
+          numbered = for {ref, pid} <- state.subscribers, do: {ref, pid, seqs[ref]}
+          {{state.generation, numbered}, state}
         end)
 
       schema = schema("generation #{generation}", flaw)
@@ -152,8 +165,8 @@ defmodule Macaw.Data.Test.Sources do
           schema: Schema.version(schema)
         )
 
-      for {ref, pid} <- subscribers do
-        messages = [Push.schema_message(ref, schema), Push.delivery_message(ref, delivery)]
+      for {ref, pid, seq} <- subscribers do
+        messages = [Push.schema_message(ref, schema), Push.increment_message(ref, seq, delivery)]
 
         messages = if flaw == :data_before_schema, do: Enum.reverse(messages), else: messages
         Enum.each(messages, &send(pid, &1))

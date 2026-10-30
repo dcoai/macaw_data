@@ -443,6 +443,7 @@ given values are checked by name, every fault at once, defaults filled in; a val
 | `latest` | `true` asks for each identity's latest row (§1.4) | `false` |
 | `budget` | the most rows the reader wants, a positive integer | `nil` |
 | `as_of` | the `DateTime` the answer is as of, for a source supporting `:as_of` | `nil` |
+| `subscription` | the reference of the push subscription this fetch is a snapshot for, whose position the answer states in `served.position` (§4.1); any other value is `{:type, :reference}` | `nil` |
 | `viewer` | the host's viewer, **opaque** here: passed to the source, never stored or inspected; `nil` is the anonymous viewer | `nil` |
 | `now` | the instant, given by the surface: a source never reads a clock (§6) | required |
 
@@ -546,7 +547,8 @@ the held relation is the integral of the changelog: for a generated changelog of
   - `capped`: whether the source stopped short of the window it was asked for, `false` by default;
   - `reduced_by`: who brought the rows within budget: **`:source`** (the source honored the budget) or **`:runtime`** (Macaw reduced a pooled delivery to this reader's budget, finished a budget the source didn't honor, or clamped a budget to the host ceiling); `nil` when nobody had to. A component that draws fewer rows than it was handed says so in its own drawn state ([macaw_compose 05](https://github.com/dcoai/macaw/blob/main/spec/05-components.md#components-states)), not in the delivery;
   - `params`: the parameters it was answered for, a map, `%{}` by default;
-  - `note`: a line for a person (`"coarsened from raw"`), or `nil`.
+  - `note`: a line for a person (`"coarsened from raw"`), or `nil`;
+  - `position`: for a snapshot taken for a push subscription, the number of the last increment it reflects, a non-negative integer (`0` for none); `nil` for any other answer (§4.1).
 - **`origin`**: `%{source: name, request: digest, as_of: time}`, the source, a digest of the request (`Macaw.Layers.Document.digest/1` of it), and the `DateTime` it is as of when used, else `nil`; or `nil`.
 
 `new/2` raises `ArgumentError` naming the fault for a key that is not a delivery's or a served fact, or a value a field does not take. visualize's `Visualize.Data.Delivery` holds these facts flat, with `reduced_by: :feed | :visualize` and no `served` or `origin`; mapping them at adoption is visualize's.
@@ -583,18 +585,19 @@ a delivery names the schema's version, never the schema; its origin is the sourc
 
 ## 4. Push {#sources-push}
 
-**A push is the source's changelog** (§2.5). Push is optional and declared (`:push` in `supports`). A pushing source implements `subscribe(source, pid)`, answering `{:ok, ref}`, and `unsubscribe(source, ref)` (§2); `Macaw.Data.Source.subscribe/2` answers `{:error, :no_push}` for a source that doesn't. It sends the subscriber two messages, both tagged with that reference (`Macaw.Data.Source.Push.schema_message/2`, `delivery_message/2`):
+**A push is the source's changelog** (§2.5). Push is optional and declared (`:push` in `supports`). A pushing source implements `subscribe(source, pid)`, answering `{:ok, ref}`, and `unsubscribe(source, ref)` (§2); `Macaw.Data.Source.subscribe/2` answers `{:error, :no_push}` for a source that doesn't. It sends the subscriber three messages, each tagged with that reference (`Macaw.Data.Source.Push.schema_message/2`, `snapshot_message/2`, `increment_message/3`):
 
 ```
-{:macaw_source, ref, {:schema, schema}}      first, and again whenever the schema changes
-{:macaw_source, ref, {:delivery, delivery}}  an increment: the changes since the last
+{:macaw_source, ref, {:schema, schema}}            first, and again whenever the schema changes
+{:macaw_source, ref, {:snapshot, delivery}}        the relation, as of its served.position (§4.1)
+{:macaw_source, ref, {:increment, seq, delivery}}  the changelog's change numbered seq (§4.1)
 ```
 
-The subscriber holds a `Macaw.Data.Source.Push`, a value, not a process: `receive/2` takes each message, `:ignore` for one not under its reference; `drain/2` applies what is buffered; `held/1` is the relation as it stands, the integral of the increments (§2.5).
+The subscriber holds a `Macaw.Data.Source.Push`, a value, not a process: `receive/2` takes each message, `:ignore` for one not under its reference; `snapshot/2` takes a snapshot the holder fetched (§4.1); `drain/2` applies what is buffered; `held/1` is the relation as it stands, the integral of the increments (§2.5); `refetch/1` is `nil`, or why the holder must fetch a snapshot.
 
 - **The handshake sends the schema first,** so an increment naming its version resolves from the cache without asking the source.
-- **An increment's rows are insertions, merged by the window field.** Its rows after what is held are appended; its late rows, at or before that, are kept unless the very row is held already; the rows stay ordered by the window field, and the served window grows to cover them. A schema with no window field keeps the newest `limit` rows (100 000), marking the delivery `capped` when it drops any.
-- **Pushes between two pulses are coalesced:** they buffer, and one `drain/2` merges them all in the order received, whatever the push rate.
+- **An increment's rows are insertions, merged by the window field.** Its rows after what is held are appended and its late rows placed among the held, every one of them: rows are not deduplicated (§4.1). The rows stay ordered by the window field, and the served window grows to cover them. A schema with no window field keeps the newest `limit` rows (100 000), marking the delivery `capped` when it drops any.
+- **Pushes between two pulses are coalesced:** they buffer, and one `drain/2` applies them all, in their numbers' order (§4.1), whatever the push rate.
 - **An unknown schema version falls back to `describe`,** asked once through `Macaw.Data.Schema.Cache.resolve/4` and cached. An increment whose version can't be resolved is dropped and its reason kept in `errors`.
 
 (visualize.md C1; metresis.md C1. The merge is visualize's `Visualize.Feed.Monitor`'s, whose message tag was `:visualize_feed`.)
@@ -608,7 +611,7 @@ an increment naming an uncached version asks describe once and caches it; a vers
 ```
 
 ```test:push-merge
-increments merge by the window field, newer appended, late placed, a held row not added twice, the served window grown; with no window field the newest rows to the limit, capped; for any split and any repeat, each row once in time order
+increments merge by the window field, newer appended, late placed, an identical row held again, the served window grown; with no window field the newest rows to the limit, capped; for any split, and any increment repeated under its number, each row once in time order
 ```
 
 ```test:push-coalesce
@@ -617,21 +620,11 @@ fifty pushes buffer without a merge, and one drain merges them all in order
 
 ### 4.1 Numbering and the handoff {#sources-push-numbering}
 
-<!-- surfex: deferred dco-tek/macaw/macaw_data#12: increments numbered per subscription and the snapshot's handoff by position -->
-
 **Each increment carries a sequence number,** a positive integer, increasing by one per subscription from `1`. Idempotence and order are the increment's, never the row's:
 - **A repeated or older increment is dropped whole,** one at or below the position held, and counted in `ignored` (`:repeat`). Redelivery is harmless.
-- **Rows are not deduplicated.** Two identical rows are two rows of weight 1 (tally taps), so an increment's late row is held even when an identical row is held already: the merge's "unless the very row is held already" goes.
+- **Rows are not deduplicated.** Two identical rows are two rows of weight 1 (tally taps), so an increment's row is held even when an identical row is held already.
 - **Increments apply in the order of their numbers.** Retraction matching and replacement depend on what is held, so the changelog is not commutative.
-- **A gap is a lost message.** BEAM delivers messages between two processes in order, so an increment numbered past the next one means some never arrived. It is held back, unapplied; the gap is recorded in `errors` as `{:gap, from, to}`, the missing numbers; and `Push.refetch/1` answers it.
-
-**The messages carry the number and the position** (`Push.snapshot_message/2`, `increment_message/3`, in place of `delivery_message/2`):
-
-```
-{:macaw_source, ref, {:schema, schema}}            first, and again whenever the schema changes
-{:macaw_source, ref, {:snapshot, delivery}}        the relation, as of its served.position
-{:macaw_source, ref, {:increment, seq, delivery}}  the changelog's change numbered seq
-```
+- **A gap is a lost message.** BEAM delivers messages between two processes in order, so an increment numbered past the next one means some never arrived. It is held back, unapplied. A gap is judged when a drain ends, so increments that arrive out of order between two drains apply in order and leave none; one that remains is recorded in `errors` as `{:gap, from, to}`, the missing numbers, once, and `Push.refetch/1` answers it until a snapshot is taken or the missing increments arrive.
 
 **The snapshot hands off to the stream by position.** A snapshot taken for a subscription states the position it reflects in `served.position` (§3): the number of the last increment it includes, a non-negative integer, `0` for none; `nil` for any answer not taken for a subscription. A source sends one with `snapshot_message/2`, on subscribe or on resubscribe. A holder fetches one after a gap or a resolution mismatch, naming the subscription's reference in the request (`subscription:`, §2.3, `nil` by default), and hands it over with `Push.snapshot/2`.
 - **It replaces what is held,** as the full replacement it is (§2.5), and the position becomes its own.
@@ -639,11 +632,9 @@ fifty pushes buffer without a merge, and one drain merges them all in order
 - **A snapshot older than the position held is dropped whole** (`:stale_snapshot`): it was taken before increments already applied. One that states no position is `{:snapshot, :no_position}` in `errors`, and not applied.
 - So **no increment is applied twice or lost** while a snapshot is in flight.
 - **Before any snapshot, the relation is empty at position `0`,** so a source that sends no snapshot numbers its first increment `1`, applied to nothing.
-- **`Push` is a value, so the holder refetches.** `Push.refetch/1` is `nil`, or why the holder must fetch a snapshot, kept until one is taken.
+- **`Push` is a value, so the holder refetches.** `Push.refetch/1` is `nil`, or why the holder must fetch a snapshot.
 
 **Nothing raises; everything is recorded.** `errors` lists each fault, in order, with its reason, the terms §4.1–§4.4 name; `ignored` counts what was dropped harmlessly, by reason (`%{repeat: n, stale_snapshot: n, unheld: n}`). A fault never fails the rest of its increment.
-
-The conformance kit's `:push` check (§9) holds a snapshot to stating its position, and the increments to numbers one past it, or from `1` with none, each one past the last.
 
 ```test:push-numbered
 a redelivered or older increment is dropped whole and counted, increments arriving out of order apply in the order of their numbers, and two identical rows are both held
@@ -863,7 +854,7 @@ Every source runs **one kit**, `Macaw.Data.Source.Conformance`: the contract of 
 | `:describe` | `describe/2`, given the host's `context:`, answers a description `Description.new/1` accepts as it stands; its schema is one `Schema.new/1` accepts, its version the content hash (§1.10); a measure the vocabulary refuses is its own finding, naming the field; a source naming `:window` has a `:time` or `:number` window field, one naming `:box` a `:point` one; a second describe answers the same description |
 | `:deliveries` | each request, at each budget, answers a well-formed delivery (§3) naming the described version: every row field described; the window field holding values of its type; every other `:time` field instants; every declared identity field present; every row within the served window; no two rows of a series closer than the served resolution; the served window complete (an open fetch holds no row inside it that the delivery lacks); `capped` true only with a shortfall and false only without one; `reduced_by` `:source` only when the source reduced, and never `:runtime`, which is Macaw's (§2.4) |
 | `:supports` | `supports` is distinct capabilities, and each it names is true: the window kept (served within, no row outside), the box kept, every region range kept, `latest` one row per identity and none older than its last, the budget never exceeded, `as_of` answered as of the instant asked (an origin names it, and an hour's later `now` changes nothing), `:push` subscribable; a source not naming `:push` refuses `subscribe/2` |
-| `:push` | the handshake's first message is the schema; every pushed schema is valid; every pushed delivery is well formed, within its served window, and after the schema it names; `push:` makes a delivery arrive (§4) |
+| `:push` | the handshake's first message is the schema; every pushed schema is valid; every pushed snapshot and increment is well formed, within its served window, and after the schema it names; a snapshot states its position (`{:snapshot_position, got}`), and the increments are numbered one past it, or from `1` with none, each one past the last (`{:numbering, expected, got}`); `push:` makes an increment arrive (§4) |
 | `:errors` | requests no source can read (a window of no times, of either kind, mixed; a box; a region over an unknown field with `latest`) answer values, a delivery or an error, never a crash; an undeclared parameter never reaches the source (`{:error, {:params, faults}}`, §2.2); `unsubscribe/2` of an unknown reference is `:ok`; a `down:` source answers errors to `describe`, `fetch` and `subscribe` |
 | `:unsubscribe` | after `unsubscribe/2`, a push made by `push:` delivers nothing |
 | `:determinism` | one request, one `now`: two fetches give one answer, the same rows and served terms. A row stamped after `now` arrived between them and is not compared. An answer depends on the request, never on a clock the source reads |

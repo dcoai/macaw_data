@@ -16,7 +16,10 @@ defmodule Macaw.Data.Source.Request do
   - `as_of`: the `DateTime` the answer is as of, for a source supporting `:as_of`, or `nil`;
   - `viewer`: the host's viewer, **opaque** here, passed to the source and never stored;
     `nil` is the anonymous viewer;
-  - `now`: the instant, given by the surface; a source never reads a clock.
+  - `now`: the instant, given by the surface; a source never reads a clock;
+  - `subscription`: the reference of the push subscription this fetch is a snapshot for,
+    or `nil`: a source given one states the snapshot's position in `served.position`
+    (spec/01 §4.1).
 
   `new/1` builds one and reports every fault at once. A request asks; a source may not
   honor every part, and Macaw finishes what it does not (spec/01 §2.4).
@@ -31,7 +34,8 @@ defmodule Macaw.Data.Source.Request do
             budget: nil,
             as_of: nil,
             viewer: nil,
-            now: nil
+            now: nil,
+            subscription: nil
 
   @type t :: %__MODULE__{
           params: map(),
@@ -42,10 +46,22 @@ defmodule Macaw.Data.Source.Request do
           budget: pos_integer() | nil,
           as_of: DateTime.t() | nil,
           viewer: term(),
-          now: DateTime.t()
+          now: DateTime.t(),
+          subscription: reference() | nil
         }
 
-  @fields [:params, :window, :box, :region, :latest, :budget, :as_of, :viewer, :now]
+  @fields [
+    :params,
+    :window,
+    :box,
+    :region,
+    :latest,
+    :budget,
+    :as_of,
+    :viewer,
+    :now,
+    :subscription
+  ]
 
   @doc """
   A request of the given fields (a keyword list or a map), `now` required: `{:ok, request}`
@@ -105,6 +121,9 @@ defmodule Macaw.Data.Source.Request do
   defp field(:viewer, _any), do: []
   defp field(:now, %DateTime{}), do: []
   defp field(:now, _), do: [{[:now], {:type, :time}}]
+  defp field(:subscription, nil), do: []
+  defp field(:subscription, ref) when is_reference(ref), do: []
+  defp field(:subscription, _), do: [{[:subscription], {:type, :reference}}]
   defp field(key, _) when key not in @fields, do: [{[key], :unknown_key}]
 
   @doc """

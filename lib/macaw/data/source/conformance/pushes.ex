@@ -48,7 +48,7 @@ defmodule Macaw.Data.Source.Conformance.Pushes do
 
     receive do
       {:macaw_source, ^ref, message} ->
-        delivered? = delivered? or match?({:delivery, _}, message)
+        delivered? = delivered? or match?({:increment, _, _}, message)
         collect(ref, deadline, quiet, delivered?, [message | acc])
     after
       wait -> Enum.reverse(acc)
@@ -65,7 +65,9 @@ defmodule Macaw.Data.Source.Conformance.Pushes do
   end
 
   @doc false
-  # The handshake first, then every delivery after the schema it names.
+  # The handshake first, then every delivery after the schema it names; a snapshot
+  # stating its position, and the increments numbered one past it, or from 1 with none,
+  # each one past the last (spec/01 §4.1).
   def sequence(handshake, messages, o) do
     {known, faults} =
       case handshake do
@@ -73,20 +75,33 @@ defmodule Macaw.Data.Source.Conformance.Pushes do
         other -> {%{}, [{:handshake, other}]}
       end
 
-    {_known, faults, delivered?} =
-      Enum.reduce(messages, {known, faults, false}, fn
-        {:schema, %Schema{} = schema}, {known, faults, delivered?} ->
-          {Map.put(known, schema.version, schema), faults ++ pushed_schema(schema), delivered?}
+    {_known, _next, faults, delivered?} =
+      Enum.reduce(messages, {known, 1, faults, false}, fn
+        {:schema, %Schema{} = schema}, {known, next, faults, delivered?} ->
+          {Map.put(known, schema.version, schema), next, faults ++ pushed_schema(schema),
+           delivered?}
 
-        {:delivery, %Delivery{} = delivery}, {known, faults, _delivered?} ->
-          {known, faults ++ pushed_delivery(delivery, known, o), true}
+        {:snapshot, %Delivery{served: %{position: p}} = delivery}, {known, next, faults, d?} ->
+          faults = faults ++ pushed_delivery(delivery, known, o)
 
-        other, {known, faults, delivered?} ->
-          {known, faults ++ [{:not_a_message, other}], delivered?}
+          if is_integer(p),
+            do: {known, p + 1, faults, d?},
+            else: {known, next, faults ++ [{:snapshot_position, p}], d?}
+
+        {:increment, seq, %Delivery{} = delivery}, {known, next, faults, _delivered?} ->
+          numbering = if seq == next, do: [], else: [{:numbering, next, seq}]
+          faults = faults ++ numbering ++ pushed_delivery(delivery, known, o)
+          {known, next_after(seq, next), faults, true}
+
+        other, {known, next, faults, delivered?} ->
+          {known, next, faults ++ [{:not_a_message, other}], delivered?}
       end)
 
     if delivered?, do: faults, else: faults ++ [{:no_delivery, o.timeout}]
   end
+
+  defp next_after(seq, next) when is_integer(seq), do: max(seq, next - 1) + 1
+  defp next_after(_seq, next), do: next
 
   defp pushed_schema(%Schema{} = schema) do
     case Deliveries.schema_faults(schema) do

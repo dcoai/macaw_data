@@ -27,7 +27,10 @@ defmodule Macaw.Data.Delivery do
     - `reduced_by`: who brought the rows within budget, `:source` or `:runtime`, or `nil`
       when nobody had to;
     - `params`: the parameters it was answered for, a map;
-    - `note`: a line for a person (`"coarsened from raw"`), or `nil`.
+    - `note`: a line for a person (`"coarsened from raw"`), or `nil`;
+    - `position`: for a snapshot taken for a push subscription, the sequence number of
+      the last increment it reflects (`0` for none); `nil` for any other answer
+      (spec/01 §4.1).
   - `origin`: where it came from, `%{source: name, request: digest, as_of: time | nil}`,
     or `nil`.
 
@@ -63,7 +66,8 @@ defmodule Macaw.Data.Delivery do
     capped: false,
     reduced_by: nil,
     params: %{},
-    note: nil
+    note: nil,
+    position: nil
   }
 
   @typedoc "A window as served: a range, a box over positions, or none."
@@ -79,7 +83,8 @@ defmodule Macaw.Data.Delivery do
           capped: boolean(),
           reduced_by: :source | :runtime | nil,
           params: map(),
-          note: String.t() | nil
+          note: String.t() | nil,
+          position: non_neg_integer() | nil
         }
 
   @typedoc "Where an answer came from."
@@ -264,6 +269,7 @@ defmodule Macaw.Data.Delivery do
   defp check(:reduced_by, by) when by in [nil, :source, :runtime], do: :ok
   defp check(:params, params) when is_map(params) and not is_struct(params), do: :ok
   defp check(:note, note) when is_nil(note) or is_binary(note), do: :ok
+  defp check(:position, p) when is_nil(p) or (is_integer(p) and p >= 0), do: :ok
 
   defp check(key, value),
     do: raise(ArgumentError, "not a delivery's served #{key}: #{inspect(value)} (spec/01 §3)")

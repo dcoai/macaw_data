@@ -201,4 +201,14 @@ defmodule Macaw.Data.SourceTest do
 
     assert s == schema
   end
+
+  @tag verifies: "contract-request-subscription"
+  test "a request names the subscription it is a snapshot for" do
+    ref = make_ref()
+    assert Request.new!(now: @now).subscription == nil
+    assert Request.new!(now: @now, subscription: ref).subscription == ref
+
+    assert Request.new(now: @now, subscription: "sub-1") ==
+             {:error, [{[:subscription], {:type, :reference}}]}
+  end
 end
