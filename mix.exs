@@ -26,7 +26,8 @@ defmodule Macaw.Data.MixProject do
     ]
   end
 
-  def application, do: [extra_applications: [:logger]]
+  # The application decides once, at start, whether the native kernels loaded (spec/04 §1.7).
+  def application, do: [mod: {Macaw.Data.Application, []}, extra_applications: [:logger]]
 
   # `test/support` holds the metresis parity table (spec/03), compiled in test only.
   defp elixirc_paths(:test), do: ["lib", "test/support"]
@@ -40,7 +41,7 @@ defmodule Macaw.Data.MixProject do
         "GitHub" => @source_url,
         "Changelog" => "https://hexdocs.pm/macaw_data/changelog.html"
       },
-      files: ~w(lib spec mix.exs README.md LICENSE CHANGELOG.md .formatter.exs)
+      files: ~w(lib spec mix.exs README.md LICENSE CHANGELOG.md .formatter.exs .tool-versions)
     ]
   end
 
@@ -54,9 +55,15 @@ defmodule Macaw.Data.MixProject do
       # fetches them.
       {:table, "~> 0.1.2", optional: true},
       {:nx, "~> 1.0", optional: true},
+      # The optional native kernels (spec/04 §1.7), Zig built through Zigler at compile time
+      # when a Zig of the version Zigler targets is present; a build tool only, nothing of it
+      # runs. 0.16.0 targets Zig 0.16.0 (`.tool-versions`). Optional, so an adopter opts in
+      # by listing it: its zig_doc pins ex_doc to 0.39.1, which no adopter should inherit.
+      {:zigler, "~> 0.16.0", runtime: false, optional: true},
       {:stream_data, "~> 1.1", only: :test},
-      # Docs for Hex (macaw_compose#155); dev only.
-      {:ex_doc, "~> 0.34", only: :dev, runtime: false},
+      # Docs for Hex (macaw_compose#155). Zigler's zig_doc needs it wherever Zigler compiles,
+      # so dev and test, at the version zig_doc pins (`override`: ours stays dev/test only).
+      {:ex_doc, "~> 0.34", only: [:dev, :test], runtime: false, override: true},
       # Spec, tests and code kept aligned (macaw_compose spec/00 §4.1); dev/test only.
       {:surfex, "~> 0.10.0", only: [:dev, :test], runtime: false}
     ]

@@ -6,3 +6,6 @@ erl_crash.dump
 *.ez
 macaw_data-*.tar
 /tmp/
+
+# Zigler's copies of a module's Zig source, written beside it at compile time.
+.Elixir.*.zig

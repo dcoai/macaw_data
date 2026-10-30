@@ -44,8 +44,10 @@ compile:
   script:
     - mix compile --force --warnings-as-errors
     # As an app without the optional table and nx compiles it: a call into either
-    # must be silenced where it is guarded, or every such app warns (#7).
-    - MIX_ENV=prod mix compile --force --no-optional-deps --warnings-as-errors
+    # must be silenced where it is guarded, or every such app warns (#7). Without zigler
+    # too, so with the native kernels' stub (spec/04 §1.7). In dev, not prod: the flag skips
+    # zigler but still compiles its zig_doc, which needs ex_doc, a dev and test dependency.
+    - MIX_ENV=dev mix compile --force --no-optional-deps --warnings-as-errors
     # Push what the store lacked, only after a green build.
     - elixir scripts/depdep.exs --push || echo "depdep bootstrap failed - nothing pushed"
 
@@ -70,11 +72,46 @@ spec-links:
   script:
     - elixir ci/spec_links.exs
 
-test:
+# The native kernels (spec/04 §1.7) need Zig of the version Zigler targets: `mix zig.get`
+# fetches it from ziglang.org into Zigler's cache, where the build finds it (tar.xz, so
+# xz-utils). Every job without this has no Zig and runs the Elixir path.
+.zig:
   extends: .elixir
+  before_script:
+    - !reference [.elixir, before_script]
+    - apt-get install -y -qq --no-install-recommends xz-utils > /dev/null
+    - mix zig.get
+
+# With the toolchain, under `native: :required`: a kernel that fails to build or load fails
+# the job, and every test runs against the kernels.
+test:
+  extends: .zig
   stage: test
+  variables:
+    MACAW_DATA_NATIVE: required
   script:
+    - mix compile --warnings-as-errors
     - mix test
     # Spec, tests and code aligned (macaw_compose spec/00 §4.1): the status reads this
     # job's test run as evidence, so it runs right after it, in the same job.
     - mix surfex.status
+
+# Without the toolchain: the build warns and passes, and every step runs its Elixir path,
+# whose tests must pass as they do with the kernels.
+test-elixir:
+  extends: .elixir
+  stage: test
+  script:
+    - mix compile --warnings-as-errors
+    - mix test
+
+# `native: :required` and no toolchain: the build must fail, and for that reason.
+native-required:
+  extends: .elixir
+  stage: test
+  variables:
+    MACAW_DATA_NATIVE: required
+  script:
+    - 'mix compile > compile.log 2>&1 && { cat compile.log; echo "built without Zig under native required"; exit 1; } || true'
+    - cat compile.log
+    - 'grep -F "native: :required, but the native kernels can''t be built" compile.log'

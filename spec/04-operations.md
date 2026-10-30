@@ -210,6 +210,32 @@ for every column-native table operation over generated rows of several chunks, a
 asked for parallel, a run above parallel_rows/0 with two chunks or more works its parts in other processes, in chunk order; below the threshold, with one chunk, or not asked, every part is worked in the caller's process
 ```
 
+### 1.7 Native kernels: optional, and identical {#operations-native}
+
+**A step's per-row work may run in a native kernel** (macaw_data#9 §8, #38): Zig, compiled through Zigler, `Macaw.Data.Native`. A kernel reads a column's packed Arrow buffers in place (01 §1.1): int64 and float64 values, LSB-first validity bitmaps, date32, timestamp[us] and dictionary int32 codes. It neither decodes a column to values nor expands a bitmap. The macaw forms (`macaw.integral`, the int/float union, per-value precision, `:list`) stay on the Elixir path, which every step keeps for them, for a build without the kernels, and for steps that have none.
+
+- **Identical results.** A kernel answers exactly what the step's Elixir path answers, term for term and bit for bit, so a run with kernels equals one without. Its floating point is Zig's strict mode, its default: no expression is reordered, contracted into a fused multiply-add or assumed finite, and each follows the Elixir path's order of operations. Where the Elixir path would answer with an integer past 64 bits, or raise, the kernel answers `:fallback` and the Elixir path runs, so the edge cases are the Elixir path's own.
+- **Optional, and visible.** The kernels are built when the build has Zigler and a Zig of the version Zigler targets (`.tool-versions`: Zigler 0.16.0, Zig 0.16.0). Zigler is an optional dependency: an adopter that wants the kernels lists `{:zigler, "~> 0.16.0", runtime: false}`. Without the toolchain the build prints a warning, not a compiler diagnostic, so a `--warnings-as-errors` build without Zig still succeeds, and every step runs its Elixir path. **`Macaw.Data.Native.loaded?/0`** is decided once, when the application starts, by asking the kernels their interface version, and held in `:persistent_term`.
+- **`config :macaw_data, native: :optional | :required`**, default `:optional`. It is read at compile time. The deployer knows whether this build is expected to be fast. Set wrong, it fails loudly: `:required` without the toolchain fails the build, and `:required` with kernels that don't load fails the application's start. `:optional` degrades to the Elixir path, visible through `loaded?/0`.
+- **The 1 ms rule.** A kernel works an 8,192-row chunk in tens of microseconds. A call over at most `Native.sync_rows/0` rows (16,384, two canonical chunks) runs on a normal scheduler, within the BEAM's 1 ms. A larger one, a one-chunk table built from rows, runs the same kernel on a dirty CPU scheduler (`Native.scheduler/1`). Each kernel's test states its call's time.
+- **A panic is never silent.** The kernels are built ReleaseSafe in every environment, so a bounds or overflow fault panics rather than reading past a buffer. Each kernel checks its buffers' sizes and returns an error, raised in Elixir, for a malformed input. A panic is then a bug, and it takes the node down with its message and stack trace on standard error.
+
+```test:operations-native-loaded
+loaded? is a boolean held in persistent_term, decided when the application starts, true exactly when the kernels were built; a build under native: :required has them loaded, and a start whose kernels fail to load is refused under :required and runs the Elixir path under :optional
+```
+
+```test:operations-native-config
+the toolchain and the native: setting decide the build: built with a toolchain, the Elixir path and a warning without one under :optional, a failed build without one under :required, and any other setting refused
+```
+
+```test:operations-native-scheduler
+a kernel call over at most sync_rows/0 rows, 16,384, runs on a normal scheduler, and a larger one on a dirty CPU scheduler
+```
+
+```test:operations-native-panic
+a kernel that panics, run in a BEAM of its own, takes that node down with the panic's message on standard error, never silently
+```
+
 ## 2. Packages and the registry {#operations-registry}
 
 **A package is a module with `__members__/0`**, the list of its modules that implement a behavior of this file or of any other Macaw behavior (macaw_compose spec/12 §1). Which behavior a member implements is read from its own `@behaviour` declarations, so a package author maintains one list. `Macaw.Data.Operations` is `macaw_data`'s own package: the twelve table operations of §4 and the thirteen statistics of §5.
