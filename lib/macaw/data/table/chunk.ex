@@ -389,12 +389,9 @@ defmodule Macaw.Data.Table.Chunk do
   chunk.
   """
   @spec gather(t(), non_neg_integer(), non_neg_integer(), [non_neg_integer()], term()) :: t()
-  def gather(%__MODULE__{} = input, first, count, indexes, step_key) when is_list(indexes) do
-    columns =
-      input
-      |> view_columns(first, count)
-      |> Map.new(fn {name, col} -> {name, Column.gather(col, indexes)} end)
-
+  def gather(%__MODULE__{} = input, first, _count, indexes, step_key) when is_list(indexes) do
+    at = read_at(first, indexes)
+    columns = Map.new(as_read(input), fn {name, col} -> {name, Column.gather(col, at)} end)
     size = length(indexes)
 
     %__MODULE__{
@@ -425,8 +422,9 @@ defmodule Macaw.Data.Table.Chunk do
           map()
         ) ::
           t()
-  def reshape(%__MODULE__{} = input, first, count, indexes, step_key, header, added) do
-    view = view_columns(input, first, count)
+  def reshape(%__MODULE__{} = input, first, _count, indexes, step_key, header, added) do
+    view = as_read(input)
+    at = read_at(first, indexes)
     size = length(indexes)
 
     columns =
@@ -437,7 +435,7 @@ defmodule Macaw.Data.Table.Chunk do
             {name, col}
 
           _ ->
-            {name, Column.gather(Map.fetch!(view, name), indexes)}
+            {name, Column.gather(Map.fetch!(view, name), at)}
         end
       end)
 
@@ -452,9 +450,11 @@ defmodule Macaw.Data.Table.Chunk do
     }
   end
 
-  # Every column's storage for the run, as read: the base's, or the state's read view.
-  defp view_columns(%__MODULE__{} = chunk, first, count),
-    do: Map.new(as_read(chunk), fn {name, col} -> {name, Column.slice(col, first, count)} end)
+  # A run's rows as rows of the chunk as read, so a column is gathered from its whole
+  # storage and never sliced first: a slot's place, a bitmap's bit and a text offset are
+  # the same read either way.
+  defp read_at(0, indexes), do: indexes
+  defp read_at(first, indexes), do: Enum.map(indexes, &(&1 + first))
 
   # The chunk's columns as read: its base's with no delta; with one, its state's read
   # view, built once when the state was made (spec/01 §1.1.4), so no read rebuilds it. A

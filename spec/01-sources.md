@@ -282,6 +282,14 @@ a chunk with a delta is read through its state's view, built once: reading its v
 compaction happens when a delta reaches a quarter of its base, keeps the id, the digest and the version, and leaves the contents equal; applying a change sends no message
 ```
 
+#### 1.1.5 Reading a column {#sources-table-read}
+
+**Reading costs the slots, not the bits** (macaw_data#41). A column none of whose values is missing is read without expanding its validity bitmap (§1.1): the bitmap's bytes are checked once, then its values buffer is decoded as it lies. A slice's bitmap is cut as one little-endian integer, shifted down to its first bit and masked, never a bit at a time. A gather takes a bitmap whose bits are all set as all set, reading none of them, and a step's run of a chunk (`Table.Chunk.gather/5`, `reshape/7`) is gathered from the chunk's own storage at the run's offset, never sliced first. Each reads back exactly what reading bit by bit does, so no result and no digest changes.
+
+```test:table-read-cost
+for generated columns of every packed form, with gaps and without, a column's values, slices and gathers read back as reading bit by bit does, and a run of a chunk gathers as its slice does; an all-valid float column reads at most two reductions a row and a constant, expanding no bitmap
+```
+
 ### 1.2 The schema {#sources-schema}
 
 **`Macaw.Data.Schema` is a source's schema:** what each of its fields means, whoever draws it, and never how it is drawn. It is `%Macaw.Data.Schema{fields, version, identity}`:

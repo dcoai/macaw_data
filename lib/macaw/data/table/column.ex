@@ -46,10 +46,8 @@ defmodule Macaw.Data.Table.Column do
   # value shares it (Arrow field metadata), else a binary of one byte per value (a uint8
   # struct field: `macaw.zoned`'s, or `macaw.precise`'s beside a UTC or naive instant).
 
-  import Bitwise
-
   alias Macaw.Data.Schema
-  alias Macaw.Data.Table.Digest
+  alias Macaw.Data.Table.{Bitmap, Digest}
 
   @typedoc "A column's storage, one of the forms above."
   @type t :: tuple()
@@ -101,10 +99,10 @@ defmodule Macaw.Data.Table.Column do
   def pack(:text, values, _name) do
     case text(values, <<0::32>>, [], 0, true) do
       {offsets, data, last, true} when last <= @s32_max ->
-        {:ok, {:text, offsets, data, validity(values)}}
+        {:ok, {:text, offsets, data, Bitmap.validity(values)}}
 
       {offsets, data, last, false} when last <= @s32_max ->
-        {:ok, {:binary, offsets, data, validity(values)}}
+        {:ok, {:binary, offsets, data, Bitmap.validity(values)}}
 
       _ ->
         {:ok, {:list, values}}
@@ -173,21 +171,23 @@ defmodule Macaw.Data.Table.Column do
   defp number_form(_values, _i, _f, _w), do: :fault
 
   defp number(:int64, values),
-    do: {:int64, for(v <- values, into: <<>>, do: <<v || 0::signed-little-64>>), validity(values)}
+    do:
+      {:int64, for(v <- values, into: <<>>, do: <<v || 0::signed-little-64>>),
+       Bitmap.validity(values)}
 
   defp number(:float64, values),
     do:
       {:float64, for(v <- values, into: <<>>, do: <<v || 0.0::float-little-64>>),
-       validity(values)}
+       Bitmap.validity(values)}
 
   defp number(:integral, values) do
     data = for v <- values, into: <<>>, do: <<(v || 0) / 1::float-little-64>>
-    {:integral, data, validity(values), bitmap(values, &is_integer/1)}
+    {:integral, data, Bitmap.validity(values), Bitmap.from(values, &is_integer/1)}
   end
 
   defp number(:union, values) do
     {types, offsets, ints, floats} = union(values, <<>>, <<>>, <<>>, <<>>, 0, 0)
-    ints_validity = values |> Enum.reject(&is_float/1) |> validity()
+    ints_validity = values |> Enum.reject(&is_float/1) |> Bitmap.validity()
     {:union, types, offsets, {ints, ints_validity}, floats}
   end
 
@@ -245,22 +245,22 @@ defmodule Macaw.Data.Table.Column do
 
     case Map.keys(zones) do
       keys when keys in [[], [@utc]] ->
-        {:utc, us, validity(values), precision}
+        {:utc, us, Bitmap.validity(values), precision}
 
       _ ->
         zones = zones |> Enum.sort_by(&elem(&1, 1)) |> Enum.map(&elem(&1, 0)) |> List.to_tuple()
-        {:zoned, us, validity(values), precision, zones, codes}
+        {:zoned, us, Bitmap.validity(values), precision, zones, codes}
     end
   end
 
   defp time(NaiveDateTime, values) do
     {us, precision} = naives(values, <<>>, <<>>, nil)
-    {:naive, us, validity(values), precision}
+    {:naive, us, Bitmap.validity(values), precision}
   end
 
   defp time(Date, values) do
     days = for d <- values, into: <<>>, do: <<if(d, do: date_days(d), else: 0)::signed-little-32>>
-    {:date, days, validity(values)}
+    {:date, days, Bitmap.validity(values)}
   end
 
   defp time(:list, values), do: {:list, values}
@@ -502,7 +502,7 @@ defmodule Macaw.Data.Table.Column do
   defp category_form(_values, _names?, _booleans?), do: :list
 
   defp category(:bool, values),
-    do: {:bool, bitmap(values, &(&1 == true)), validity(values)}
+    do: {:bool, Bitmap.from(values, &(&1 == true)), Bitmap.validity(values)}
 
   defp category({:dictionary, booleans?}, values) do
     case dictionary(values, <<>>, %{}, [], 0) do
@@ -510,9 +510,10 @@ defmodule Macaw.Data.Table.Column do
         {offsets, data, _last, true} = text(:lists.reverse(strings), <<0::32>>, [], 0, true)
 
         booleans =
-          if booleans?, do: {bitmap(values, &is_boolean/1), bitmap(values, &(&1 == true))}
+          if booleans?,
+            do: {Bitmap.from(values, &is_boolean/1), Bitmap.from(values, &(&1 == true))}
 
-        {:dictionary, codes, validity(values), {offsets, data}, booleans}
+        {:dictionary, codes, Bitmap.validity(values), {offsets, data}, booleans}
 
       :invalid ->
         category(:list, values)
@@ -566,14 +567,14 @@ defmodule Macaw.Data.Table.Column do
   def values({:list, values}, _n), do: values
 
   def values({:int64, data, validity}, n),
-    do: gaps(for(<<v::signed-little-64 <- data>>, do: v), bits(validity, n))
+    do: gaps(for(<<v::signed-little-64 <- data>>, do: v), valid(validity, n))
 
   def values({:float64, data, validity}, n),
-    do: gaps(for(<<v::float-little-64 <- data>>, do: v), bits(validity, n))
+    do: gaps(for(<<v::float-little-64 <- data>>, do: v), valid(validity, n))
 
   def values({:integral, data, validity, integral}, n) do
     floats = for <<v::float-little-64 <- data>>, do: v
-    integrals(floats, bits(integral, n), bits(validity, n))
+    integrals(floats, Bitmap.bits(integral, n), valid(validity, n))
   end
 
   def values({:union, types, offsets, ints, floats}, _n) do
@@ -584,19 +585,19 @@ defmodule Macaw.Data.Table.Column do
   end
 
   def values({:utc, us, validity, precision}, n),
-    do: times(us, bits(validity, n), precision, @utc)
+    do: times(us, valid(validity, n), precision, @utc)
 
   def values({:zoned, us, validity, precision, zones, codes}, n),
-    do: zoned(us, bits(validity, n), precision, zones, codes)
+    do: zoned(us, valid(validity, n), precision, zones, codes)
 
   def values({:naive, us, validity, precision}, n),
-    do: times(us, bits(validity, n), precision, nil)
+    do: times(us, valid(validity, n), precision, nil)
 
   def values({:date, days, validity}, n),
-    do: gaps(for(<<d::signed-little-32 <- days>>, do: date(d)), bits(validity, n))
+    do: gaps(for(<<d::signed-little-32 <- days>>, do: date(d)), valid(validity, n))
 
   def values({form, offsets, data, validity}, n) when form in [:text, :binary],
-    do: strings(data, for(<<o::signed-little-32 <- offsets>>, do: o), bits(validity, n))
+    do: strings(data, for(<<o::signed-little-32 <- offsets>>, do: o), valid(validity, n))
 
   def values({:dictionary, codes, validity, {offsets, data}, booleans}, n) do
     offsets = for <<o::signed-little-32 <- offsets>>, do: o
@@ -604,19 +605,33 @@ defmodule Macaw.Data.Table.Column do
 
     case booleans do
       nil ->
-        decode(codes, bits(validity, n), strings)
+        decode(codes, valid(validity, n), strings)
 
       {kinds, values} ->
-        decode(codes, bits(validity, n), bits(kinds, n), bits(values, n), strings)
+        decode(
+          codes,
+          Bitmap.bits(validity, n),
+          Bitmap.bits(kinds, n),
+          Bitmap.bits(values, n),
+          strings
+        )
     end
   end
 
   def values({:bool, values, validity}, n),
-    do: gaps(Enum.map(bits(values, n), &(&1 == 1)), bits(validity, n))
+    do: gaps(Enum.map(Bitmap.bits(values, n), &(&1 == 1)), valid(validity, n))
 
+  # A validity bitmap as the decoders read it: `:all` when no value is missing, so none
+  # expands it, else its first `n` bits.
+  defp valid(validity, n),
+    do: if(Bitmap.all?(validity, n), do: :all, else: Bitmap.bits(validity, n))
+
+  defp gaps(values, :all), do: values
   defp gaps([v | values], [1 | bits]), do: [v | gaps(values, bits)]
   defp gaps([_ | values], [0 | bits]), do: [nil | gaps(values, bits)]
   defp gaps([], []), do: []
+
+  defp decode(codes, :all, strings), do: for(<<c::little-32 <- codes>>, do: elem(strings, c))
 
   defp decode(<<c::little-32, codes::binary>>, [1 | bits], strings),
     do: [elem(strings, c) | decode(codes, bits, strings)]
@@ -639,6 +654,8 @@ defmodule Macaw.Data.Table.Column do
 
   defp decode(<<>>, [], [], [], _strings), do: []
 
+  defp integrals(floats, integral, :all), do: integrals(floats, integral)
+
   defp integrals([f | floats], [1 | integral], [1 | bits]),
     do: [trunc(f) | integrals(floats, integral, bits)]
 
@@ -650,6 +667,10 @@ defmodule Macaw.Data.Table.Column do
 
   defp integrals([], [], []), do: []
 
+  defp integrals([f | floats], [1 | integral]), do: [trunc(f) | integrals(floats, integral)]
+  defp integrals([f | floats], [0 | integral]), do: [f | integrals(floats, integral)]
+  defp integrals([], []), do: []
+
   # One union slot, read through its offset into its child.
   defp slot(1, o, _ints, floats) do
     <<v::float-little-64>> = binary_part(floats, o * 8, 8)
@@ -657,7 +678,7 @@ defmodule Macaw.Data.Table.Column do
   end
 
   defp slot(0, o, {ints, validity}, _floats) do
-    if bit_at(validity, o) == 1 do
+    if Bitmap.at(validity, o) == 1 do
       <<v::signed-little-64>> = binary_part(ints, o * 8, 8)
       v
     end
@@ -666,6 +687,20 @@ defmodule Macaw.Data.Table.Column do
   # A time column's values, walking its buffers together: the microseconds, the validity,
   # and the precision, one for the column or a byte each. Every value is in `zone`, `nil`
   # for naive times; a zoned column's are each in the zone its code names.
+  defp times(us, :all, p, nil) when is_integer(p),
+    do: for(<<v::signed-little-64 <- us>>, do: naive(v, p))
+
+  defp times(us, :all, p, zone) when is_integer(p),
+    do: for(<<v::signed-little-64 <- us>>, do: datetime(v, p, zone))
+
+  defp times(<<v::signed-little-64, us::binary>>, :all, p, nil),
+    do: [naive(v, precision_here(p)) | times(us, :all, rest_precision(p), nil)]
+
+  defp times(<<v::signed-little-64, us::binary>>, :all, p, zone),
+    do: [datetime(v, precision_here(p), zone) | times(us, :all, rest_precision(p), zone)]
+
+  defp times(<<>>, :all, _p, _zone), do: []
+
   defp times(<<_::64, us::binary>>, [0 | bits], p, zone),
     do: [nil | times(us, bits, rest_precision(p), zone)]
 
@@ -676,6 +711,20 @@ defmodule Macaw.Data.Table.Column do
     do: [datetime(v, precision_here(p), zone) | times(us, bits, rest_precision(p), zone)]
 
   defp times(<<>>, [], _p, _zone), do: []
+
+  defp zoned(
+         <<v::signed-little-64, us::binary>>,
+         :all,
+         p,
+         zones,
+         <<c::little-32, codes::binary>>
+       ),
+       do: [
+         datetime(v, precision_here(p), elem(zones, c))
+         | zoned(us, :all, rest_precision(p), zones, codes)
+       ]
+
+  defp zoned(<<>>, :all, _p, _zones, _codes), do: []
 
   defp zoned(<<_::64, us::binary>>, [0 | bits], p, zones, <<_::32, codes::binary>>),
     do: [nil | zoned(us, bits, rest_precision(p), zones, codes)]
@@ -702,11 +751,18 @@ defmodule Macaw.Data.Table.Column do
 
   # Strings by their offsets into `data`; offsets are absolute, so a slice of them reads
   # the same data.
+  defp strings(data, [a | offsets], :all), do: all_strings(data, a, offsets)
+
   defp strings(data, [a, b | offsets], [1 | bits]),
     do: [binary_part(data, a, b - a) | strings(data, [b | offsets], bits)]
 
   defp strings(data, [_ | offsets], [0 | bits]), do: [nil | strings(data, offsets, bits)]
   defp strings(_data, [_last], []), do: []
+
+  defp all_strings(data, a, [b | offsets]),
+    do: [binary_part(data, a, b - a) | all_strings(data, b, offsets)]
+
+  defp all_strings(_data, _last, []), do: []
 
   # -- slicing ----------------------------------------------------------------------------
 
@@ -717,17 +773,17 @@ defmodule Macaw.Data.Table.Column do
   def slice({:list, values}, first, n), do: {:list, Enum.slice(values, first, n)}
 
   def slice({form, data, validity}, first, n) when form in [:int64, :float64],
-    do: {form, binary_part(data, first * 8, n * 8), slice_bits(validity, first, n)}
+    do: {form, binary_part(data, first * 8, n * 8), Bitmap.slice(validity, first, n)}
 
   def slice({:date, data, validity}, first, n),
-    do: {:date, binary_part(data, first * 4, n * 4), slice_bits(validity, first, n)}
+    do: {:date, binary_part(data, first * 4, n * 4), Bitmap.slice(validity, first, n)}
 
   def slice({:bool, values, validity}, first, n),
-    do: {:bool, slice_bits(values, first, n), slice_bits(validity, first, n)}
+    do: {:bool, Bitmap.slice(values, first, n), Bitmap.slice(validity, first, n)}
 
   def slice({:integral, data, validity, integral}, first, n) do
-    {:integral, binary_part(data, first * 8, n * 8), slice_bits(validity, first, n),
-     slice_bits(integral, first, n)}
+    {:integral, binary_part(data, first * 8, n * 8), Bitmap.slice(validity, first, n),
+     Bitmap.slice(integral, first, n)}
   end
 
   def slice({:union, types, offsets, ints, floats}, first, n),
@@ -735,21 +791,21 @@ defmodule Macaw.Data.Table.Column do
       {:union, binary_part(types, first, n), binary_part(offsets, first * 4, n * 4), ints, floats}
 
   def slice({form, us, validity, precision}, first, n) when form in [:utc, :naive] do
-    {form, binary_part(us, first * 8, n * 8), slice_bits(validity, first, n),
+    {form, binary_part(us, first * 8, n * 8), Bitmap.slice(validity, first, n),
      slice_precision(precision, first, n)}
   end
 
   def slice({:zoned, us, validity, precision, zones, codes}, first, n) do
-    {:zoned, binary_part(us, first * 8, n * 8), slice_bits(validity, first, n),
+    {:zoned, binary_part(us, first * 8, n * 8), Bitmap.slice(validity, first, n),
      slice_precision(precision, first, n), zones, binary_part(codes, first * 4, n * 4)}
   end
 
   def slice({form, offsets, data, validity}, first, n) when form in [:text, :binary] do
-    {form, binary_part(offsets, first * 4, (n + 1) * 4), data, slice_bits(validity, first, n)}
+    {form, binary_part(offsets, first * 4, (n + 1) * 4), data, Bitmap.slice(validity, first, n)}
   end
 
   def slice({:dictionary, codes, validity, dictionary, booleans}, first, n) do
-    {:dictionary, binary_part(codes, first * 4, n * 4), slice_bits(validity, first, n),
+    {:dictionary, binary_part(codes, first * 4, n * 4), Bitmap.slice(validity, first, n),
      dictionary, slice_booleans(booleans, first, n)}
   end
 
@@ -767,29 +823,29 @@ defmodule Macaw.Data.Table.Column do
   end
 
   def gather({form, data, validity}, indexes) when form in [:int64, :float64],
-    do: {form, take(data, 8, indexes), take_bits(validity, indexes)}
+    do: {form, take(data, 8, indexes), Bitmap.take(validity, indexes, div(byte_size(data), 8))}
 
   def gather({:date, data, validity}, indexes),
-    do: {:date, take(data, 4, indexes), take_bits(validity, indexes)}
+    do: {:date, take(data, 4, indexes), Bitmap.take(validity, indexes, div(byte_size(data), 4))}
 
   def gather({:bool, values, validity}, indexes),
-    do: {:bool, take_bits(values, indexes), take_bits(validity, indexes)}
+    do: {:bool, Bitmap.take(values, indexes, nil), Bitmap.take(validity, indexes, nil)}
 
   def gather({:integral, data, validity, integral}, indexes),
     do:
-      {:integral, take(data, 8, indexes), take_bits(validity, indexes),
-       take_bits(integral, indexes)}
+      {:integral, take(data, 8, indexes), Bitmap.take(validity, indexes, div(byte_size(data), 8)),
+       Bitmap.take(integral, indexes, nil)}
 
   def gather({:union, types, offsets, ints, floats}, indexes),
     do: {:union, take(types, 1, indexes), take(offsets, 4, indexes), ints, floats}
 
   def gather({form, us, validity, precision}, indexes) when form in [:utc, :naive],
     do:
-      {form, take(us, 8, indexes), take_bits(validity, indexes),
+      {form, take(us, 8, indexes), Bitmap.take(validity, indexes, div(byte_size(us), 8)),
        take_precision(precision, indexes)}
 
   def gather({:zoned, us, validity, precision, zones, codes}, indexes) do
-    {:zoned, take(us, 8, indexes), take_bits(validity, indexes),
+    {:zoned, take(us, 8, indexes), Bitmap.take(validity, indexes, div(byte_size(us), 8)),
      take_precision(precision, indexes), zones, take(codes, 4, indexes)}
   end
 
@@ -804,17 +860,19 @@ defmodule Macaw.Data.Table.Column do
       end)
 
     {form, IO.iodata_to_binary([<<0::32>> | Enum.reverse(ends)]),
-     IO.iodata_to_binary(Enum.reverse(parts)), take_bits(validity, indexes)}
+     IO.iodata_to_binary(Enum.reverse(parts)),
+     Bitmap.take(validity, indexes, div(byte_size(offsets), 4) - 1)}
   end
 
   def gather({:dictionary, codes, validity, dictionary, booleans}, indexes) do
     booleans =
       case booleans do
         nil -> nil
-        {kinds, values} -> {take_bits(kinds, indexes), take_bits(values, indexes)}
+        {kinds, values} -> {Bitmap.take(kinds, indexes, nil), Bitmap.take(values, indexes, nil)}
       end
 
-    {:dictionary, take(codes, 4, indexes), take_bits(validity, indexes), dictionary, booleans}
+    {:dictionary, take(codes, 4, indexes),
+     Bitmap.take(validity, indexes, div(byte_size(codes), 4)), dictionary, booleans}
   end
 
   # The `width`-byte slots at `indexes`, copied a run of consecutive slots at a time.
@@ -828,9 +886,6 @@ defmodule Macaw.Data.Table.Column do
   defp take_precision(p, _indexes) when is_integer(p), do: p
   defp take_precision(precisions, indexes), do: take(precisions, 1, indexes)
 
-  defp take_bits(bitmap, indexes),
-    do: bitmap(Enum.map(indexes, &bit_at(bitmap, &1)), &(&1 == 1))
-
   # Indexes as runs of consecutive ones, `{first, count}`, in their order.
   defp runs([]), do: []
   defp runs([i | rest]), do: runs(rest, i, 1, [])
@@ -842,91 +897,8 @@ defmodule Macaw.Data.Table.Column do
   defp slice_booleans(nil, _first, _n), do: nil
 
   defp slice_booleans({kinds, values}, first, n),
-    do: {slice_bits(kinds, first, n), slice_bits(values, first, n)}
+    do: {Bitmap.slice(kinds, first, n), Bitmap.slice(values, first, n)}
 
   defp slice_precision(p, _first, _n) when is_integer(p), do: p
   defp slice_precision(precisions, first, n), do: binary_part(precisions, first, n)
-
-  # -- bitmaps ----------------------------------------------------------------------------
-
-  # A bitmap of `values`, a bit set where `bit?` holds, least-significant bit first: eight
-  # values a byte, the last byte's padding 0.
-  defp bitmap(values, bit?), do: bitmap(values, bit?, <<>>)
-
-  defp bitmap([a, b, c, d, e, f, g, h | rest], bit?, acc) do
-    bitmap(
-      rest,
-      bit?,
-      <<acc::binary, bit(bit?, h)::1, bit(bit?, g)::1, bit(bit?, f)::1, bit(bit?, e)::1,
-        bit(bit?, d)::1, bit(bit?, c)::1, bit(bit?, b)::1, bit(bit?, a)::1>>
-    )
-  end
-
-  defp bitmap([], _bit?, acc), do: acc
-
-  defp bitmap(tail, bit?, acc) do
-    {byte, _} =
-      Enum.reduce(tail, {0, 0}, fn v, {byte, i} -> {byte ||| bit(bit?, v) <<< i, i + 1} end)
-
-    <<acc::binary, byte>>
-  end
-
-  defp bit(bit?, v), do: if(bit?.(v), do: 1, else: 0)
-
-  # The validity bitmap, as `bitmap/2` with no function call per value.
-  defp validity(values), do: validity(values, <<>>)
-
-  defp validity([a, b, c, d, e, f, g, h | rest], acc) do
-    validity(
-      rest,
-      <<acc::binary, valid(h)::1, valid(g)::1, valid(f)::1, valid(e)::1, valid(d)::1, valid(c)::1,
-        valid(b)::1, valid(a)::1>>
-    )
-  end
-
-  defp validity(tail, acc), do: bitmap(tail, &(&1 != nil), acc)
-
-  defp valid(nil), do: 0
-  defp valid(_value), do: 1
-
-  # The first `n` bits of a bitmap, each 0 or 1, in value order.
-  defp bits(_bitmap, 0), do: []
-
-  defp bits(<<b7::1, b6::1, b5::1, b4::1, b3::1, b2::1, b1::1, b0::1, rest::binary>>, n)
-       when n >= 8,
-       do: [b0, b1, b2, b3, b4, b5, b6, b7 | bits(rest, n - 8)]
-
-  defp bits(<<byte, _::binary>>, n), do: for(i <- 0..(n - 1), do: byte >>> i &&& 1)
-
-  defp bit_at(bitmap, i), do: :binary.at(bitmap, div(i, 8)) >>> rem(i, 8) &&& 1
-
-  # Bits `first` to `first + n - 1` as a bitmap of their own, from bit 0.
-  defp slice_bits(_bitmap, _first, 0), do: <<>>
-
-  defp slice_bits(bitmap, first, n) do
-    start = div(first, 8)
-    bytes = div(n + 7, 8)
-    source = binary_part(bitmap, start, min(bytes + 1, byte_size(bitmap) - start))
-    shifted = shift(source, rem(first, 8), bytes)
-
-    case rem(n, 8) do
-      0 ->
-        shifted
-
-      r ->
-        <<whole::binary-size(^bytes - 1), last>> = shifted
-        <<whole::binary, last &&& (1 <<< r) - 1>>
-    end
-  end
-
-  defp shift(source, 0, bytes), do: binary_part(source, 0, bytes)
-
-  defp shift(source, k, bytes) do
-    size = byte_size(source)
-
-    for i <- 0..(bytes - 1), into: <<>> do
-      high = if i + 1 < size, do: :binary.at(source, i + 1) <<< (8 - k) &&& 0xFF, else: 0
-      <<:binary.at(source, i) >>> k ||| high>>
-    end
-  end
 end
