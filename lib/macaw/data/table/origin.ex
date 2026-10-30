@@ -157,9 +157,46 @@ defmodule Macaw.Data.Table.Origin do
   end
 
   @doc false
-  # Whether `later` may follow `earlier` in a window field's order, `nil` first.
+  # Whether `later` may follow `earlier` in a window field's order, `nil` last.
   @spec ordered?(term(), term()) :: boolean()
-  def ordered?(earlier, later), do: not after?(position(earlier), position(later))
+  def ordered?(earlier, later), do: not after?(at(earlier), at(later))
+
+  @doc false
+  # Whether the origin lays chunks in event time: a window field and a span.
+  @spec windowed?(t() | nil) :: boolean()
+  def windowed?(%{window: window, span: span}) when window != nil and span != nil, do: true
+  def windowed?(_origin), do: false
+
+  @doc false
+  # The slot a window value lies in, under an origin in event time.
+  @spec slot_of(t(), term()) :: term()
+  def slot_of(%{span: span}, value), do: slot(value, span)
+
+  @doc false
+  # Whether a slot's span lies wholly before `until`: its end at or before it
+  # (spec/01 §1.1.4). The slot `nil`, and no `until`, never.
+  @spec settled?(t(), term(), term()) :: boolean()
+  def settled?(_origin, nil, _until), do: false
+  def settled?(_origin, _slot, nil), do: false
+
+  def settled?(%{span: span}, slot, until) do
+    case {at(slot), at(until)} do
+      {start, limit} when is_number(start) and is_number(limit) ->
+        start + span_size(span) <= limit
+
+      _incomparable ->
+        false
+    end
+  end
+
+  defp span_size(span) when is_number(span), do: span
+  defp span_size(span), do: span_us(span)
+
+  @doc false
+  # Where a window value lies, for ordering: microseconds from 1970-01-01 for a time, the
+  # number itself, `nil` for none, `:invalid` for no kind a window takes.
+  @spec position(term()) :: number() | nil | :invalid
+  def position(value), do: at(value)
 
   # The first index whose position comes before the one before it.
   defp unsorted([], _previous, _i), do: nil
@@ -168,19 +205,19 @@ defmodule Macaw.Data.Table.Origin do
     do: if(after?(previous, p), do: i, else: unsorted(rest, p, i + 1))
 
   defp after?(:start, _p), do: false
-  defp after?(nil, _p), do: false
-  defp after?(_previous, nil), do: true
+  defp after?(_previous, nil), do: false
+  defp after?(nil, _p), do: true
   defp after?(previous, p), do: previous > p
 
   # Where a window value lies: microseconds from 1970-01-01 for a time (a DateTime's UTC
   # instant, a naive time's wall clock, a date's midnight), the number itself, `nil` for
   # none.
-  defp position(nil), do: nil
-  defp position(v) when is_number(v), do: v
-  defp position(%DateTime{} = t), do: DateTime.to_unix(t, :microsecond)
-  defp position(%NaiveDateTime{} = t), do: NaiveDateTime.diff(t, @naive_epoch, :microsecond)
-  defp position(%Date{} = d), do: Date.diff(d, ~D[1970-01-01]) * @day_us
-  defp position(_other), do: :invalid
+  defp at(nil), do: nil
+  defp at(v) when is_number(v), do: v
+  defp at(%DateTime{} = t), do: DateTime.to_unix(t, :microsecond)
+  defp at(%NaiveDateTime{} = t), do: NaiveDateTime.diff(t, @naive_epoch, :microsecond)
+  defp at(%Date{} = d), do: Date.diff(d, ~D[1970-01-01]) * @day_us
+  defp at(_other), do: :invalid
 
   # The start of the span a window value lies in: a UTC DateTime for a DateTime, a
   # NaiveDateTime for a naive time or a date, a number for a number; `nil` for none.
@@ -188,10 +225,10 @@ defmodule Macaw.Data.Table.Origin do
   defp slot(v, span) when is_number(v), do: floor_div(v, span) * span
 
   defp slot(%DateTime{} = t, span),
-    do: DateTime.from_unix!(start_us(position(t), span), :microsecond)
+    do: DateTime.from_unix!(start_us(at(t), span), :microsecond)
 
   defp slot(t, span),
-    do: NaiveDateTime.add(@naive_epoch, start_us(position(t), span), :microsecond)
+    do: NaiveDateTime.add(@naive_epoch, start_us(at(t), span), :microsecond)
 
   defp start_us(us, span) do
     span_us = span_us(span)

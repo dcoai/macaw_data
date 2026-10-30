@@ -41,6 +41,10 @@ defmodule Macaw.Data.Source.Push do
     cover them. Rows are never deduplicated: an identical row is a second row. A schema
     with no window field keeps the newest `limit` rows, marking the delivery `capped`
     when it drops any.
+  - **What is held is a chunked table** (spec/01 §2.6): `held/1`'s rows are a
+    `Macaw.Data.Table` of the source's origin, its columns the schema's fields, packed as
+    `Delivery.table/2` packs; every change reaches it through `Table.apply/2`, a settled
+    range's in its delta. Rows that don't pack are `{:table, faults}` in `errors`.
 
   It is not a process: the process that subscribes receives the messages in its mailbox
   and passes them here. Ported from the logic of visualize's `Visualize.Feed.Monitor`,
@@ -49,6 +53,7 @@ defmodule Macaw.Data.Source.Push do
 
   alias Macaw.Data.{Delivery, Schema, Table, Window}
   alias Macaw.Data.Schema.Cache
+  alias Macaw.Data.Source.Description
   alias Macaw.Data.Source.Push.Changes
 
   @tag :macaw_source
@@ -66,7 +71,8 @@ defmodule Macaw.Data.Source.Push do
     position: 0,
     waiting: %{},
     refetch: nil,
-    lateness: nil
+    lateness: nil,
+    chunk_span: nil
   ]
 
   @typedoc "A buffered message: a snapshot, or an increment and its number."
@@ -84,7 +90,8 @@ defmodule Macaw.Data.Source.Push do
           position: non_neg_integer(),
           waiting: %{pos_integer() => Delivery.t()},
           refetch: term(),
-          lateness: Duration.t() | number() | nil
+          lateness: Duration.t() | number() | nil,
+          chunk_span: Duration.t() | number() | nil
         }
 
   @doc """
@@ -92,18 +99,21 @@ defmodule Macaw.Data.Source.Push do
   position `0`. Options: `cache:` a `Schema.Cache` to start from, `limit:` the most rows
   held for a schema with no window field (`100_000`), `lateness:` the source's
   description's hard bound (spec/01 §4.4), `nil` by default, accepting a change of any
-  age.
+  age; `chunk_span:` the description's `chunk_span` (spec/01 §1.1.3), `nil` by default,
+  derived from the resolution held.
   """
   @spec new(term(), reference(), keyword()) :: t()
   def new(name, ref, opts \\ []) when is_reference(ref) do
-    opts = Keyword.validate!(opts, cache: %Cache{}, limit: 100_000, lateness: nil)
+    opts =
+      Keyword.validate!(opts, cache: %Cache{}, limit: 100_000, lateness: nil, chunk_span: nil)
 
     %__MODULE__{
       name: name,
       ref: ref,
       cache: opts[:cache],
       limit: opts[:limit],
-      lateness: opts[:lateness]
+      lateness: opts[:lateness],
+      chunk_span: opts[:chunk_span]
     }
   end
 
@@ -164,7 +174,11 @@ defmodule Macaw.Data.Source.Push do
     |> gap()
   end
 
-  @doc "The relation as it stands, a delivery, or `nil` before anything is held."
+  @doc """
+  The relation as it stands, or `nil` before anything is held: a delivery, what was
+  served beside its rows, which are a chunked `Macaw.Data.Table` of the source's origin
+  (spec/01 §2.6), its columns the schema's fields.
+  """
   @spec held(t()) :: Delivery.t() | nil
   def held(%__MODULE__{held: held}), do: held
 
@@ -188,11 +202,17 @@ defmodule Macaw.Data.Source.Push do
 
   defp take(push, {:snapshot, %Delivery{served: %{position: p}} = delivery}, describe) do
     case resolve(push, delivery, describe) do
-      {:ok, _schema, push} ->
-        waiting = Map.reject(push.waiting, fn {seq, _d} -> seq <= p end)
-        {claim, push} = claim(push, delivery)
-        held = put_claim(delivery, claim)
-        advance(%{push | held: held, position: p, waiting: waiting, refetch: nil}, describe)
+      {:ok, schema, push} ->
+        case holding(push, delivery, schema) do
+          {:ok, held} ->
+            waiting = Map.reject(push.waiting, fn {seq, _d} -> seq <= p end)
+            {claim, push} = claim(push, held)
+            held = put_claim(held, claim)
+            advance(%{push | held: held, position: p, waiting: waiting, refetch: nil}, describe)
+
+          {:error, faults} ->
+            fault(push, {:table, faults})
+        end
 
       {:error, reason, push} ->
         fault(push, reason)
@@ -284,11 +304,15 @@ defmodule Macaw.Data.Source.Push do
     end
   end
 
-  # The increment's changes applied to what is held (spec/01 §4.2), the rows kept in the
-  # window field's order and the served window grown over the rows inserted.
+  # The increment's changes applied to what is held through `Table.apply/2` (spec/01
+  # §2.6, §4.2): judged first (lateness, overlaps, conflicts), then matched and placed in
+  # the held table's chunks, a settled range's in its delta. The served window grows over
+  # the rows inserted.
   defp merge(push, delivery, schema) do
-    held = push.held || %{delivery | rows: empty(delivery.rows), retracted: [], replace: []}
-    old = Delivery.named_rows(held)
+    held = push.held || empty(push, delivery, schema)
+    held = reheld(push, held, schema)
+    old = held.rows
+
     # Late changes are judged against the claim held before this increment.
     {bound, push} =
       case bound(claimed(push.held), push.lateness) do
@@ -297,33 +321,104 @@ defmodule Macaw.Data.Source.Push do
       end
 
     {claim, push} = claim(push, delivery)
+    {change, before, after_} = Changes.validate(delivery, schema, bound: bound)
 
-    {rows, inserted, faults, unheld} =
-      Changes.apply(old, delivery, schema, thinned?: thinned?(push.held), bound: bound)
+    {table, faults, unheld} =
+      Table.apply(
+        old,
+        Map.merge(change, %{
+          schema: schema,
+          settled: claimed(push.held),
+          thinned: thinned?(push.held)
+        })
+      )
 
+    inserted = Enum.flat_map(change.replace, & &1.rows) ++ change.insert
     version = delivery.schema || held.schema
 
     held =
       case Schema.window_field(schema) do
         nil ->
-          cut = max(length(rows) - push.limit, 0)
+          cut = max(Table.size(table) - push.limit, 0)
           served = %{held.served | capped: held.served.capped or cut > 0}
-          %{rebuild(held, Enum.drop(rows, cut), delivery) | schema: version, served: served}
+          %{held | rows: Table.trim(table, cut), schema: version, served: served}
 
         time ->
-          held_to = window_to(held) || newest(old, time)
-          rows = ordered(rows, time)
-          to = Window.latest(held_to, window_to(delivery) || newest(inserted, time))
-          from = window_from(held) || window_from(delivery) || earliest(rows, time)
-          served = %{held.served | window: [from, to]}
-          %{rebuild(held, rows, delivery) | schema: version, served: served}
+          held_to = window_to(held) || newest(Table.column(old, time))
+
+          to =
+            Window.latest(
+              held_to,
+              window_to(delivery) || newest(Enum.map(inserted, &Table.get(&1, time)))
+            )
+
+          from = window_from(held) || window_from(delivery) || earliest(Table.column(table, time))
+          %{held | rows: table, schema: version, served: %{held.served | window: [from, to]}}
       end
 
-    push = %{push | held: put_claim(held, claim), errors: push.errors ++ faults}
+    push = %{
+      push
+      | held: put_claim(held, claim),
+        errors: push.errors ++ before ++ faults ++ after_
+    }
 
     if unheld > 0,
       do: Enum.reduce(1..unheld, push, fn _, push -> ignore(push, :unheld) end),
       else: push
+  end
+
+  # -- the held table (spec/01 §2.6) ------------------------------------------------------
+
+  # A delivery's rows as the held table: the schema's fields as columns, packed as the
+  # edge packs them, in the window field's order with rows of no window value last, on the
+  # source's origin. `{:ok, held}` or the packing's faults.
+  defp holding(push, %Delivery{} = delivery, schema) do
+    rows = delivery |> Delivery.named_rows() |> ordered(Schema.window_field(schema))
+    header = header(schema)
+
+    columns =
+      for {name, type} <- header,
+          do: {name, type, Enum.map(rows, &Table.at_edge(type, Table.get(&1, name)))}
+
+    case Table.new(columns, origin: origin(push, schema, delivery.served.resolution)) do
+      {:ok, table} -> {:ok, %{delivery | rows: table, names: nil, retracted: [], replace: []}}
+      {:error, faults} -> {:error, faults}
+    end
+  end
+
+  # Nothing held yet: an empty table of the increment's resolution.
+  defp empty(push, delivery, schema) do
+    {:ok, held} = holding(push, %{delivery | rows: [], names: nil}, schema)
+    %{held | served: %{held.served | window: nil, complete_until: nil}}
+  end
+
+  # A held table under another schema's fields (the schema changed): its rows held again.
+  defp reheld(push, %Delivery{rows: table} = held, schema) do
+    if Enum.map(Table.names(table), &{&1, Table.column_type(table, &1)}) == header(schema) do
+      held
+    else
+      {:ok, again} = holding(push, %{held | rows: Table.rows(table)}, schema)
+      again
+    end
+  end
+
+  defp header(%Schema{fields: fields}),
+    do: fields |> Enum.map(fn {name, field} -> {name, field.type} end) |> Enum.sort()
+
+  # The source's origin (spec/01 §1.1.3): the subscription's name, the resolution held, a
+  # time or number window field and its span.
+  defp origin(push, schema, resolution) do
+    window = Schema.window_field(schema)
+
+    case window && schema.fields[window].type do
+      type when type in [:time, :number] ->
+        description = %Description{schema: schema, chunk_span: push.chunk_span}
+        span = Description.chunk_span(description, resolution)
+        %{source: push.name, resolution: resolution, window: window, span: span}
+
+      _none ->
+        %{source: push.name, resolution: resolution, window: nil, span: nil}
+    end
   end
 
   # The source's watermark (spec/01 §4.4): carried forward, advanced by a delivery that
@@ -365,6 +460,8 @@ defmodule Macaw.Data.Source.Push do
   defp thinned?(%Delivery{served: served}), do: served.capped or served.reduced_by != nil
 
   # Stable by the window field's position, a row with no time last.
+  defp ordered(rows, nil), do: rows
+
   defp ordered(rows, time) do
     Enum.sort_by(rows, fn row ->
       case Window.position(Table.get(row, time)) do
@@ -380,26 +477,6 @@ defmodule Macaw.Data.Source.Push do
   defp window_to(%Delivery{served: %{window: [_from, to]}}), do: to
   defp window_to(_delivery), do: nil
 
-  defp newest(rows, time), do: Enum.reduce(rows, nil, &Window.latest(&2, Table.get(&1, time)))
-  defp earliest(rows, time), do: Enum.reduce(rows, nil, &Window.earliest(&2, Table.get(&1, time)))
-
-  defp empty(%Table{} = table), do: Table.slice(table, 0, 0)
-  defp empty(_rows), do: []
-
-  # What is held, in the form the source gave it: when both are tables, the held columns
-  # and any the increment adds, of their types; else the rows themselves (macaw#185).
-  defp rebuild(%Delivery{rows: %Table{} = held_table} = held, rows, %Delivery{
-         rows: %Table{} = table
-       }) do
-    types =
-      Enum.reduce([held_table, table], %{}, fn table, acc ->
-        Enum.reduce(Table.names(table), acc, &Map.put_new(&2, &1, Table.column_type(table, &1)))
-      end)
-
-    names = Table.names(held_table) ++ (Table.names(table) -- Table.names(held_table))
-    columns = for name <- names, do: {name, types[name], Enum.map(rows, &Map.get(&1, name))}
-    %{held | rows: Table.new!(columns)}
-  end
-
-  defp rebuild(held, rows, _delivery), do: %{held | rows: rows, names: nil}
+  defp newest(values), do: Enum.reduce(values, nil, &Window.latest(&2, &1))
+  defp earliest(values), do: Enum.reduce(values, nil, &Window.earliest(&2, &1))
 end

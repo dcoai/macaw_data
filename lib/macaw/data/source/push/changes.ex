@@ -1,42 +1,33 @@
 defmodule Macaw.Data.Source.Push.Changes do
   @moduledoc false
-  # One increment's changes applied to the rows held (spec/01 §4.2): row retractions,
-  # then range retractions, then insertions. Matching never guesses: a retraction that
-  # is not held, held only at another window value, or can't tell distinct rows apart is
-  # a fault, and so is any change that contradicts a replacement in the same increment.
-  # The rows are named rows (maps), read by either spelling of a field's name.
+  # One increment's changes judged before they reach what is held (spec/01 §4.2, §4.4):
+  # lateness, overlapping replacements, and changes inside a replaced range, each a fault
+  # and not applied. `{change, before, after}`: the changes for `Table.apply/2`
+  # (`retract`, `replace` with only the rows inside each, `insert`), and the faults that
+  # come before its retraction faults and after them, in §4.2's order. Matching a
+  # retraction against what is held is `Table.apply/2`'s.
 
   alias Macaw.Data.{Delivery, Schema, Table, Window}
 
   @doc false
-  # `{rows, inserted, faults, unheld}`: the rows after the increment (the held ones left,
-  # then the inserted ones), the rows inserted, the faults in order, and how many
-  # retractions named a row a thinned holding lacks. `bound` is the lateness bound in
-  # force (spec/01 §4.4), `nil` for none: a change older than it is refused, and a
-  # replacement reaching before it refused whole.
-  def apply(held, %Delivery{} = increment, %Schema{} = schema, thinned?: thinned?, bound: bound) do
-    ctx = %{schema: schema, time: Schema.window_field(schema), thinned?: thinned?, bound: bound}
+  def validate(%Delivery{} = increment, %Schema{} = schema, bound: bound) do
+    ctx = %{schema: schema, time: Schema.window_field(schema), bound: bound}
 
-    {replacements, faults} = timely_ranges(increment.replace, ctx)
-    {replacements, faults} = replacements(replacements, ctx, faults)
-    {retractions, faults} = timely(increment.retracted, ctx, faults)
-    {retractions, faults} = outside(retractions, replacements, ctx, faults)
+    {replacements, before} = timely_ranges(increment.replace, ctx)
+    {replacements, before} = replacements(replacements, ctx, before)
+    {retractions, before} = timely(increment.retracted, ctx, before)
+    {retractions, before} = outside(retractions, replacements, ctx, before)
 
-    {held, faults, unheld} =
-      Enum.reduce(retractions, {held, faults, 0}, &retract(&1, &2, ctx))
-
-    held = Enum.reject(held, fn row -> Enum.any?(replacements, &in_scope?(row, &1, ctx)) end)
-
-    {replaced, faults} =
-      Enum.reduce(replacements, {[], faults}, fn r, {rows, faults} ->
+    {replacements, after_} =
+      Enum.reduce(replacements, {[], []}, fn r, {kept, faults} ->
         {inside, out} = Enum.split_with(r.rows, &in_scope?(&1, r, ctx))
-        {rows ++ inside, faults ++ Enum.map(out, &{:outside, &1})}
+        {kept ++ [%{r | rows: inside}], faults ++ Enum.map(out, &{:outside, &1})}
       end)
 
-    {others, faults} = timely(Delivery.named_rows(increment), ctx, faults)
-    {others, faults} = outside(others, replacements, ctx, faults)
-    inserted = replaced ++ others
-    {held ++ inserted, inserted, faults, unheld}
+    {others, after_} = timely(Delivery.named_rows(increment), ctx, after_)
+    {others, after_} = outside(others, replacements, ctx, after_)
+
+    {%{retract: retractions, replace: replacements, insert: others}, before, after_}
   end
 
   # The replacements that apply: a range other than the whole one needs a window field,
@@ -111,57 +102,5 @@ defmodule Macaw.Data.Source.Push.Changes do
     end
   end
 
-  # One retraction: the held rows it names, which must be one group of identical rows;
-  # one copy is withdrawn.
-  defp retract(retraction, {held, faults, unheld}, ctx) do
-    named = Enum.filter(held, &names?(retraction, &1, ctx))
-
-    case Enum.uniq_by(named, &normal/1) do
-      [one] ->
-        {List.delete(held, one), faults, unheld}
-
-      [] when ctx.thinned? ->
-        {held, faults, unheld + 1}
-
-      [] ->
-        {held, faults ++ [{:retract, missing(retraction, held, ctx), retraction}], unheld}
-
-      _several ->
-        {held, faults ++ [{:retract, :ambiguous, retraction}], unheld}
-    end
-  end
-
-  # With identity declared, every field the retraction names equals the row's, the
-  # window field compared as instants; without, the whole row.
-  defp names?(retraction, row, ctx) do
-    case Schema.identity(ctx.schema) do
-      [] ->
-        normal(retraction) == normal(row)
-
-      _fields ->
-        Enum.all?(retraction, fn {field, value} ->
-          held = Table.get(row, field)
-          if to_string(field) == ctx.time, do: same_time?(held, value), else: held == value
-        end)
-    end
-  end
-
-  # Held only at another window value is a moved row; else it is not held.
-  defp missing(retraction, held, ctx) do
-    id = Schema.identity(ctx.schema, retraction)
-    time = ctx.time && Table.get(retraction, ctx.time)
-
-    same = if id == nil, do: [], else: Enum.filter(held, &(Schema.identity(ctx.schema, &1) == id))
-
-    if ctx.time != nil and same != [] and
-         not Enum.any?(same, &same_time?(Table.get(&1, ctx.time), time)),
-       do: :moved,
-       else: :not_held
-  end
-
-  defp same_time?(a, b), do: a == b or (position(a) != nil and position(a) == position(b))
-
   defp position(value), do: Window.position(value)
-
-  defp normal(row), do: Map.new(row, fn {k, v} -> {to_string(k), v} end)
 end

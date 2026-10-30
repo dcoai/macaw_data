@@ -47,19 +47,19 @@ defmodule Macaw.Data.TableIdentityTest do
 
     @tag verifies: "table-chunk-ids"
     test "a source's chunks in event time are {source, resolution, span start}" do
-      {:ok, table} = readings([nil, 10, 50, 65, 180, 181], cpu())
+      {:ok, table} = readings([10, 50, 65, 180, 181, nil], cpu())
 
       assert ids(table) == [
-               {"cpu", 60, nil},
                {"cpu", 60, ~U[2026-01-01 00:00:00.000000Z]},
                {"cpu", 60, ~U[2026-01-01 01:00:00.000000Z]},
-               {"cpu", 60, ~U[2026-01-01 03:00:00.000000Z]}
+               {"cpu", 60, ~U[2026-01-01 03:00:00.000000Z]},
+               {"cpu", 60, nil}
              ]
 
-      assert for({c, _, _} <- Table.chunks(table), do: Chunk.size(c)) == [1, 2, 1, 2]
+      assert for({c, _, _} <- Table.chunks(table), do: Chunk.size(c)) == [2, 1, 2, 1]
 
       # A rebuild has the same ids.
-      {:ok, again} = readings([nil, 10, 50, 65, 180, 181], cpu())
+      {:ok, again} = readings([10, 50, 65, 180, 181, nil], cpu())
       assert ids(again) == ids(table)
 
       # A number window field: spans of 10 from 0.
@@ -131,7 +131,7 @@ defmodule Macaw.Data.TableIdentityTest do
 
     @tag verifies: "table-chunk-ids"
     test "rows out of window order, and an append of another origin, are refused" do
-      assert readings([10, nil, 5], cpu()) == {:error, [{[:origin, :window], {:unsorted, 1}}]}
+      assert readings([10, nil, 5], cpu()) == {:error, [{[:origin, :window], {:unsorted, 2}}]}
       assert readings([10, 9], cpu()) == {:error, [{[:origin, :window], {:unsorted, 1}}]}
 
       {:ok, table} = readings([10, 50], cpu())
@@ -171,7 +171,7 @@ defmodule Macaw.Data.TableIdentityTest do
   describe "resolution" do
     @tag verifies: "table-resolution-ids"
     test "the same rows of one source held at two resolutions share no chunk id" do
-      minutes = [nil, 10, 50, 65, 180]
+      minutes = [10, 50, 65, 180, nil]
       {:ok, fine} = readings(minutes, cpu(60))
       {:ok, coarse} = readings(minutes, cpu(300))
 

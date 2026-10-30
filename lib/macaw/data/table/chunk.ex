@@ -19,30 +19,76 @@ defmodule Macaw.Data.Table.Chunk do
   """
 
   alias Macaw.Data.Table.Column
+  alias Macaw.Data.Table.Delta
   alias Macaw.Data.Table.Digest
   alias Macaw.Layers.Document
 
   @enforce_keys [:size, :columns, :id, :digest, :derivation]
-  defstruct [:size, :columns, :id, :digest, :derivation]
+  defstruct [
+    :size,
+    :columns,
+    :id,
+    :digest,
+    :derivation,
+    :base_rows,
+    header: [],
+    delta: nil,
+    fetch: nil
+  ]
 
   @typedoc """
   A chunk: its row count, each column's storage by name, its logical id, and its content
   digest or its derivation digest.
   """
   @opaque t :: %__MODULE__{
-            size: non_neg_integer(),
-            columns: %{term() => Column.t()},
+            size: non_neg_integer() | nil,
+            columns: %{term() => Column.t()} | nil,
             id: term(),
-            digest: String.t() | nil,
-            derivation: String.t() | nil
+            digest: String.t() | nil | :pending,
+            derivation: String.t() | nil,
+            base_rows: non_neg_integer(),
+            header: [{term(), atom()}],
+            delta: Delta.t() | nil,
+            fetch: (-> %{term() => Column.t()}) | nil
           }
 
   @typedoc "A step output's columns: `{name, type, values}`, as `Macaw.Data.Table.new/2` takes."
   @type columns :: [{term(), atom(), [term()]}]
 
-  @doc "The number of rows the chunk holds."
-  @spec size(t()) :: non_neg_integer()
+  @doc """
+  The number of rows the chunk holds, as read through its delta (spec/01 §1.1.4); `nil`
+  while a cold chunk's predicate deletes are pending.
+  """
+  @spec size(t()) :: non_neg_integer() | nil
   def size(%__MODULE__{size: size}), do: size
+
+  @doc "The chunk's columns, `{name, type}` in order."
+  @spec header(t()) :: [{term(), atom()}]
+  def header(%__MODULE__{header: header}), do: header
+
+  @doc "Whether the chunk has a delta over its base (spec/01 §1.1.4)."
+  @spec delta?(t()) :: boolean()
+  def delta?(%__MODULE__{delta: delta}), do: delta != nil
+
+  @doc """
+  A cold chunk (spec/01 §1.1.4): its base held elsewhere, fetched by `fetch`, a function
+  answering the base's columns by name, as `Macaw.Data.Table.chunks/1`'s chunks hold them.
+  The chunk keeps its `header`, `id`, content `digest` and `size`; it is fetched only when
+  it is read.
+  """
+  @spec cold([{term(), atom()}], term(), String.t(), non_neg_integer(), (-> map())) :: t()
+  def cold(header, id, digest, size, fetch) when is_function(fetch, 0) do
+    %__MODULE__{
+      size: size,
+      columns: nil,
+      id: id,
+      digest: digest,
+      derivation: nil,
+      base_rows: size,
+      header: header,
+      fetch: fetch
+    }
+  end
 
   @doc "The names of the chunk's columns, in no order."
   @spec names(t()) :: [term()]
@@ -64,9 +110,11 @@ defmodule Macaw.Data.Table.Chunk do
 
   @doc """
   The chunk's version: its content digest, else its derivation digest (spec/01 §1.1.3).
-  A cache's key for the chunk's results is `{id(chunk), version(chunk), step key}`.
+  A cache's key for the chunk's results is `{id(chunk), version(chunk), step key}`. `nil`
+  while the digest is pending (spec/01 §1.1.4): it matches no key.
   """
-  @spec version(t()) :: String.t()
+  @spec version(t()) :: String.t() | nil
+  def version(%__MODULE__{digest: :pending}), do: nil
   def version(%__MODULE__{digest: nil, derivation: derivation}), do: derivation
   def version(%__MODULE__{digest: digest}), do: digest
 
@@ -119,9 +167,18 @@ defmodule Macaw.Data.Table.Chunk do
     case faults do
       [] ->
         derivation = Document.digest({Enum.map(inputs, &version/1), step_key})
+        header = for {name, type, _values} <- columns, do: {name, type}
 
         {:ok,
-         %__MODULE__{size: size, columns: packed, id: id, digest: nil, derivation: derivation}}
+         %__MODULE__{
+           size: size,
+           columns: packed,
+           id: id,
+           digest: nil,
+           derivation: derivation,
+           base_rows: size,
+           header: header
+         }}
 
       _ ->
         {:error, Enum.sort(faults)}
@@ -135,13 +192,133 @@ defmodule Macaw.Data.Table.Chunk do
   def build(header, columns, size, id \\ nil) do
     segments = for {name, _type} <- header, do: [fn -> {columns[name], size} end]
     digest = Digest.digest(header, size, segments)
-    %__MODULE__{size: size, columns: columns, id: id || digest, digest: digest, derivation: nil}
+
+    %__MODULE__{
+      size: size,
+      columns: columns,
+      id: id || digest,
+      digest: digest,
+      derivation: nil,
+      base_rows: size,
+      header: header
+    }
   end
+
+  # A chunk of `rows` (maps keyed by column name), packed under `header` and hashed:
+  # data entering, or an open chunk written again (spec/01 §1.1.4). `{:ok, chunk}` or the
+  # packing's faults.
+  @doc false
+  @spec of_rows([{term(), atom()}], [map()], term()) :: {:ok, t()} | {:error, list()}
+  def of_rows(header, rows, id) do
+    case pack(header, rows) do
+      {:ok, columns} -> {:ok, build(header, columns, length(rows), id)}
+      {:error, faults} -> {:error, faults}
+    end
+  end
+
+  defp pack(header, rows) do
+    Enum.reduce(header, {:ok, %{}}, fn {name, type}, acc ->
+      case {acc, Column.piece(type, Enum.map(rows, &Map.get(&1, name)), name, 0)} do
+        {{:ok, packed}, {:ok, col}} -> {:ok, Map.put(packed, name, col)}
+        {{:ok, _packed}, {:error, faults}} -> {:error, faults}
+        {{:error, faults}, {:error, more}} -> {:error, faults ++ more}
+        {{:error, faults}, {:ok, _col}} -> {:error, faults}
+      end
+    end)
+  end
+
+  # -- the delta (spec/01 §1.1.4) --------------------------------------------------------
+
+  @doc false
+  # The chunk as read, a row map each with where it is held: `{:base, i}` or `{:side, j}`.
+  # A cold chunk is fetched for it.
+  @spec read(t()) :: [{map(), {:base | :side, non_neg_integer()}}]
+  def read(%__MODULE__{} = chunk) do
+    base = base(chunk)
+    names = for {name, _type} <- chunk.header, do: name
+    n = chunk.base_rows
+
+    rows =
+      case names do
+        [] ->
+          List.duplicate(%{}, n)
+
+        _ ->
+          names
+          |> Enum.map(&Column.values(Map.fetch!(base, &1), n))
+          |> Enum.zip_with(&Map.new(Enum.zip(names, &1)))
+      end
+
+    Delta.read(chunk.delta, rows)
+  end
+
+  @doc false
+  # The chunk with `delta` over its base, its size and digest as read: computed now for a
+  # chunk in memory, pending for a cold one whose predicates need a read. `nil` for no
+  # delta writes the chunk as read into a base of its own.
+  @spec with_delta(t(), Delta.t()) :: t()
+  def with_delta(%__MODULE__{fetch: fetch} = chunk, delta) when fetch != nil do
+    size =
+      if delta.predicates == [],
+        do: chunk.base_rows - MapSet.size(delta.deleted) + length(delta.side),
+        else: nil
+
+    %{chunk | delta: delta, digest: :pending, size: size}
+  end
+
+  def with_delta(%__MODULE__{} = chunk, delta) do
+    state = %{chunk | delta: delta}
+    rows = Enum.map(read(state), &elem(&1, 0))
+    {:ok, read} = pack(chunk.header, rows)
+
+    digest =
+      Digest.digest(
+        chunk.header,
+        length(rows),
+        for({name, _} <- chunk.header, do: [fn -> {read[name], length(rows)} end])
+      )
+
+    %{state | size: length(rows), digest: digest}
+  end
+
+  @doc false
+  # The chunk in memory: a cold chunk's base fetched once, and its size and digest
+  # computed as read. A chunk in memory as it is.
+  @spec warm(t()) :: t()
+  def warm(%__MODULE__{fetch: nil} = chunk), do: chunk
+
+  def warm(%__MODULE__{fetch: fetch, delta: delta} = chunk) do
+    loaded = %{chunk | columns: fetch.(), fetch: nil}
+    if delta == nil, do: loaded, else: with_delta(%{loaded | delta: nil}, delta)
+  end
+
+  @doc false
+  # The chunk as read written into a new base with no delta: its id, its content digest
+  # and so its version kept, since the contents are equal (spec/01 §1.1.4).
+  @spec compact(t()) :: t()
+  def compact(%__MODULE__{delta: nil} = chunk), do: chunk
+  def compact(%__MODULE__{fetch: fetch} = chunk) when fetch != nil, do: chunk
+
+  def compact(%__MODULE__{} = chunk) do
+    rows = Enum.map(read(chunk), &elem(&1, 0))
+    {:ok, columns} = pack(chunk.header, rows)
+    %{chunk | columns: columns, delta: nil, size: length(rows), base_rows: length(rows)}
+  end
+
+  @doc false
+  # Whether the delta has reached a quarter of the base's rows: time to compact.
+  @spec due?(t()) :: boolean()
+  def due?(%__MODULE__{delta: nil}), do: false
+  def due?(%__MODULE__{fetch: fetch}) when fetch != nil, do: false
+  def due?(%__MODULE__{delta: delta} = chunk), do: 4 * Delta.size(delta) >= chunk.base_rows
+
+  defp base(%__MODULE__{fetch: nil, columns: columns}), do: columns
+  defp base(%__MODULE__{fetch: fetch}), do: fetch.()
 
   # The values of column `name` in the run of `count` rows from `first`.
   @doc false
   @spec values(t(), term(), non_neg_integer(), non_neg_integer()) :: [term()]
-  def values(%__MODULE__{size: size, columns: columns}, name, 0, size),
+  def values(%__MODULE__{size: size, columns: columns, delta: nil, fetch: nil}, name, 0, size),
     do: Column.values(Map.fetch!(columns, name), size)
 
   def values(%__MODULE__{} = chunk, name, first, count),
@@ -150,9 +327,16 @@ defmodule Macaw.Data.Table.Chunk do
   # The storage of column `name` sliced to the run of `count` rows from `first`.
   @doc false
   @spec storage(t(), term(), non_neg_integer(), non_neg_integer()) :: Column.t()
-  def storage(%__MODULE__{size: size, columns: columns}, name, 0, size),
+  def storage(%__MODULE__{size: size, columns: columns, delta: nil, fetch: nil}, name, 0, size),
     do: Map.fetch!(columns, name)
 
-  def storage(%__MODULE__{columns: columns}, name, first, count),
+  def storage(%__MODULE__{columns: columns, delta: nil, fetch: nil}, name, first, count),
     do: columns |> Map.fetch!(name) |> Column.slice(first, count)
+
+  # Through the delta, or fetched: the chunk as read, packed.
+  def storage(%__MODULE__{} = chunk, name, first, count) do
+    rows = Enum.map(read(chunk), &elem(&1, 0))
+    {:ok, read} = pack(chunk.header, rows)
+    read |> Map.fetch!(name) |> Column.slice(first, count)
+  end
 end

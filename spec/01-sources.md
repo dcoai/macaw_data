@@ -196,7 +196,7 @@ digest/1 is the SHA-256 of the canonical form, the same for every form of the sa
 
 - **A table built from rows** (`new/1`, `from/2`) is not a source's. It has no change stream for a stable id to follow, so a chunk's logical id is its content digest, and the caller names nothing.
 - **A source's table** is built by `new/2` with `origin: %{source, resolution, window, span, offset}`: the source's name, the resolution its relation is held at (`served.resolution`, §4.3), its window field (or `nil`), its chunk span (`Source.Description.chunk_span/2`, or `nil`), and where the rows given start among the source's rows (0 by default). A chunk's logical id is `{source, resolution, slot}`, and every row of a chunk lies in its slot:
-  - **in event time,** when the origin has a window field and a span. The slot is the start of the span the rows lie in. Spans are laid from a fixed origin: the Unix epoch for a time (a `DateTime`'s UTC instant, a `NaiveDateTime`'s wall clock, a `Date` at midnight), 0 for a number. So a chunk is a window. Rows with no window value are the slot `nil`, before every other. The rows given are in the window field's order, `nil` first; others are `{[:origin, :window], {:unsorted, i}}`, at the first row out of order.
+  - **in event time,** when the origin has a window field and a span. The slot is the start of the span the rows lie in. Spans are laid from a fixed origin: the Unix epoch for a time (a `DateTime`'s UTC instant, a `NaiveDateTime`'s wall clock, a `Date` at midnight), 0 for a number. So a chunk is a window. Rows with no window value are the slot `nil`, after every other, as a push holds them (§4). The rows given are in the window field's order, `nil` last; others are `{[:origin, :window], {:unsorted, i}}`, at the first row out of order.
   - **by row count** otherwise. The slot is the position among the source's rows where the chunk's run of `chunk_rows/0` rows starts, a multiple of it. It is fixed when the chunk is built, so trimming the oldest rows never moves a later chunk's slot.
   - **Resolution is in the id.** A relation at one resolution is another relation than the same source's at another (§4.3), so their chunks never share an id, a delta or a cache entry.
   - **`append/2` keeps the alignment.** The rows that fall in the last chunk's slot are written into it, a chunk of the same id with new contents and a new digest; later rows start new chunks. Appended rows lie at or after the last row's window value, else `{:error, {:unsorted, i}}`: a late row is a change, `Table.apply/2`'s (§2.6). A table of another origin is `{:error, {:origin, expected, given}}`.
@@ -223,6 +223,48 @@ chunk_span/2 is the declared chunk_span, else chunk_rows times the resolution, a
 
 ```test:table-derivation
 a per-row step's output chunk has the id {input id, step key}, and a global step's the digest of its key over its inputs' ids and versions; a derivation digest is the same across runs, and changes with an input's version or the key; a chain of steps hashes no output's contents, and compact/1 gives a step's output a content digest
+```
+
+#### 1.1.4 Settled chunks, open chunks and the delta {#sources-table-delta}
+
+**A source's changes reach its table through `Table.apply/2`** (macaw_data#9 §3), the one seam between the changelog (§4) and the storage (§2.6). It is the continuous-aggregate model: what is settled is read through cached results, what is open is worked live, and `complete_until` (§4.4) is the line between them.
+
+- **Settled and open.** A chunk is **settled** when its span lies wholly before the source's `complete_until`: its slot's end is at or before it. One at or after it is **open**, its results provisional. Settled means settled, not final: a change is still accepted. A chunk of rows with no window value, and every chunk of a table aligned by row count, is open: only a window is ever settled.
+- **`Table.apply(table, change)`** applies one increment's changes, already judged for lateness, overlaps and conflicts (§4.2, §4.4), and answers `{table, faults, unheld}`. `change` is `%{insert, retract, replace, schema, settled, thinned}`: the rows inserted, the rows retracted, the range replacements (§4.2's `%{from, to, identities, rows}`), the source's schema (its identity and window field), the `complete_until` in force, and whether the holding is thinned. In §4.2's order:
+  1. **Row retractions** are matched as §4.2 matches them, in the chunk of the slot the row's window value lies in, so a retraction reads one chunk. A retraction that is not held, held only at another window value, or that can't tell rows apart is §4.2's fault in `faults`, or counted in `unheld` against a thinned holding.
+  2. **Range retractions:** everything held in each replaced range, limited to its identities.
+  3. **Insertions:** each row goes to the chunk of its slot, kept in the window field's order. Rows of a slot that has no chunk start one, placed among the chunks in slot order.
+- **Where each change lands:**
+  - **in an open chunk,** directly: the chunk is written again with its new contents, the same id and a new digest;
+  - **in a settled chunk, in its delta,** the chunk's base untouched: a retracted row in its **deleted set**, a range in its **predicate deletes** (the range intersected with the identities named, as Iceberg's equality deletes are), an inserted row in its **side chunk**. A predicate delete reads nothing, so it needs no fetch of a cold chunk;
+  - **a chunk wholly inside an unrestricted replacement** (every identity, its whole span) is replaced outright: its slot holds exactly the replacement's rows, a new chunk with no delta;
+  - **in a table with no window field, or aligned by row count,** directly: a retraction or replacement writes the chunks it changes again, and insertions are appended to the last chunk, filling its slot before starting new ones. With a window field the rows stay in its order: a row before the last row held is placed in the first chunk whose last row comes after it, which is written again.
+- **Read through the delta.** A settled chunk reads as its base without its deleted rows and the rows its predicates match, merged with its side chunk in the window field's order, base rows first among equal values and rows with no window value last. So the window field stays sorted and a binary search over it stays valid. A chunk's size and content digest are of the chunk as read, computed when its delta changes: a chunk's state is its base and its delta, both immutable, so a reader holding a table is never affected by a later change or compaction.
+- **Cold chunks.** A chunk's base may be held elsewhere (`Table.Chunk.cold/5`: its header, id, digest and size, and a function that fetches its base); the tier that holds chunks is its own proposal. A change that needs no read leaves a cold chunk unfetched: a predicate delete, or an insertion. Such a chunk's digest is then **pending** (`Chunk.digest/1` is `:pending`), and so is its size under a predicate delete. A pending digest is no chunk's version (`Chunk.version/1` is `nil`), so it never matches a cache key. `Table.warm/1` fetches each pending chunk once and computes its size and digest; every read of a table holding one warms it first.
+- **Lazy compaction.** When a settled chunk's delta (its deleted rows, predicates and side rows) reaches a quarter of its base's rows, `Table.apply/2` rewrites the chunk as read into a new base with no delta. The ratio is fixed, not a setting. Compaction changes only the layout: the contents are equal, so it keeps the chunk's id, its content digest and every result cached under them, and it emits nothing.
+
+```test:table-settled
+a chunk whose span ends at or before complete_until is settled and one at or after it open; with no complete_until, a chunk of rows with no window value and a table aligned by row count, every chunk is open
+```
+
+```test:table-apply
+apply/2 writes an open chunk's new contents and a settled chunk's delta, leaving its base; an insertion into a slot with no chunk starts one in slot order; a chunk wholly inside an unrestricted replacement is replaced outright; a table with no window field takes changes directly and appends insertions to its last chunk; retraction faults and unheld counts are §4.2's
+```
+
+```test:table-delta
+for generated tables and changes to settled chunks, over about 40 seeds, reads through the delta equal the relation built directly from the rows, before and after compaction; the window field stays sorted; compaction keeps each chunk's id, digest and version
+```
+
+```test:table-predicate
+a replacement over a settled chunk is a predicate delete that reads as its row form, and needs no fetch of a cold chunk
+```
+
+```test:table-cold
+a cold chunk under a predicate delete has a pending digest and size and no version, so it matches no cache key; warm/1 fetches it once and computes its digest, the one the same contents built warm have
+```
+
+```test:table-compaction
+compaction happens when a delta reaches a quarter of its base, keeps the id, the digest and the version, and leaves the contents equal; applying a change sends no message
 ```
 
 ### 1.2 The schema {#sources-schema}
@@ -620,13 +662,15 @@ the held relation is the integral of the changelog: for a generated changelog of
 
 ### 2.6 Where the relation is held {#sources-model-storage}
 
-<!-- surfex: deferred dco-tek/macaw/macaw_data#19: the chunked table, its deltas and Table.apply/2 are macaw_data#9's storage -->
-
-**`Push.held/1` is a chunked `Macaw.Data.Table`** (macaw_data#9), and an increment is applied to it by `Table.apply/2`, the one seam between this contract and the table's storage.
+**`Push.held/1` holds a chunked `Macaw.Data.Table`** (macaw_data#9, §1.1.1–§1.1.4), and an increment is applied to it by `Table.apply/2`, the one seam between this contract and the table's storage. `held/1` is a `Macaw.Data.Delivery`, so what was served (the window, the resolution, `complete_until`, `capped`) stays beside the rows. Its rows are the table, with the source's origin: the subscription's name as the source, the resolution held (§4.3), the schema's window field, and the span (`Push.new/3`'s `chunk_span:`, the description's, else derived from the resolution, `Description.chunk_span/2`). Its columns are the schema's fields, by their names and types. The rows are packed as `Delivery.table/2` packs them, so a category's atom reads back as its string and a time column's values as `DateTime`s; rows that don't pack are `{:table, faults}` in `errors`, and not applied.
 - **A change that reaches a settled range lands in that range's delta,** in this changelog's form: row retractions matched as §4.2 matches them, range replacements as predicate deletes (applied on read, so a cold chunk needs no fetch), and insertions. The delta is applied when the range is read, and a lazy compaction folds it in (Kudu's delta stores; Delta Lake's and Iceberg's deletion vectors).
 - **The change event is the push.** A derived source receives the increment when it arrives, the same increment that went into the delta, replacements included. No other trigger exists.
 - **Compaction changes only the layout.** The contents before and after it are equal (`Table.equal?/2`), so it emits nothing, and it moves no watermark: a change before `complete_until` doesn't move it.
-- Until the chunked table lands, `held/1` is a `Macaw.Data.Delivery` whose rows are the relation, in the window field's order (§4).
+- The rows are in the window field's order, rows with no window value last (§4).
+
+```test:push-held-table
+held/1's rows are a chunked table of the source's origin, its columns the schema's fields, built and changed through Table.apply/2: a settled range's changes land in its delta, and the held rows still equal the relation; rows that don't pack are recorded and not applied
+```
 
 ## 3. Deliveries {#sources-delivery}
 

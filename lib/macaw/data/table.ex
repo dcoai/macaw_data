@@ -52,8 +52,10 @@ defmodule Macaw.Data.Table do
 
   @compile {:no_warn_undefined, [Table, Nx]}
 
+  import Kernel, except: [apply: 2]
+
   @enforce_keys [:names, :types, :chunks, :size]
-  defstruct [:names, :types, :chunks, :size, origin: nil, at: 0]
+  defstruct [:names, :types, :chunks, :size, origin: nil, next: 0]
 
   @types [:number, :time, :category, :text, :color, :point, :term]
 
@@ -88,7 +90,7 @@ defmodule Macaw.Data.Table do
             chunks: [view()],
             size: non_neg_integer(),
             origin: origin() | nil,
-            at: non_neg_integer()
+            next: non_neg_integer()
           }
 
   @typedoc """
@@ -250,7 +252,7 @@ defmodule Macaw.Data.Table do
       chunks: chunks,
       size: size,
       origin: origin,
-      at: if(origin, do: offset, else: 0)
+      next: if(origin, do: offset + size, else: 0)
     }
   end
 
@@ -321,6 +323,18 @@ defmodule Macaw.Data.Table do
 
   # A time at the edge: a `Date` at midnight UTC, a `NaiveDateTime` taken as UTC, an
   # ISO 8601 string parsed as one of those; anything else as it is, for `new/1` to refuse.
+  @doc false
+  # A value as the edge reads it into a column of `type` (spec/01 §2.6, as `from/2` and
+  # `Delivery.table/2` pack): a time column's ISO strings, dates and naive times as
+  # `DateTime`s, a category's atom as its string; any other as it is.
+  @spec at_edge(type() | nil, term()) :: term()
+  def at_edge(:time, value), do: to_datetime(value)
+
+  def at_edge(:category, v) when is_atom(v) and not is_boolean(v) and v != nil,
+    do: Atom.to_string(v)
+
+  def at_edge(_type, value), do: value
+
   defp to_datetime(%DateTime{} = t), do: t
   defp to_datetime(%NaiveDateTime{} = t), do: DateTime.from_naive!(t, "Etc/UTC")
   defp to_datetime(%Date{} = d), do: DateTime.new!(d, ~T[00:00:00], "Etc/UTC")
@@ -342,6 +356,7 @@ defmodule Macaw.Data.Table do
 
   @doc "The number of rows."
   @spec size(t()) :: non_neg_integer()
+  def size(%__MODULE__{size: nil} = table), do: table |> warm() |> size()
   def size(%__MODULE__{size: size}), do: size
 
   @doc "The column names, in order."
@@ -359,6 +374,8 @@ defmodule Macaw.Data.Table do
   string that spells it.
   """
   @spec column(t(), name()) :: [term()] | nil
+  def column(%__MODULE__{size: nil} = table, name), do: table |> warm() |> column(name)
+
   def column(%__MODULE__{types: types, chunks: chunks}, name) when is_map_key(types, name),
     do:
       Enum.flat_map(chunks, fn {chunk, first, count} ->
@@ -369,6 +386,8 @@ defmodule Macaw.Data.Table do
 
   @doc "The rows, one map per row keyed by every column name, `nil` where missing."
   @spec rows(source() | t()) :: [row()]
+  def rows(%__MODULE__{size: nil} = table), do: table |> warm() |> rows()
+
   def rows(%__MODULE__{names: names} = table) do
     case names do
       [] ->
@@ -409,6 +428,7 @@ defmodule Macaw.Data.Table do
 
   @doc "Row `i` (from 0) as a map, or `nil` past the end."
   @spec row(t(), non_neg_integer()) :: map() | nil
+  def row(%__MODULE__{size: nil} = table, i), do: table |> warm() |> row(i)
   def row(%__MODULE__{size: size}, i) when i >= size, do: nil
 
   def row(%__MODULE__{names: names} = table, i) when is_integer(i) and i >= 0,
@@ -419,11 +439,14 @@ defmodule Macaw.Data.Table do
   chunks the run spans, cut at both ends, and copies nothing (spec/01 §1.1.1).
   """
   @spec slice(t(), non_neg_integer(), non_neg_integer()) :: t()
+  def slice(%__MODULE__{size: nil} = table, start, count),
+    do: table |> warm() |> slice(start, count)
+
   def slice(%__MODULE__{size: size} = table, start, count)
       when is_integer(start) and start >= 0 and is_integer(count) and count >= 0 do
     first = min(start, size)
     n = min(count, size - first)
-    %__MODULE__{table | chunks: cut(table.chunks, first, n), size: n, at: table.at + first}
+    %__MODULE__{table | chunks: cut(table.chunks, first, n), size: n}
   end
 
   # The views of `take` rows after the first `skip`.
@@ -470,6 +493,8 @@ defmodule Macaw.Data.Table do
              | {:origin, term(), term()}
              | {:unsorted, non_neg_integer()}}
   def append(%__MODULE__{} = table, %__MODULE__{} = other) do
+    {table, other} = {ready(table), ready(other)}
+
     cond do
       header(table) != header(other) ->
         {:error, {:columns, header(table), header(other)}}
@@ -486,47 +511,21 @@ defmodule Macaw.Data.Table do
     end
   end
 
-  # `other`'s rows laid on the source's slots after the table's, the last chunk written
-  # again when they reach into its slot.
-  defp aligned(%__MODULE__{origin: origin} = table, other) do
-    with :ok <- in_order(table, other),
-         {:ok, built} <- rebuilt(table, rows_of(other), table.at + table.size) do
-      case {Enum.split(table.chunks, -1), built.chunks} do
-        {{kept, [{last, first, count}]}, [{next, 0, _} | rest]} ->
-          if Chunk.id(last) == Chunk.id(next) do
-            rows =
-              Enum.zip_with(
-                rows_of(slice_view(table, last, first, count)),
-                rows_of(slice(built, 0, Chunk.size(next))),
-                &(&1 ++ &2)
-              )
+  # `other`'s rows laid on the source's slots after the table's: inserted as an increment
+  # is, into the open chunk of each row's slot or a new one (spec/01 §1.1.4).
+  defp aligned(%__MODULE__{} = table, other) do
+    with :ok <- in_order(table, other) do
+      inserted = %{
+        insert: rows(other),
+        retract: [],
+        replace: [],
+        schema: nil,
+        settled: nil,
+        thinned: false
+      }
 
-            {:ok, merged} = rebuilt(table, rows, table.at + table.size - count)
-
-            {:ok,
-             %__MODULE__{
-               table
-               | chunks: kept ++ merged.chunks ++ rest,
-                 size: table.size + other.size
-             }}
-          else
-            {:ok,
-             %__MODULE__{
-               table
-               | chunks: table.chunks ++ built.chunks,
-                 size: table.size + other.size
-             }}
-          end
-
-        _empty ->
-          {:ok,
-           %__MODULE__{
-             table
-             | chunks: table.chunks ++ built.chunks,
-               size: table.size + other.size,
-               origin: origin
-           }}
-      end
+      {table, [], 0} = apply(table, inserted)
+      {:ok, table}
     end
   end
 
@@ -539,21 +538,90 @@ defmodule Macaw.Data.Table do
 
   defp in_order(_table, _other), do: :ok
 
-  # The table's columns' values, one list per column in order.
-  defp rows_of(%__MODULE__{} = table), do: Enum.map(table.names, &column(table, &1))
+  # -- changes (spec/01 §1.1.4) -------------------------------------------------------------
 
-  defp slice_view(%__MODULE__{} = table, chunk, first, count),
-    do: %__MODULE__{table | chunks: [{chunk, first, count}], size: count}
+  @doc """
+  One increment's changes applied to the table (spec/01 §1.1.4): `{table, faults,
+  unheld}`. `change` is `%{insert, retract, replace, schema, settled, thinned}`: the rows
+  inserted, the rows retracted and the range replacements (`%{from, to, identities,
+  rows}`) of one increment, already judged for lateness, overlaps and conflicts
+  (spec/01 §4.2, §4.4); the source's schema (its identity and window field); the
+  `complete_until` in force; and whether the holding is thinned.
 
-  # Columns of values laid on the table's origin from `offset` among the source's rows.
-  defp rebuilt(%__MODULE__{origin: origin} = table, values, offset) do
-    columns = Enum.zip_with(header(table), values, fn {name, type}, v -> {name, type, v} end)
+  Row retractions, then range retractions, then insertions, each where its slot is: an
+  open chunk is written again with its new contents, a settled chunk's change lands in its
+  delta. A retraction that is not held, held only at another window value, or that can't
+  tell rows apart is `{:retract, reason, row}` in `faults`, or counted in `unheld` against
+  a thinned holding. Rows to insert that don't pack under the table's columns are
+  `{:table, faults}`, and nothing is applied. A settled chunk whose delta reaches a
+  quarter of its base is compacted.
+  """
+  @spec apply(t(), map()) :: {t(), list(), non_neg_integer()}
+  def apply(%__MODULE__{} = table, change) when is_map(change) do
+    change =
+      Map.merge(
+        %{insert: [], retract: [], replace: [], schema: nil, settled: nil, thinned: false},
+        change
+      )
 
-    case new(columns, origin: Map.put(origin, :offset, offset)) do
-      {:ok, built} -> {:ok, built}
-      {:error, [{[:origin, :window], {:unsorted, i}}]} -> {:error, {:unsorted, i}}
+    chunks = whole(table)
+
+    {chunks, next, faults, unheld} =
+      Macaw.Data.Table.Apply.run(
+        %{header: header(table), origin: table.origin, chunks: chunks, next: table.next},
+        change
+      )
+
+    {with_chunks(table, chunks, next), faults, unheld}
+  end
+
+  # The table's chunks, each whole: a view that reads part of its chunk written as a chunk
+  # of its own, of the same id.
+  defp whole(%__MODULE__{chunks: views} = table) do
+    for {chunk, first, count} <- views do
+      if first == 0 and count in [nil, Chunk.size(chunk)] do
+        chunk
+      else
+        rows = rows(%__MODULE__{table | chunks: [{chunk, first, count}], size: count})
+        id = if table.origin, do: Chunk.id(chunk)
+        {:ok, chunk} = Chunk.of_rows(header(table), rows, id)
+        chunk
+      end
     end
   end
+
+  defp with_chunks(%__MODULE__{} = table, chunks, next) do
+    views = for chunk <- chunks, Chunk.size(chunk) != 0, do: {chunk, 0, Chunk.size(chunk)}
+    counts = Enum.map(views, &elem(&1, 2))
+    size = if nil in counts, do: nil, else: Enum.sum(counts)
+    %__MODULE__{table | chunks: views, size: size, next: next}
+  end
+
+  @doc """
+  Whether `chunk` of the table is settled under `complete_until` (spec/01 §1.1.4): its
+  span ends at or before it. Never for a chunk of rows with no window value, and never in
+  a table that is not a source's in event time.
+  """
+  @spec settled?(t(), Chunk.t(), term()) :: boolean()
+  def settled?(%__MODULE__{origin: origin}, chunk, complete_until) do
+    case {Origin.windowed?(origin), Chunk.id(chunk)} do
+      {true, {_source, _resolution, slot}} -> Origin.settled?(origin, slot, complete_until)
+      _other -> false
+    end
+  end
+
+  @doc """
+  The table with every cold chunk it holds fetched once (spec/01 §1.1.4): its base in
+  memory, and its size and content digest, pending under a predicate delete, computed as
+  read. Every read of a table whose size is pending warms it first.
+  """
+  @spec warm(t()) :: t()
+  def warm(%__MODULE__{} = table),
+    do: with_chunks(table, Enum.map(whole(table), &Chunk.warm/1), table.next)
+
+  # A table whose size is pending, warmed; any other as it is.
+  defp ready(%__MODULE__{size: nil} = table), do: warm(table)
+  defp ready(table), do: table
 
   @doc """
   The table without its oldest `n` rows: every chunk wholly before the cut dropped, the
@@ -572,11 +640,19 @@ defmodule Macaw.Data.Table do
   already canonical is returned as it is.
   """
   @spec compact(t()) :: t()
+  def compact(%__MODULE__{size: nil} = table), do: table |> warm() |> compact()
+
+  def compact(%__MODULE__{origin: origin} = table) when origin != nil do
+    if canonical?(table.chunks, origin),
+      do: table,
+      else: with_chunks(table, Enum.map(whole(table), &Chunk.compact/1), table.next)
+  end
+
   def compact(%__MODULE__{origin: origin} = table) do
     if canonical?(table.chunks, origin) do
       table
     else
-      opts = if origin, do: [origin: Map.put(origin, :offset, table.at)], else: []
+      opts = []
 
       {:ok, compacted} =
         new(for({name, type} <- header(table), do: {name, type, column(table, name)}), opts)
@@ -592,7 +668,8 @@ defmodule Macaw.Data.Table do
   defp canonical?(views, _origin),
     do:
       Enum.all?(views, fn {chunk, first, n} ->
-        first == 0 and n == Chunk.size(chunk) and Chunk.digest(chunk) != nil
+        first == 0 and n == Chunk.size(chunk) and not Chunk.delta?(chunk) and
+          is_binary(Chunk.digest(chunk))
       end)
 
   defp canonical?([]), do: true
@@ -603,7 +680,10 @@ defmodule Macaw.Data.Table do
 
   defp canonical?(_views), do: false
 
-  defp named?(chunk), do: Chunk.digest(chunk) != nil and Chunk.id(chunk) == Chunk.digest(chunk)
+  defp named?(chunk),
+    do:
+      not Chunk.delta?(chunk) and is_binary(Chunk.digest(chunk)) and
+        Chunk.id(chunk) == Chunk.digest(chunk)
 
   # -- identity ---------------------------------------------------------------------------
 
@@ -615,6 +695,8 @@ defmodule Macaw.Data.Table do
   """
   @spec equal?(t(), t()) :: boolean()
   def equal?(%__MODULE__{} = a, %__MODULE__{} = b) do
+    {a, b} = {ready(a), ready(b)}
+
     a.size == b.size and header(a) == header(b) and
       (a.chunks == b.chunks or Enum.all?(a.names, &(column(a, &1) === column(b, &1))))
   end
@@ -626,6 +708,8 @@ defmodule Macaw.Data.Table do
   order all keep it, and the origin is not part of it.
   """
   @spec digest(t()) :: String.t()
+  def digest(%__MODULE__{size: nil} = table), do: table |> warm() |> digest()
+
   def digest(%__MODULE__{chunks: chunks, size: size} = table) do
     columns =
       for name <- table.names do

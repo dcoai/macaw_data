@@ -418,6 +418,81 @@ defmodule Macaw.Data.PushChangelogTest do
     end
   end
 
+  @tag verifies: "model-integral"
+  property "the held relation is the integral through Table.apply/2, settled ranges' deltas and their compaction included" do
+    check all(
+            steps <-
+              list_of(
+                tuple(
+                  {member_of([:insert, :retract, :move, :replace, :mixed]),
+                   list_of(integer(0..1000), length: 6)}
+                ),
+                min_length: 1,
+                max_length: 20
+              ),
+            drains <- list_of(boolean(), length: 40),
+            max_runs: 40
+          ) do
+      {changes, models} = changelog(steps)
+      ref = make_ref()
+      # Spans of 5 over t in 0..25, settled as the changelog goes: most changes reach a
+      # settled chunk's delta, and enough of them compact it.
+      push = Push.new(:taps, ref, cache: Cache.new([{:taps, @tapped}]), chunk_span: 5)
+
+      {push, _drains} =
+        Enum.reduce(changes, {push, drains}, fn %{seq: seq, delivery: d},
+                                                {push, [drain? | drains]} ->
+          d = %{d | served: %{d.served | complete_until: min(seq * 2, 25)}}
+          push = send_in(push, Push.increment_message(ref, seq, d))
+          {if(drain?, do: drain(push), else: push), drains ++ [drain?]}
+        end)
+
+      push = drain(push)
+      sorted = &Enum.sort_by(&1, fn r -> {r["id"], r["t"], r["v"]} end)
+      assert holding({push, []}) == sorted.(Enum.at(models, length(changes)))
+      assert push.errors == []
+
+      table = Push.held(push).rows
+      ts = Table.column(table, "t")
+      assert ts == Enum.sort_by(ts, &{&1 == nil, &1})
+    end
+  end
+
+  @tag verifies: "push-held-table"
+  test "held/1's rows are a chunked table of the source's origin, changed through Table.apply/2" do
+    {push, _} =
+      tapped()
+      |> then(fn {_push, served} ->
+        {Push.new(:taps, make_ref(), cache: Cache.new([{:taps, @tapped}]), chunk_span: 10),
+         served}
+      end)
+      |> start(Enum.map(0..9, &tap("a", &1, &1)) ++ [tap("b", 12, 0)], complete_until: 10)
+      |> change(1, retracted: [tap("a", 3, 3)], rows: [tap("b", 4, 1)])
+
+    held = Push.held(push)
+    assert %Table{} = table = held.rows
+
+    assert Table.origin(table) == %{source: :taps, resolution: nil, window: "t", span: 10}
+    assert Table.names(table) == ["id", "t", "v"]
+
+    [{settled, _, _}, {open, _, _}] = Table.chunks(table)
+    assert Table.Chunk.id(settled) == {:taps, nil, 0}
+    assert Table.Chunk.delta?(settled)
+    refute Table.Chunk.delta?(open)
+
+    assert holding({push, []}) ==
+             Enum.sort_by(
+               (Enum.map(0..9, &tap("a", &1, &1)) -- [tap("a", 3, 3)]) ++
+                 [tap("b", 4, 1), tap("b", 12, 0)],
+               &{&1["id"], &1["t"], &1["v"]}
+             )
+
+    # Rows that don't pack are recorded and not applied.
+    {push, _} = change({push, []}, 2, rows: [tap("a", 20, "not a number")])
+    assert [{:table, [{["v", 0], {:type, :number}}]}] = push.errors
+    assert Push.held(push).rows == table
+  end
+
   # A snapshot at another resolution: what a holder fetched at another window.
   defp junk(position),
     do:
