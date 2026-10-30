@@ -10,7 +10,7 @@ defmodule Macaw.Data.Operations.HotPathsTest do
 
   import Bitwise
 
-  alias Macaw.Data.{Exact, Operations, Table}
+  alias Macaw.Data.{Exact, Native, Operations, Table}
   alias Macaw.Data.Operations.Aggregates
   alias Macaw.Data.Operations.Transforms.{Aggregate, Filter}
   alias Macaw.Data.Test.Work
@@ -185,7 +185,9 @@ defmodule Macaw.Data.Operations.HotPathsTest do
       bound = Aggregate.group_bind(node, table)
 
       {reductions, {order, _groups, _rows}} =
-        Work.reductions(fn -> Aggregate.group_chunk(node, Aggregates.Sum, view, bound, "sum") end)
+        Work.reductions(fn ->
+          Native.elixir(fn -> Aggregate.group_chunk(node, Aggregates.Sum, view, bound, "sum") end)
+        end)
 
       assert order == [["b"], ["c"], ["d"], ["a"]]
       assert reductions <= 16 * n, "#{reductions} reductions for #{n} rows"

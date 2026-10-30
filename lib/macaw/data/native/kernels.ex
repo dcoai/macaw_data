@@ -18,6 +18,9 @@ case Toolchain.decide(
       @mode Application.compile_env(:macaw_data, :native, :optional)
       @toolchain Toolchain.detect()
 
+      # kernels.zig imports a file per kernel family; a change to any of them rebuilds.
+      for file <- Path.wildcard(Path.join(__DIR__, "*.zig")), do: @external_resource(file)
+
       # Each `_dirty` kernel is its namesake on a dirty CPU scheduler, for a call past what a
       # normal scheduler takes within 1 ms (`Macaw.Data.Native.scheduler/1`, spec/04 §1.7).
       use Zig,
@@ -31,7 +34,9 @@ case Toolchain.decide(
           m4_finish: [],
           m4_finish_dirty: [alias: :m4_finish, concurrency: :dirty_cpu],
           lttb_finish: [],
-          lttb_finish_dirty: [alias: :lttb_finish, concurrency: :dirty_cpu]
+          lttb_finish_dirty: [alias: :lttb_finish, concurrency: :dirty_cpu],
+          group_sum: [],
+          group_sum_dirty: [alias: :group_sum, concurrency: :dirty_cpu]
         ]
 
       @doc false
@@ -86,6 +91,14 @@ case Toolchain.decide(
 
       @doc false
       def lttb_finish_dirty(_pieces, _n), do: :erlang.nif_error(:not_built)
+
+      @doc false
+      def group_sum(_vf, _vd, _vv, _grouped, _cd, _cv, _ncodes, _first, _count, _limit),
+        do: :erlang.nif_error(:not_built)
+
+      @doc false
+      def group_sum_dirty(_vf, _vd, _vv, _grouped, _cd, _cv, _ncodes, _first, _count, _limit),
+        do: :erlang.nif_error(:not_built)
     end
 
   {:fail, message} ->

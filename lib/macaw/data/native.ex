@@ -21,9 +21,10 @@ defmodule Macaw.Data.Native do
   @key {__MODULE__, :loaded?}
   @elixir {__MODULE__, :elixir}
   # The interface version kernels.zig answers (`abi/0`), so a stale library is not used.
-  @abi 4
+  @abi 5
   @sync_rows 8_192
   @finish_buckets 2_048
+  @sync_entries 2_048
 
   @doc "Whether the native kernels are built and loaded: decided once, at the application's start."
   @spec loaded?() :: boolean()
@@ -83,6 +84,16 @@ defmodule Macaw.Data.Native do
   @spec finish_scheduler(non_neg_integer()) :: :normal | :dirty
   def finish_scheduler(buckets) when buckets <= @finish_buckets, do: :normal
   def finish_scheduler(_buckets), do: :dirty
+
+  @doc """
+  The most entries, groups and their float exponents' sums, an exact sum by group
+  (`group_sum`) answers on a normal scheduler, #{@sync_entries}: its scan is a few
+  nanoseconds a row, but each entry of its answer is a few terms at tens of nanoseconds
+  each, so a call answering more is handed, before any term is built, to a dirty CPU
+  scheduler, within the BEAM's 1 ms rule.
+  """
+  @spec sync_entries() :: pos_integer()
+  def sync_entries, do: @sync_entries
 
   @doc false
   # At the application's start: whether the kernels loaded, held in `:persistent_term`. A

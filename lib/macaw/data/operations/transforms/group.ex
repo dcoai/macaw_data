@@ -11,8 +11,13 @@ defmodule Macaw.Data.Operations.Transforms.Aggregate do
   """
   @behaviour Macaw.Data.Transform
 
-  alias Macaw.Data.{Operations, Table}
-  alias Macaw.Data.Operations.{Option, Step, Transforms}
+  alias Macaw.Data.{Native, Operations, Table}
+  alias Macaw.Data.Native.Kernels
+  alias Macaw.Data.Operations.{Aggregates, Option, Step, Transforms}
+  alias Macaw.Data.Table.Chunk
+
+  # The aggregates whose state the native exact sum by group builds.
+  @exact [Aggregates.Sum, Aggregates.Mean, Aggregates.Count]
 
   @impl true
   def name, do: "aggregate"
@@ -117,6 +122,16 @@ defmodule Macaw.Data.Operations.Transforms.Aggregate do
   # aggregate's streaming form over its readings, `nil`s dropped, and each one's first row
   # in the view and its count of rows, which an inverse update reads (spec/04 §1.5).
   def group_chunk(node, aggregate, view, bound, op) do
+    case group_native(aggregate, view, bound) do
+      :fallback -> group_chunk_elixir(node, aggregate, view, bound, op)
+      groups -> groups
+    end
+  end
+
+  @doc false
+  # One chunk's groups by the Elixir fold alone, whatever the kernels: the path a build
+  # without them runs, and the reference the native kernel is held equal to.
+  def group_chunk_elixir(node, aggregate, view, bound, op) do
     options = options(node, aggregate)
     readings = view_readings(view, bound.field, op)
     step = &aggregate.step(&1, &2, options)
@@ -205,6 +220,92 @@ defmodule Macaw.Data.Operations.Transforms.Aggregate do
       _other ->
         :values
     end
+  end
+
+  # -- the native exact sum by group (spec/04 §5.1) -----------------------------------------
+
+  # The groups by the native kernel, for an aggregate whose state is an exact sum or a
+  # count (sum, mean, count) of an int64 or float64 column, grouped by one dictionary
+  # column or not at all, where the kernels are loaded; else, or where the kernel hands
+  # the view back, `:fallback`. The kernel answers each group's code, first row, rows,
+  # readings and exact sum; the states and names are built here, a group at a time.
+  @doc false
+  def group_native(aggregate, {chunk, first, count}, %{field: {_field, name}, by: by})
+      when aggregate in @exact and name != nil and length(by) <= 1 do
+    with true <- Native.active?(),
+         {vf, vd, vv} <- value_buffers(Chunk.packed(chunk, name)),
+         {grouped, cd, cv, dictionary} <- code_buffers(chunk, by) do
+      ncodes = if grouped, do: div(byte_size(elem(dictionary, 0)), 4) - 1, else: 0
+
+      call = &Kernels.group_sum(vf, vd, vv, grouped, cd, cv, ncodes, first, count, &1)
+      dirty = &Kernels.group_sum_dirty(vf, vd, vv, grouped, cd, cv, ncodes, first, count, &1)
+
+      # Past `sync_rows/0` rows the call is dirty; past `sync_entries/0` entries the normal
+      # call answers `:dirty` before building any term, and is made dirty.
+      answer =
+        case Native.scheduler(count) do
+          :normal ->
+            case call.(Native.sync_entries()) do
+              :dirty -> dirty.(0)
+              answer -> answer
+            end
+
+          :dirty ->
+            dirty.(0)
+        end
+
+      native_groups(answer, aggregate, grouped, dictionary)
+    else
+      _ -> :fallback
+    end
+  end
+
+  def group_native(_aggregate, _view, _bound), do: :fallback
+
+  defp native_groups(:fallback, _aggregate, _grouped, _dictionary), do: :fallback
+
+  defp native_groups([], _aggregate, false, _dictionary), do: one_group({nil, 0, 0})
+
+  defp native_groups([{_code, first, rows, readings, ints, floats}], aggregate, false, _dict),
+    do: one_group({state(aggregate, ints, floats, readings), first, rows})
+
+  defp native_groups(list, aggregate, true, {offsets, data}) do
+    groups =
+      Map.new(list, fn {code, first, rows, readings, ints, floats} ->
+        {code, {state(aggregate, ints, floats, readings), first, rows}}
+      end)
+
+    named({Enum.map(list, &elem(&1, 0)), groups}, fn
+      nil -> [nil]
+      code -> [dictionary_string(offsets, data, code)]
+    end)
+  end
+
+  # The aggregate's state of a group's exact sum (`Macaw.Data.Exact`) and readings.
+  defp state(Aggregates.Sum, ints, floats, _readings), do: {ints, floats}
+  defp state(Aggregates.Mean, ints, floats, readings), do: {{ints, floats}, readings}
+  defp state(Aggregates.Count, _ints, _floats, readings), do: readings
+
+  defp value_buffers({:int64, data, validity}), do: {0, data, validity}
+  defp value_buffers({:float64, data, validity}), do: {1, data, validity}
+  defp value_buffers(_column), do: :elixir
+
+  # The `by` column's codes, their validity and its dictionary, unsliced; ungrouped, empty
+  # buffers the kernel doesn't read.
+  defp code_buffers(_chunk, []), do: {false, <<>>, <<>>, nil}
+
+  defp code_buffers(chunk, [name]) do
+    case Chunk.packed(chunk, name) do
+      {:dictionary, codes, validity, dictionary, nil} -> {true, codes, validity, dictionary}
+      _other -> :elixir
+    end
+  end
+
+  # The dictionary's string of `code`, as `Column.codes/2` reads it.
+  defp dictionary_string(offsets, data, code) do
+    skip = code * 4
+    <<_::binary-size(^skip), a::signed-little-32, b::signed-little-32, _::binary>> = offsets
+    binary_part(data, a, b - a)
   end
 
   @doc false

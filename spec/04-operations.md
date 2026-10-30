@@ -671,6 +671,24 @@ for generated floats, normal, subnormal and near the largest, and integers, sum'
 the streaming form of every statistic that has one equals its reduce over every fixture, however the readings are chunked
 ```
 
+### 5.1 The exact sum by group's native kernel {#operations-group-native}
+
+**A grouping's exact sum runs in a native kernel where the kernels are loaded** (§1.7, macaw_data#38). `aggregate` with `sum`, `mean` or `count`, and `sum`, hand a chunk's view to `group_sum` when `field` is one int64 or float64 column and `by` is one dictionary column (its codes and their validity, read in place) or absent. The kernel reads every row once and answers each group in order of first appearance: its code (or `nil`, a missing key), its first row and count of rows in the view, its count of readings (values present), and its exact sum, the state `Macaw.Data.Exact` builds:
+- **integers** summed as an integer, exactly (in 128 bits, past int64 as the bignum it is);
+- **floats** as their signed mantissas summed by biased exponent, a subnormal's exponent `0`, `-0.0` the mantissa `0` at exponent `0`; `nil` while no float was added.
+
+The step then builds each group's state (`sum`'s exact sum, `mean`'s with the count of readings, `count`'s count) and names it by its dictionary string, a group at a time, so the chunk's part equals the Elixir fold's term for term, and so does every merge and finish after it.
+- **It hands the view back** (`:fallback`) where the Elixir path would raise: a code past the dictionary, or a value that is not a finite float. Any other aggregate, field form (`macaw.integral`, the union, a pair) or `by` (several columns, a column not a dictionary, a dictionary with booleans) is the Elixir path's.
+- **Its cost:** the column is never decoded and the bitmaps are not expanded; a few nanoseconds a row (a run of one exponent adds to the sum it last found; another is found through a small hash table of the groups' exponents), then a few terms an entry of the answer, a group or one of its exponents' sums, at tens of nanoseconds each. A call over at most `Native.sync_rows/0` rows runs on a normal scheduler and answers there up to `Native.sync_entries/0` entries (2,048), within 1 ms; past that it answers `:dirty` before building a term, and the step makes the same call on a dirty CPU scheduler, as it does for a view past `sync_rows/0`.
+
+```test:operations-group-native-identical
+for generated int and float readings (subnormal, signed zeros, near the largest, past int64 summed) with nils, grouped by a dictionary column with missing keys, or not grouped, chunked several ways and viewed from an offset, the native groups equal the Elixir fold's term for term for sum, mean and count, the kernel answering every such view, and the steps' tables equal with and without the kernels; a code past the dictionary is handed back
+```
+
+```test:operations-group-native-bound
+a call over sync_rows/0 rows, 8,192, answering sync_entries/0 entries, 2,048 (256 groups of 7 exponents each), takes under 1 ms on a normal scheduler; one entry fewer allowed answers :dirty; every row its own group, and a view past sync_rows, run on a dirty scheduler with the Elixir path's groups
+```
+
 ## 6. In a stored function {#operations-sandbox}
 
 A derived source's stored function (02 §6) reaches the registered operations through **one module, `Macaw.Data.Ops`**, and through nothing else:
