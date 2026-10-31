@@ -232,6 +232,10 @@ defmodule Macaw.Data.Derived.EngineTest do
     test "a fault keeps the last good output and the pulse stops there" do
       a = "fn %{hosts: rows} -> [%{n: 10 / (Enum.count(rows) - 3)}] end"
       engine = chain(a) |> push(rows(2)) |> Engine.run(0)
+      # The first run answers. Asserted before any output is read, so a first run that faults
+      # names its kind and detail, not a nil output (macaw_data#57: under load a first compile
+      # was once judged `{:compile, {:hung, 50}}`, fixed by #67 and #69).
+      assert Engine.faults(engine) == %{}
       assert Delivery.rows(Engine.outputs(engine)[["a"]]) == [%{"n" => -10.0}]
       assert Delivery.rows(Engine.outputs(engine)[["d"]]) == [%{"n" => -9.0}]
 
