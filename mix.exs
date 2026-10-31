@@ -69,7 +69,7 @@ defmodule Macaw.Data.MixProject do
       # so dev and test, at the version zig_doc pins (`override`: ours stays dev/test only).
       {:ex_doc, "~> 0.34", only: [:dev, :test], runtime: false, override: true},
       # Spec, tests and code kept aligned (macaw_compose spec/00 §4.1); dev/test only.
-      {:surfex, "~> 0.10.0", only: [:dev, :test], runtime: false}
+      {:surfex, "~> 0.11.0", only: [:dev, :test], runtime: false}
     ]
   end
 end
