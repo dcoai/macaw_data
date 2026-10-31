@@ -568,8 +568,11 @@ defmodule Macaw.Data.DerivedTest do
       assert {:error, [{["elixir"], {:unknown_tag, "$evil"}}]} =
                Derived.from_map(Map.put(map, "elixir", %{"$evil" => "x"}))
 
-      assert {:error, [{[:per], {:enum, [:identity]}}]} =
+      # A `$atom` outside the form's atoms is named by its spelling (macaw_layers 0.3.1).
+      assert {:error, [{[:per], {:unknown_atom, "sideways"}} = fault]} =
                Derived.from_map(Map.put(map, "per", %{"$atom" => "sideways"}))
+
+      assert Derived.format_error(fault) =~ ~s(per: "sideways" is not an atom this reader knows)
 
       assert {:error, [{[:from, 0], {:unknown_tag, "$input"}}]} =
                Derived.from_map(Map.put(map, "from", [%{"$input" => ["hosts"]}]))
@@ -586,6 +589,46 @@ defmodule Macaw.Data.DerivedTest do
 
       assert {:error, [{[:from, 0], {:type, :input}}, {[:per], {:enum, [:identity]}}]} =
                Derived.from_map(old)
+    end
+
+    @tag verifies: "derived-forms-no-url"
+    test "a derived source holds no URL: a $url at a window's bound is refused at its path" do
+      {:ok, map} = Derived.to_map(hd(form_sources()))
+      [input] = map["from"]
+      %{"$input" => [name, _window]} = input
+
+      put_window = fn window -> %{map | "from" => [%{"$input" => [name, window]}]} end
+
+      # Every scheme is refused, https too: no host has a URL to allow in a derived source.
+      for {text, reason} <- [
+            {"https://example.com/x", :scheme},
+            {"javascript:alert(1)", :scheme},
+            {"data:image/png;base64,AAAA", :scheme}
+          ] do
+        url = %{"$url" => text}
+
+        assert {:error, [{[:from, 0, :window, :window, 0], {:url, ^reason}} = fault]} =
+                 Derived.from_map(put_window.(%{"window" => [url, nil]}))
+
+        assert {:error, [{[:from, 0, :window, :region, "pop", 1], {:url, ^reason}}]} =
+                 Derived.from_json(JSON.encode!(put_window.(%{"region" => %{"pop" => [0, url]}})))
+
+        words = Derived.format_error(fault)
+        assert words =~ "from.0.window.window.0: the URL's scheme is refused"
+        refute words =~ text
+      end
+
+      # A URL that is no URL is refused by the kernel's reader at the document's path, as it
+      # refuses any payload of a tag it reads, again never quoted.
+      assert {:error, [{[:from, 0, "$input", 1, :window, 0], {:url, :userinfo}} = fault]} =
+               Derived.from_map(
+                 put_window.(%{"window" => [%{"$url" => "https://u:secret@h/"}, nil]})
+               )
+
+      refute Derived.format_error(fault) =~ "secret"
+
+      # A source with no URL reads as it did.
+      assert {:ok, _} = Derived.from_map(map)
     end
 
     @tag verifies: "derived-forms-gates"

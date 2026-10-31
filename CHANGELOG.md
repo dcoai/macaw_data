@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Changes
+
+- **Breaking:** on macaw_layers `~> 0.4.0` (was `~> 0.3.0`) (#91, #92). An adopter on macaw_layers 0.3.x moves to 0.4.0 with it, following its upgrade notes: `Form.read/3` takes `urls:` and refuses every URL without it, and a theme refuses untrusted text. macaw_data builds no theme and its documents hold no URL, so neither touches what it reads (spec/00 §3).
+- **Breaking (faults):** a derived source document's `$atom` outside the form's atoms is `{:unknown_atom, spelling}` at its path, where it was `{:enum, [:identity]}` (macaw_layers 0.3.1, spec/02 §1.5). Match on `{:unknown_atom, _}` from `Derived.from_map/2` and `from_json/2`.
+- **Fixed:** a derived source holds no URL (spec/02 §1.5). macaw_layers 0.4.0 makes `$url` live in every tag table, and a derived source's reader composes the kernel's gates with `new/1` rather than `Form.read/3`, so a `{"$url": …}` at a window's bound read into a `%Macaw.Layers.Url{}` that `new/1` accepted, under no host's policy. The reader now holds the source it reads to the kernel's closed policy: a URL, whatever its scheme, is `{path, {:url, reason}}` at the source's path, and its words never quote it. A schema's reader reads no `$url`, so one is refused by type (spec/01 §1.11).
+- **Changed:** `Derived.format_error/1` words the kernel's own reasons (an unknown tag or atom, a limit, a newer version, a URL) in the kernel's words (`Macaw.Layers.Fault`), where it showed them with `inspect/1`.
+- A value entry's `{"$ramp": [name, t]}` reads for any name in a theme's grammar (macaw_layers 0.3.1's `Color.Form`), as `$color` does, so a schema's ramp color round-trips through JSON.
+
 ## v0.8.1 (2026-10-31)
 
 **An application without Zig starts with no error logged** (#76). Every app on macaw_data without Zigler, the default, logged an `[error]` crash report at each start, though nothing was wrong. Upgrading from 0.8.0 needs no change; from 0.7.0, follow 0.8.0's guide below.

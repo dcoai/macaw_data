@@ -18,7 +18,7 @@ defmodule Macaw.Data.Derived.Form do
   @behaviour Macaw.Layers.Version
 
   alias Macaw.Data.Schema
-  alias Macaw.Layers.{Fault, Version, Vocabulary}
+  alias Macaw.Layers.{Fault, Url, Version, Vocabulary}
   alias Macaw.Layers.Form, as: Adapter
 
   @keys ~w(id from schema elixir function per last window box region latest west south east north)a
@@ -57,6 +57,24 @@ defmodule Macaw.Data.Derived.Form do
       end
     end
   end
+
+  @no_url Url.Policy.new([])
+
+  @doc false
+  # A derived source holds no URL (spec/02 §1.5): no position of its value is one, so what
+  # is read is held, once `new/1` has judged it, to the kernel's closed policy, as
+  # `Macaw.Layers.Form.read/3` holds a value it has judged. A `$url` the kernel read, at a
+  # window's bound, is `{path, {:url, reason}}` at the source's own path, never quoting it.
+  def no_url(source) do
+    case Url.Policy.check(source, @no_url) do
+      [] -> {:ok, source}
+      faults -> {:error, Fault.sort(Enum.map(faults, &at_source/1))}
+    end
+  end
+
+  # The check walks an input `{name, window}` by position; the source names its window.
+  defp at_source({[:from, i, 1 | rest], reason}), do: {[:from, i, :window | rest], reason}
+  defp at_source(fault), do: fault
 
   # The output schema is read by its own adapter, its faults under `[:schema]`.
   defp schema(:absent), do: {:ok, :absent}

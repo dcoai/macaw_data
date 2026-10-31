@@ -473,7 +473,8 @@ the version is pinned for two schemas, is the kernel's digest of the schema's te
 - each word is read through its own closed vocabulary, every name, state and role is a string, and an entry's `color` is read inside out by the colors' own reader (`Macaw.Layers.Color.Form.decode_value/2`): **no atom is made from a document**;
 - a color the reader does not read, a bare string among them, stays as written, for `new/1` to refuse as `{:type, :color}`: JSON text is no more a color than any other string;
 - a key no description or entry has stays its string, and a word outside its vocabulary stays its string, for `new/1` to refuse by name;
-- anything but a list of `[string, map]` pairs is `{[], {:type, :schema}}`.
+- anything but a list of `[string, map]` pairs is `{[], {:type, :schema}}`;
+- **a schema holds no URL:** the reader reads no `$url` (no position of a schema is a URL), so one stays its object, refused by `new/1` by type at its position, and no `%Macaw.Layers.Url{}` comes out of a read. The kernel's URL policy ([macaw_layers 01 §8.3](https://github.com/dcoai/macaw_layers/blob/main/spec/01-kernel.md#kernel-url-policy)) has nothing here to judge.
 
 A schema read back from its JSON form has the same version and the same JSON form, a literal or a typed color in an entry included; one spelled with strings, as JSON spells it, reads back exactly.
 
@@ -482,7 +483,7 @@ to_map/1 is the sorted pairs with every name, state, role and word by its spelli
 ```
 
 ```test:schema-json-read
-from_json/2 reads words through their vocabularies, names and states as strings and an entry's color by the colors' reader, makes no atom, refuses a color as text, refuses an unknown word or key by new/1, refuses a non-schema and malformed JSON, and applies the byte and depth limits
+from_json/2 reads words through their vocabularies, names and states as strings and an entry's color by the colors' reader, makes no atom, refuses a color as text, refuses an unknown word or key by new/1, refuses a $url by type, refuses a non-schema and malformed JSON, and applies the byte and depth limits
 ```
 
 ```test:schema-json-round-trip

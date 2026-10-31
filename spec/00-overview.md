@@ -25,6 +25,8 @@ It requires one library at runtime, **`macaw_layers`**, the document kernel: a s
 - **`table` and `nx`:** a host that has either gets its `Table.Reader` sources or tensors read into a table ([01 §1.1](01-sources.md#sources-table)), and **a host with neither compiles it without a warning** (CI compiles it so, #7).
 - **`zigler`, a build tool only:** with it and the Zig it targets, the native kernels are built; without it, every step runs its Elixir path ([04 §1.7](04-operations.md#operations-native)).
 
+**Of the kernel's untrusted strings** ([macaw_layers 01 §8](https://github.com/dcoai/macaw_layers/blob/main/spec/01-kernel.md#kernel-untrusted)), macaw_data's documents hold none that needs a host's say. **They hold no URL:** a derived source's reader holds what it reads to the kernel's closed policy ([02 §1.5](02-derived.md#derived-forms)), and a schema's reader reads no `$url` ([01 §1.11](01-sources.md#sources-schema-json)), so no read takes a `urls:` policy. **It builds no theme and writes no CSS:** a data color is a color term judged by the kernel's `Color` ([01 §1.7](01-sources.md#sources-schema-colors)), so the untrusted-text checks are its adopters', where they write a schema's labels and colors into a page.
+
 **No version is written here.** The requirements are `mix.exs`'s, and only there, so this section cannot fall behind them (#34).
 
 ## 4. Order of work {#data-order}

@@ -128,7 +128,7 @@ each row gains every per-identity output's fields but its identity as "id.field"
 
 ### 1.5 The map and JSON forms {#derived-forms}
 
-The value (§1.1) is the one true form: it is what `new/1` judges and what is built, stored and compared. Its map and JSON forms are **representations, made by an adapter at the edge** (dco-tek/macaw/macaw#188): `macaw_layers`' JSON adapter, `Macaw.Layers.Form` ([macaw_layers 01 §5](https://github.com/dcoai/macaw_layers/blob/main/spec/01-kernel.md#kernel-gates), [§6](https://github.com/dcoai/macaw_layers/blob/main/spec/01-kernel.md#kernel-forms)), with the derived source as a document type of it. The tags are the kernel's (`$atom`, `$time`, `$version`) and the source's own, in one tag table (`Macaw.Layers.Tags`); there is no other tag scheme.
+The value (§1.1) is the one true form: it is what `new/1` judges and what is built, stored and compared. Its map and JSON forms are **representations, made by an adapter at the edge** (dco-tek/macaw/macaw#188): `macaw_layers`' JSON adapter, `Macaw.Layers.Form` ([macaw_layers 01 §5](https://github.com/dcoai/macaw_layers/blob/main/spec/01-kernel.md#kernel-gates), [§6](https://github.com/dcoai/macaw_layers/blob/main/spec/01-kernel.md#kernel-forms)), with the derived source as a document type of it. The tags are the kernel's (`$atom`, `$time`, `$url`, `$version`) and the source's own, in one tag table (`Macaw.Layers.Tags`); there is no other tag scheme.
 
 `Macaw.Data.Derived.to_map/1` writes the source's **map form**, JSON-ready: `{:ok, map}`, or every value without a form at its path, such as a window's time that is not in `Etc/UTC` (`{:type, :term}`). The kernel writes every term it knows (a name its string, a map's atom key its spelling, `:identity` the `$atom` `{"$atom": "identity"}`, a time `{"$time": "ISO 8601"}`), and the source writes its tuples under its own tags, each part in its own form:
 
@@ -144,7 +144,9 @@ The value (§1.1) is the one true form: it is what `new/1` judges and what is bu
 
 A region is a **name map**: its keys are field names, never the form's keys, written as the names they are and escaped when they start with `$` (`Macaw.Layers.Tags.escape/1`). `to_json/1` is the map form encoded, stamped `"$version"` with the form's version, 1.
 
-**Reading** is the adapter's, and judging is `new/1`'s. `from_map(map, opts)` and `from_json(json, opts)` take a map form or a JSON document through the gates (`Macaw.Layers.Form.gates/3`: a JSON document's bytes, then its nesting and counts within `Macaw.Layers.Limits`, `limits:` tightening them; the version, a newer stamp refused by name; the migration), read the value from the map form by the tag table and the form's keys (an unknown tag is `{:unknown_tag, tag}` at its path, a key the form does not have stays its string, which `new/1` refuses as `:unknown_key`, a `$atom` other than `identity` is `{:enum, [:identity]}`), read the schema by `Macaw.Data.Schema.from_map/1`, its faults at `[:schema | path]`, and then judge the value by `new/1`. Reading makes no atom: every atom it gives is one of the form's closed tables (`Macaw.Layers.Vocabulary`).
+**Reading** is the adapter's, and judging is `new/1`'s. `from_map(map, opts)` and `from_json(json, opts)` take a map form or a JSON document through the gates (`Macaw.Layers.Form.gates/3`: a JSON document's bytes, then its nesting and counts within `Macaw.Layers.Limits`, `limits:` tightening them; the version, a newer stamp refused by name; the migration), read the value from the map form by the tag table and the form's keys (an unknown tag is `{:unknown_tag, tag}` at its path, a key the form does not have stays its string, which `new/1` refuses as `:unknown_key`, a `$atom` other than `identity` is `{:unknown_atom, spelling}`, naming the spelling), read the schema by `Macaw.Data.Schema.from_map/1`, its faults at `[:schema | path]`, and then judge the value by `new/1`. Reading makes no atom: every atom it gives is one of the form's closed tables (`Macaw.Layers.Vocabulary`).
+
+**A derived source holds no URL.** No position of its value is a URL, so no host has one to allow, and its reads take no `urls:` policy. The kernel's tag table makes `$url` live in every document ([macaw_layers 01 §8.2](https://github.com/dcoai/macaw_layers/blob/main/spec/01-kernel.md#kernel-url)), and the one place a read value can hold any term is a window's bound (a `window` or `region` range end). So once `new/1` has judged the value, the reader holds it to the kernel's closed policy, `Macaw.Layers.Url.Policy.new([])`, as `Macaw.Layers.Form.read/3` holds a value it has judged ([macaw_layers 01 §8.3](https://github.com/dcoai/macaw_layers/blob/main/spec/01-kernel.md#kernel-url-policy)). A URL, whatever its scheme, `https` included, is `{path, {:url, reason}}` at the source's own path (`[:from, i, :window, :window, 0]`). One the kernel's reader refuses as no URL (`:userinfo`, `:relative`, `:malformed`, …) is refused there, at the document's path. `format_error/1` words both, and every other kernel reason, in the kernel's words (`Macaw.Layers.Fault`), **never quoting the URL**. A document with no URL reads as it did.
 
 `from_map(to_map(derived)) == {:ok, derived}`, and likewise through JSON, for every valid source with a form. A document that holds derived sources (a `macaw_compose` page) writes each in this form.
 
@@ -152,6 +154,10 @@ A region is a **name map**: its keys are field names, never the form's keys, wri
 
 ```test:derived-forms-inverse
 from_map(to_map) and from_json(to_json) give back an equal source, its schema the same version, for every input form, window form and per form, an elixir and a function source, times and a region among them; the tags are the kernel's and the source's own
+```
+
+```test:derived-forms-no-url
+a $url at a window's bound or a region's range end is refused as {:url, reason} at the source's path, under every scheme, https included, through the map and the JSON form; one that is no URL is refused by the kernel's reader; no fault's words quote the URL; a source with no URL reads as before
 ```
 
 ```test:derived-forms-gates

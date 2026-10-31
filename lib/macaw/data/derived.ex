@@ -850,7 +850,9 @@ defmodule Macaw.Data.Derived do
   The derived source a map form holds: through `macaw_layers`' gates
   (`Macaw.Layers.Form.gates/3`: the depth and item limits, the version), read by its tag
   table and keys, making no atom, its schema by `Macaw.Data.Schema.from_map/1`, then
-  judged by `new/1`. `limits:` tightens the limits.
+  judged by `new/1`. `limits:` tightens the limits. A derived source holds no URL: one the
+  document holds (a `$url` at a window's bound) is `{path, {:url, reason}}`, under the
+  kernel's closed policy (`Macaw.Layers.Url.Policy.new([])`).
   """
   @spec from_map(map(), keyword()) :: {:ok, t()} | {:error, [error(), ...]}
   def from_map(map, opts \\ []) when is_map(map), do: read(map, opts)
@@ -863,7 +865,9 @@ defmodule Macaw.Data.Derived do
   def from_json(json, opts \\ []) when is_binary(json), do: read(json, opts)
 
   defp read(input, opts) do
-    with {:ok, value} <- Form.read(input, opts), do: new(value)
+    with {:ok, value} <- Form.read(input, opts),
+         {:ok, source} <- new(value),
+         do: Form.no_url(source)
   end
 
   # -- words -------------------------------------------------------------------------------
@@ -912,7 +916,15 @@ defmodule Macaw.Data.Derived do
   defp words({:per, {:identity_type, field, input, output}}),
     do: "#{inspect(field)} is #{inspect(output)} here and #{inspect(input)} in its input"
 
-  defp words(reason), do: inspect(reason)
+  defp words(reason), do: kernel_words(reason)
+
+  # The kernel's own reasons, read by its adapter (an unknown tag or atom, a limit, a newer
+  # version, a URL refused), in the kernel's words (`Macaw.Layers.Fault`), which never quote
+  # a URL; a reason it does not know either is shown with `inspect/1`.
+  defp kernel_words(reason) do
+    ": " <> words = Macaw.Layers.Fault.format({[], reason}, root: "")
+    words
+  end
 
   defp type_words(:name), do: "a name: a non-empty string or an atom"
   defp type_words(:inputs), do: "a non-empty list of {name, window}"

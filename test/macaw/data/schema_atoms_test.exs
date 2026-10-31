@@ -31,12 +31,13 @@ defmodule Macaw.Data.SchemaAtomsTest do
       ]
       |> Enum.join(",")
 
-    # The first two are colors and read; the rest are no color, refused as one.
+    # The first three are colors and read, a ramp by any name in a theme's grammar
+    # (macaw_layers 0.3.1); the rest are no color, refused as one.
     assert {:error, faults} =
              Schema.from_json(~s([["s",{"type":"category","values":[#{entries}]}]]))
 
     assert Enum.map(faults, &elem(&1, 0)) ==
-             for(i <- 2..4, do: ["s", :values, i, :color])
+             for(i <- 3..4, do: ["s", :values, i, :color])
 
     assert made(names) == []
   end

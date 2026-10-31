@@ -1177,6 +1177,22 @@ defmodule Macaw.Data.SchemaTest do
     end
 
     @tag verifies: "schema-json-read"
+    test "a schema holds no URL: its reader never reads $url, so one is refused by type" do
+      url = ~s({"$url":"https://example.com/x"})
+
+      json =
+        ~s([["c",{"type":"category","values":[{"value":#{url}}]}],) <>
+          ~s(["n",{"type":"number","unit":#{url},"label":#{url}}]])
+
+      assert {:error, faults} = Schema.from_json(json)
+
+      assert Enum.map(faults, &elem(&1, 0)) ==
+               [["c", :values, 0, :value], ["n", :label], ["n", :unit]]
+
+      refute inspect(faults) =~ "Macaw.Layers.Url"
+    end
+
+    @tag verifies: "schema-json-read"
     test "from_json/2 reads words through their vocabularies, names and states as strings, and refuses by new/1" do
       json =
         ~s([["v",{"type":"number","quantity":"duration","polarity":"lower_is_better","metric_kind":"gauge"}],["s",{"type":"category","order":["ok"],"status":[["ok","good"]]}]])
