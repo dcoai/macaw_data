@@ -31,7 +31,7 @@ Macaw's data layer (spec/00 §4): the interaction event, the data model, the sou
 Depends on `macaw_layers` (the document kernel); `table` and `nx` are optional, for reading their sources into a table, and `zigler` is optional, a build tool for the native kernels (`{:zigler, "~> 0.16.0", runtime: false}` with Zig 0.16.0; without it every step runs its Elixir path). From Hex:
 
 ```elixir
-{:macaw_data, "~> 0.8.0"}
+{:macaw_data, "~> 0.8.1"}
 ```
 
 Part of [Macaw](https://github.com/dcoai/macaw).

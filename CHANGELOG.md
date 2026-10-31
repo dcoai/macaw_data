@@ -1,10 +1,15 @@
 # Changelog
 
-## Unreleased
+## v0.8.1 (2026-10-31)
+
+**An application without Zig starts with no error logged** (#76). Every app on macaw_data without Zigler, the default, logged an `[error]` crash report at each start, though nothing was wrong. Upgrading from 0.8.0 needs no change; from 0.7.0, follow 0.8.0's guide below.
 
 ### Changes
 
-- **Changed:** each build stages the native kernels in its own directory (#72, spec/04 §1.7). Zigler stages a module in `/tmp/<module>` by default, one directory for every checkout, worktree and build path on the host, so two builds at once wrote each other's `build.zig` and `module.zig`. The kernels now stage under the build's path, `<build path>/zigler/`, unless `ZIGLER_STAGING_ROOT` names another root.
+- **Fixed:** an application without the native kernels starts with nothing logged at error level (#76, #77, spec/04 §1.7). `Macaw.Data.Native` asked the kernels their interface version at the application's start even when the build had only their stub, and the stub's `:not_built` raise, in the process that asked, logged a crash report. `Macaw.Data.Native.loaded?/0` was false, as it should be. Now only built kernels are asked: a build without them is known at compile time and starts quietly. With Zig, `native: :optional` and `:required` behave as before.
+- **Fixed:** the Hex package never carries Zigler's copy of the kernels' source (#77). Zigler writes `.Elixir.<Module>.zig` beside a module it compiles, so a package built from a checkout that had compiled the kernels would carry it. The package excludes such files. CI now builds the package, boots a minimal app from it without Zigler, and fails on any `[error]` line, a `loaded?/0` that isn't false, or such a file.
+- **Changed:** each build stages the native kernels in its own directory (#72, #73, spec/04 §1.7). Zigler stages a module in `/tmp/<module>` by default, one directory for every checkout, worktree and build path on the host, so two builds at once wrote each other's `build.zig` and `module.zig`. The kernels now stage under the build's path, `<build path>/zigler/`, unless `ZIGLER_STAGING_ROOT` names another root.
+- **Tests:** suite verdicts are independent of load and build state (#73, #74, #75, #81): a `--warnings-as-errors` abort on a warning a lazily loaded test module raised is fixed, `LadderNativeTest`'s property is bounded by its work in reductions rather than ExUnit's clock, and the suite's reduction counter is exact but for `maps:from_list/1`, whose residue it bounds.
 
 ## v0.8.0 (2026-10-31)
 
