@@ -24,14 +24,14 @@ Macaw's data layer (spec/00 §4): the interaction event, the data model, the sou
 | `Macaw.Data.Operations.Transforms.*`, `Macaw.Data.Stack`, `Macaw.Data.FFT` | the twelve table operations: filter, take, window, lttb, m4, sort, fold, stack, bin, aggregate, sum and spectrum, with the stack and FFT engines ([spec/04 §4](https://github.com/dcoai/macaw_data/blob/main/spec/04-operations.md#operations-table)) |
 | `Macaw.Data.Operations.Aggregates.*` | the thirteen statistics, streaming where they can ([spec/04 §5](https://github.com/dcoai/macaw_data/blob/main/spec/04-operations.md#operations-statistics)) |
 | `Macaw.Data.Ops` | what a stored function calls to reach the registered operations by literal name, checked and compiled against the engine's registry ([spec/04 §6](https://github.com/dcoai/macaw_data/blob/main/spec/04-operations.md#operations-sandbox)) |
-| `Macaw.Data.Table` | columnar typed data: packed number and time columns off the heap, gaps kept; every source shape read at the edge ([spec/01 §1.1](https://github.com/dcoai/macaw_data/blob/main/spec/01-sources.md#sources-table)) |
+| `Macaw.Data.Table` | columnar typed data in immutable chunks with stable ids, packed as Arrow lays them out, gaps kept; every source shape read at the edge ([spec/01 §1.1](https://github.com/dcoai/macaw_data/blob/main/spec/01-sources.md#sources-table)) |
 | `Macaw.Data.Unit` | units named by their UCUM codes, with aliases, the ISO 4217 currency extension, display symbols and exact conversion ([spec/03 §1–§7](https://github.com/dcoai/macaw_data/blob/main/spec/03-units.md#units-codes)) |
 | `Macaw.Data.Quantity` | the fixed list of quantities and their facts: kind, bounds, additivity, families, conventions and unit systems; the measure; the label rule ([spec/03 §8–§14](https://github.com/dcoai/macaw_data/blob/main/spec/03-units.md#quantities)) |
 
-Depends on `macaw_layers` (the document kernel); `table` and `nx` are optional, for reading their sources into a table. From Hex:
+Depends on `macaw_layers` (the document kernel); `table` and `nx` are optional, for reading their sources into a table, and `zigler` is optional, a build tool for the native kernels (`{:zigler, "~> 0.16.0", runtime: false}` with Zig 0.16.0; without it every step runs its Elixir path). From Hex:
 
 ```elixir
-{:macaw_data, "~> 0.7.0"}
+{:macaw_data, "~> 0.8.0"}
 ```
 
 Part of [Macaw](https://github.com/dcoai/macaw).
