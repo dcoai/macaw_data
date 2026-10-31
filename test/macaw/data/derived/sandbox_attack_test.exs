@@ -3,7 +3,15 @@ defmodule Macaw.Data.Derived.SandboxAttackTest do
   # modeled on the attacks Dune's test suite defends against: each attack is a stored
   # function, and each test names the fault the checker
   # answers, or the kind the runner reports — never only that something failed.
-  use ExUnit.Case, async: true
+  #
+  # Not async, because "the node makes no atom from any attack" reads the node-wide atom
+  # table, and another test running beside it can make an attack's word (macaw_data#59,
+  # #64). StreamData's `atom(:alphanumeric)`, which TableChunksTest and TablePackingTest
+  # draw, calls `String.to_atom/1` on random identifiers. Sampled, it made `:um` (from
+  # `Enum.join(["s", "um"])` below) and a dozen other words the attacks spell. ExUnit runs
+  # a sync module after every async one has finished, and one at a time, so nothing else
+  # runs here.
+  use ExUnit.Case, async: false
 
   alias Macaw.Data.Derived.Sandbox
   alias Macaw.Data.Derived.Sandbox.Allowlist
@@ -13,8 +21,13 @@ defmodule Macaw.Data.Derived.SandboxAttackTest do
 
   # The names the attacks use, made atoms when this module loads (`existing_atoms_only`).
   @names ~w(m xs row f y pid)a
+
+  # The words no atom has been made of are read before any of this module's tests run an
+  # attack. Tests run in a shuffled order, and many run the sources the atom test runs, so a
+  # word a leak made is gone from a snapshot taken later, and that leak would pass unseen.
   setup_all do
-    {:ok, names: @names}
+    fresh = fresh_attacks()
+    {:ok, names: @names, unseen: unseen(), fresh: fresh, fresh_unseen: fresh_names(fresh)}
   end
 
   defp refused(source, opts \\ []) do
@@ -36,6 +49,33 @@ defmodule Macaw.Data.Derived.SandboxAttackTest do
     "fn x -> x.never_made_field_q9 end",
     ~S|fn x -> Map.put(x, :k, :"Elixir.File.Stream") end|
   ]
+
+  # Each attack shape that spells a name, spelled with `Atoms.fresh/0` names, which nothing
+  # else on the node has made. The fixed sources' check covers only those of their words that
+  # no earlier test made (macaw_data#64); these cover every shape on every run.
+  defp fresh_attacks do
+    for shape <- [
+          &"fn x -> :#{&1} end",
+          &"fn x -> #{&1} = x end",
+          &"fn x -> %{#{&1}: x} end",
+          &"fn x -> x.#{&1} end",
+          &"fn m -> m.#{&1}() end",
+          &"fn x -> :\"#{&1}\#{x}\" end",
+          &"fn x -> Map.put(x, :k, #{Macro.camelize(&1)}) end",
+          &"fn x -> #{Macro.camelize(&1)}.#{&1}(x) end",
+          &"fn x -> %#{Macro.camelize(&1)}{} end",
+          &~s|fn xs -> Macaw.Data.Ops.aggregate(xs, Enum.join(["s", "#{&1}"])) end|,
+          &~s|fn xs -> Macaw.Data.Ops.aggregate(xs, "#{&1}") end|,
+          &~s|fn xs -> Macaw.Data.Ops.transform(xs, "#{&1}", %{}) end|
+        ] do
+      name = Atoms.fresh()
+      {name, shape.(name)}
+    end
+  end
+
+  # A fresh name, as the atom itself and as the module atom its alias would name.
+  defp fresh_names(fresh),
+    do: Enum.flat_map(fresh, fn {name, _} -> [name, "Elixir." <> Macro.camelize(name)] end)
 
   @atoms [
     {"fn x -> String.to_atom(x) end", {:restricted, {String, :to_atom, 1}}},
@@ -262,32 +302,46 @@ defmodule Macaw.Data.Derived.SandboxAttackTest do
     assert {:error, :raised, ArithmeticError} = call("fn x -> 1 / x end", [0])
   end
 
+  # Every word an attack spells, and every alias chain as the module atom it would name.
+  defp spelled_names do
+    Enum.flat_map(sources(), fn source ->
+      words = Regex.scan(~r/[A-Za-z_][A-Za-z0-9_]*[?!]?/, source)
+      chains = Regex.scan(~r/\b[A-Z][A-Za-z0-9_]*(?:\.[A-Z][A-Za-z0-9_]*)*/, source)
+      List.flatten(words) ++ Enum.map(List.flatten(chains), &("Elixir." <> &1))
+    end)
+  end
+
+  defp unseen, do: spelled_names() |> Enum.uniq() |> Enum.reject(&Atoms.atom?/1)
+
+  defp sources do
+    Enum.map(
+      @atoms ++ @calls ++ @processes ++ @code ++ @structs ++ @collectables ++ @operations,
+      &elem(&1, 0)
+    ) ++ @strings
+  end
+
   @tag verifies: ["derived-checker-names", "derived-attacks", "operations-sandbox-attacks"]
-  # Checked on the attacks' own names, never the node's atom count (macaw_data#1): every
-  # word an attack spells, and every alias chain as the module atom it would name, that
-  # was no atom before the attacks ran is none after.
-  test "the node makes no atom from any attack" do
-    sources =
-      Enum.map(
-        @atoms ++ @calls ++ @processes ++ @code ++ @structs ++ @collectables ++ @operations,
-        &elem(&1, 0)
-      ) ++ @strings
-
-    spelled =
-      Enum.flat_map(sources, fn source ->
-        words = Regex.scan(~r/[A-Za-z_][A-Za-z0-9_]*[?!]?/, source)
-        chains = Regex.scan(~r/\b[A-Z][A-Za-z0-9_]*(?:\.[A-Z][A-Za-z0-9_]*)*/, source)
-        List.flatten(words) ++ Enum.map(List.flatten(chains), &("Elixir." <> &1))
-      end)
-
-    unseen = spelled |> Enum.uniq() |> Enum.reject(&Atoms.atom?/1)
+  # Checked on the attacks' own names, never the node's atom count (macaw_data#1): each word
+  # no atom was made of before this module ran an attack is none after every attack is
+  # checked, compiled and run. The fresh shapes' names are none either, whatever ran before.
+  test "the node makes no atom from any attack", context do
+    %{unseen: unseen, fresh: fresh, fresh_unseen: fresh_unseen} = context
     assert "never_made_before_by_any_attack" in unseen
     assert "never_made_key_q9" in unseen
+    assert Atoms.made(fresh_unseen) == []
 
-    for source <- sources, do: Sandbox.check(source)
-    for source <- sources, match?({:ok, _}, Sandbox.check(source)), do: Sandbox.compile(source)
+    fresh_sources = Enum.map(fresh, &elem(&1, 1))
+
+    for source <- sources() ++ fresh_sources, do: Sandbox.check(source)
+
+    for source <- sources() ++ fresh_sources, match?({:ok, _}, Sandbox.check(source)) do
+      {:ok, compiled} = Sandbox.compile(source)
+      Sandbox.run(compiled, [%{}])
+    end
+
     call("fn m -> m.halt end", [%{halt: 1}])
 
     assert Atoms.made(unseen) == []
+    assert Atoms.made(fresh_unseen) == []
   end
 end
