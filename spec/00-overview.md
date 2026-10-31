@@ -21,7 +21,11 @@ It knows nothing of pages, components or state: those are `macaw_compose`'s, whi
 ## 3. Dependencies {#data-dependencies}
 
 
-None required at runtime beyond Elixir and OTP, so an adopter using no other Macaw library (visualize, standalone) can depend on it alone. `table` and `nx` are optional: a host that has either gets its `Table.Reader` sources or tensors read into a table ([01 §1.1](01-sources.md#sources-table)), and **a host with neither compiles it without a warning** (CI compiles it so, #7). It depends on `macaw_layers` (v0.1.0), the document kernel: a schema's JSON is read through its gates and its version is its digest ([01 §1.10](01-sources.md#sources-schema-version), [01 §1.11](01-sources.md#sources-schema-json)).
+It requires one library at runtime, **`macaw_layers`**, the document kernel: a schema's JSON is read through its gates and its version is its digest ([01 §1.10](01-sources.md#sources-schema-version), [01 §1.11](01-sources.md#sources-schema-json)). Nothing else is required, so an adopter that uses no other Macaw library (visualize, standalone) depends on `macaw_data` and `macaw_layers` alone. The rest is optional:
+- **`table` and `nx`:** a host that has either gets its `Table.Reader` sources or tensors read into a table ([01 §1.1](01-sources.md#sources-table)), and **a host with neither compiles it without a warning** (CI compiles it so, #7).
+- **`zigler`, a build tool only:** with it and the Zig it targets, the native kernels are built; without it, every step runs its Elixir path ([04 §1.7](04-operations.md#operations-native)).
+
+**No version is written here.** The requirements are `mix.exs`'s, and only there, so this section cannot fall behind them (#34).
 
 ## 4. Order of work {#data-order}
 

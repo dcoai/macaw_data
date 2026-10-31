@@ -43,8 +43,8 @@ defmodule Macaw.Data.Source.Push do
     when it drops any.
   - **What is held is a chunked table** (spec/01 §2.6): `held/1`'s rows are a
     `Macaw.Data.Table` of the source's origin, its columns the schema's fields, packed as
-    `Delivery.table/2` packs; every change reaches it through `Table.apply/2`, a settled
-    range's in its delta. Rows that don't pack are `{:table, faults}` in `errors`.
+    `Delivery.table/2` packs; every change reaches it through `Macaw.Data.Table.apply/2`,
+    a settled range's in its delta. Rows that don't pack are `{:table, faults}` in `errors`.
 
   It is not a process: the process that subscribes receives the messages in its mailbox
   and passes them here. Ported from the logic of visualize's `Visualize.Feed.Monitor`,

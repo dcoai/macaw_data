@@ -51,6 +51,15 @@ compile:
     # Push what the store lacked, only after a green build.
     - elixir scripts/depdep.exs --push || echo "depdep bootstrap failed - nothing pushed"
 
+# The docs build with no warning (#34): a reference ExDoc can't resolve, a bare `Table.x/n`
+# that names the `table` package's Table, or a hidden module, fails the job. Without Zig,
+# as an adopter's docs build would be: the kernels' stub documents the same API.
+docs:
+  extends: .elixir
+  stage: check
+  script:
+    - mix docs --warnings-as-errors
+
 spelling:
   image: $ELIXIR_IMAGE
   stage: check
