@@ -9,8 +9,11 @@ defmodule Macaw.Data.Source.Finish do
   2. `:box`: rows trimmed to the box over the `:point` window field;
   3. `:region`: rows trimmed to each ranged field's range;
   4. `:latest`: each identity's latest row by the window field (spec/01 §1.4);
-  5. `:budget`: the rows reduced to the budget by a registered reducer (`reduce/5`, spec/04
-     §7), `reduced_by: :runtime`.
+  5. `:order`: the rows sorted by the request's order (`Macaw.Data.Source.Order`),
+     `ordered: :runtime`, or `ordered: :sample` where the source had already cut them;
+  6. `:budget`: the rows reduced to the budget by a registered reducer (`reduce/5`, spec/04
+     §7), or, for an ordered delivery, kept to its first `budget` rows; `reduced_by:
+     :runtime`.
 
   The budget never widens the window: finishing only removes rows. A delivery that needs
   none of it comes back as it is.
@@ -24,7 +27,7 @@ defmodule Macaw.Data.Source.Finish do
 
   alias Macaw.Data.{Delivery, Operations, Schema, Table, Window}
   alias Macaw.Data.Operations.{Option, Registry}
-  alias Macaw.Data.Source.{Description, Request}
+  alias Macaw.Data.Source.{Description, Order, Request}
 
   @doc """
   The delivery finished for the request, each step where the description's `supports`
@@ -82,11 +85,22 @@ defmodule Macaw.Data.Source.Finish do
 
       rebuild(d, rows)
     end)
+    |> step(:order in supports or request.order == [], fn d ->
+      d
+      |> rebuild(Order.sort(Delivery.named_rows(d), request.order, schema))
+      |> serve(:ordered, ordered_by(d.served))
+    end)
     |> step(
       :budget in supports,
       &reduce(&1, schema, request.budget, opts[:reduce], opts[:operations])
     )
   end
+
+  # Rows the source cut, to its own budget or short of the window, are a sample: ordered
+  # here, they need not be the first rows in the order (spec/01 §2.4).
+  defp ordered_by(%{reduced_by: :source}), do: :sample
+  defp ordered_by(%{capped: true}), do: :sample
+  defp ordered_by(_served), do: :runtime
 
   defp step(delivery, true, _fun), do: delivery
   defp step(delivery, false, fun), do: fun.(delivery)
@@ -117,6 +131,11 @@ defmodule Macaw.Data.Source.Finish do
   A `nil` budget, a delivery within it, and a schema with no `:number` field to reduce by
   come back as they are.
 
+  **An ordered delivery keeps its head** (spec/01 §2.4): one whose `served.ordered` is
+  set holds its rows in a reader's order, and a reader that orders rows wants the first
+  of them, not a shape, so its first `budget` rows are kept, `reduced_by: :runtime`, with
+  any reducer. So a pooled fetch's ordered rows reduce to each reader's own head.
+
       iex> alias Macaw.Data.{Delivery, Schema, Source.Finish}
       iex> schema = Schema.new!(%{t: %{type: :number, window: true}, v: %{type: :number}})
       iex> reduced = Finish.reduce(Delivery.new(for t <- 1..100, do: %{t: t, v: rem(t * 7, 5)}), schema, 10)
@@ -130,6 +149,16 @@ defmodule Macaw.Data.Source.Finish do
   def reduce(%Delivery{} = delivery, %Schema{}, nil, method, registry) do
     reducer!(registry, method)
     delivery
+  end
+
+  def reduce(%Delivery{served: %{ordered: by}} = delivery, %Schema{}, budget, method, registry)
+      when by != nil and is_integer(budget) and budget > 0 do
+    reducer!(registry, method)
+    rows = Delivery.named_rows(delivery)
+
+    if length(rows) <= budget,
+      do: delivery,
+      else: delivery |> rebuild(Enum.take(rows, budget)) |> serve(:reduced_by, :runtime)
   end
 
   def reduce(%Delivery{} = delivery, %Schema{} = schema, budget, method, %Registry{} = registry)

@@ -110,6 +110,7 @@ defmodule Macaw.Data.DeliveryTest do
              resolution: :minute,
              capped: true,
              reduced_by: :source,
+             ordered: nil,
              params: %{"region" => "eu"},
              note: "coarsened from raw",
              position: nil,
@@ -121,6 +122,7 @@ defmodule Macaw.Data.DeliveryTest do
              resolution: nil,
              capped: false,
              reduced_by: nil,
+             ordered: nil,
              params: %{},
              note: nil,
              position: nil,
@@ -129,11 +131,16 @@ defmodule Macaw.Data.DeliveryTest do
 
     assert Delivery.new(@rows, served: %{reduced_by: :runtime}).served.reduced_by == :runtime
 
+    for by <- [:source, :runtime, :sample],
+        do: assert(Delivery.new(@rows, served: [ordered: by]).served.ordered == by)
+
     for bad <- [
           [window: [1]],
           [capped: :yes],
           [reduced_by: :feed],
           [reduced_by: :visualize],
+          [ordered: true],
+          [ordered: :feed],
           [params: [a: 1]],
           [note: :coarse],
           [color: "red"]

@@ -26,6 +26,11 @@ defmodule Macaw.Data.Delivery do
     - `capped`: whether the source stopped short of the window it was asked for;
     - `reduced_by`: who brought the rows within budget, `:source` or `:runtime`, or `nil`
       when nobody had to;
+    - `ordered`: who put the rows in the request's `order` (spec/01 §2.4): `:source`, which
+      served its first rows in it; `:runtime`, which ordered every row the source served
+      and kept the first; `:sample`, which ordered rows the source had already cut (its
+      `reduced_by: :source`, or `capped`), so they are in the order but need not be the
+      first in it; or `nil`, no order asked;
     - `params`: the parameters it was answered for, a map;
     - `note`: a line for a person (`"coarsened from raw"`), or `nil`;
     - `position`: for a snapshot taken for a push subscription, the sequence number of
@@ -79,6 +84,7 @@ defmodule Macaw.Data.Delivery do
     resolution: nil,
     capped: false,
     reduced_by: nil,
+    ordered: nil,
     params: %{},
     note: nil,
     position: nil,
@@ -97,6 +103,7 @@ defmodule Macaw.Data.Delivery do
           resolution: term(),
           capped: boolean(),
           reduced_by: :source | :runtime | nil,
+          ordered: :source | :runtime | :sample | nil,
           params: map(),
           note: String.t() | nil,
           position: non_neg_integer() | nil,
@@ -292,6 +299,7 @@ defmodule Macaw.Data.Delivery do
   defp check(:resolution, _any), do: :ok
   defp check(:capped, capped) when is_boolean(capped), do: :ok
   defp check(:reduced_by, by) when by in [nil, :source, :runtime], do: :ok
+  defp check(:ordered, by) when by in [nil, :source, :runtime, :sample], do: :ok
   defp check(:params, params) when is_map(params) and not is_struct(params), do: :ok
   defp check(:note, note) when is_nil(note) or is_binary(note), do: :ok
   defp check(:position, p) when is_nil(p) or (is_integer(p) and p >= 0), do: :ok

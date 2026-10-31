@@ -90,7 +90,7 @@ defmodule Macaw.Data.Source.Conformance do
     quiet: 100
   ]
 
-  @asks [:params, :window, :box, :region, :latest, :as_of]
+  @asks [:params, :window, :box, :region, :latest, :order, :as_of]
 
   @titles %{
     describe: "a valid description and a stable schema version",
@@ -248,6 +248,7 @@ defmodule Macaw.Data.Source.Conformance do
           Regions.box(fetch, description, o) ++
           Regions.region(fetch, description, o) ++
           Regions.latest(fetch, description, o) ++
+          Regions.order(fetch, description, o) ++
           budget_honored(fetch, supports, o) ++
           as_of_honored(source, description, o) ++
           push_honored(source, supports, o)

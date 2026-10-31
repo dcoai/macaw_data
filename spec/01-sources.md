@@ -530,7 +530,7 @@ a cached version costs nothing, an unknown one calls describe once and is cached
 It is a strict superset of visualize's `Visualize.Feed`: an existing feed is a source with no parameters. visualize's `describe/1` answered `{version, schema, supports}` and `fetch/3` took a window and a budget; adapting a feed is visualize's (#112).
 
 ```test:contract-describe
-describe/2 answers a description from the host's context, a malformed answer is the bad_describe value, and the capabilities are the seven in order
+describe/2 answers a description from the host's context, a malformed answer is the bad_describe value, and the capabilities are the eight in order
 ```
 
 ```test:contract-fetch
@@ -550,7 +550,7 @@ describer/1 answers a named source's schema, no_source for an unknown name, and 
 `%Macaw.Data.Source.Description{schema, params, supports, viewer_independent, lateness, idle_after, chunk_span}`, built by `new/1`, which reports every fault at once by path:
 - **`schema`**, required, a `Macaw.Data.Schema` (§1.2).
 - **`params`**: the parameters the source takes, by name, each a parameter (§2.2); `%{}` by default. A name is a non-empty string.
-- **`supports`**: the capabilities it honors, distinct, among `:window`, `:box`, `:region`, `:latest`, `:budget`, `:push` and `:as_of`; `[]` by default. **Every capability is optional:** Macaw finishes a window, box, region, latest or budget the source did not honor, and reports it (§2.4). (visualize.md C1, D-140.)
+- **`supports`**: the capabilities it honors, distinct, among `:window`, `:box`, `:region`, `:latest`, `:order`, `:budget`, `:push` and `:as_of`; `[]` by default. **Every capability is optional:** Macaw finishes a window, box, region, latest, order or budget the source did not honor, and reports it (§2.4). (visualize.md C1, D-140.)
 - **`viewer_independent`**: `true` declares that the source answers every viewer the same. It only allows pooling across viewers (§6), which fetches with the anonymous viewer, so a wrong declaration shows everyone the anonymous answer and never one person's rows to another. The conformance kit checks it by asking two viewers. `false` by default.
 - **`lateness`**: a hard bound on how late a change may be, for a source that refuses changes past some age (§4.4); `nil` by default, accepting a change of any age.
 - **`idle_after`**: milliseconds the source may deliver nothing before a derived source's watermark leaves it out ([02 §8.6](02-derived.md#derived-engine-watermarks)), a positive integer; `nil` by default, never idle.
@@ -605,6 +605,7 @@ given values are checked by name, every fault at once, defaults filled in; a val
 | `box` | `%{west, south, east, north}` over a `:point` window field, in degrees, latitudes −90 to 90 with `south` at most `north`, longitudes −180 to 180, `west` east of `east` crossing the antimeridian (`box?/1`) | `nil` |
 | `region` | ranges over named `:time` or `:number` fields, `%{field => [from, to]}` | `nil` |
 | `latest` | `true` asks for each identity's latest row (§1.4) | `false` |
+| `order` | the order the reader looks at the rows in, `[{field, :asc \| :desc}, …]`, the first key deciding first; with a `budget`, the first rows in it are wanted, not a sample | `[]` |
 | `budget` | the most rows the reader wants, a positive integer | `nil` |
 | `as_of` | the `DateTime` the answer is as of, for a source supporting `:as_of` | `nil` |
 | `subscription` | the reference of the push subscription this fetch is a snapshot for, whose position the answer states in `served.position` (§4.1); any other value is `{:type, :reference}` | `nil` |
@@ -614,6 +615,20 @@ given values are checked by name, every fault at once, defaults filled in; a val
 `region` keeps visualize's region (ranges over several fields at once) beside the geographic `box`, so a region-supporting `Visualize.Feed` has an equivalent, and `latest` asks for what `supports: [:latest]` honors; both are the owner's decisions of 2026-10-27.
 
 - **The budget never widens the window.** A source may refuse to split a bucket's keys, delivering nothing rather than a partial distribution. (metresis.md C1.)
+
+**The order belongs with the budget** (macaw_data#80, from the core's built-in table, macaw#196): both say what the reader will look at. A source caps before the runtime sees a row, so an order known only after the cap could never recover the top rows. A "slowest first" table under a budget would show a sorted sample, not the slowest rows. `Macaw.Data.Source.Order` holds the order's rules:
+
+- **Its shape is the request's:** `new/1` refuses a key that is no `{field, :asc | :desc}` with a name for its field as `{[:order, i], {:type, :order}}`, a field named twice (by either spelling) as `{[:order, i], {:duplicate, field}}`, and an order that is no list as `{[:order], {:type, :order}}`.
+- **Its fields are the schema's**, checked against the description as parameters are: `Window.check/2` gives `{[:order, i], {:unknown_field, name}}` for a field the schema does not describe and `{[:order, i], {:invalid_for, type}}` for a `:point` or `:color` field, which have no order. `Source.fetch/3` refuses such an order before calling the source, `{:error, {:order, faults}}`, as it refuses parameters (§2.2).
+- **Rows compare by their field's type, never by term order:** a `:time` by its instant (`Window.position/1`; term order would put a `%DateTime{}` by its day before its year), a `:number` by its value, a `:text` by its string, a `:category` by its place in the field's declared `order` (§1.2) and then by its spelling, its atom and its string alike. A `nil`, and a value with no reading for its type, sorts **last in either direction**: absence is no value, and a reader's first rows are rows that have one. The sort is stable, so rows the order cannot tell apart keep their order (`Order.sort/3`).
+
+```test:request-order
+a request's order defaults to [], its shape faults are reported with every other fault (a bad key, a field twice, a non-list), its fields are checked against the schema by Window.check/2 (unknown, point, color) and fetch/3 refuses such an order without calling the source
+```
+
+```test:order-compare
+rows sort by their field's type: times by instant across days, months and years, never DateTime's term order; numbers by value; text by string; a category by its declared order, then by spelling; a missing reading last in either direction; keys decide in turn; the sort is stable; for generated instants and gaps, ascending and descending
+```
 
 ```test:contract-request
 a request carries every axis with its defaults; every fault of a bad window, box, region range, latest, budget, as_of, now and an unknown key is reported at once; an empty region is refused
@@ -627,7 +642,10 @@ a request carries every axis with its defaults; every fault of a bad window, box
 2. **`:box`**: the rows trimmed to the positions in the box over the `:point` window field, across the antimeridian when `west` is east of `east`; the served window is the box.
 3. **`:region`**: the rows trimmed to each ranged field's range.
 4. **`:latest`**: each identity's latest row by the window field, the later in order on a tie; a row whose identity or time is `nil` names nothing and is dropped.
-5. **`:budget`**: the rows reduced to the budget, `reduced_by: :runtime`. Each series (the rows sharing every `:category` field's value) is reduced field by field against the window field, or the row's place without one, by the registered reducer `reduce:` names, by spelling ([04 §7](04-operations.md#operations-reducers)): Largest-Triangle-Three-Buckets (`"lttb"`, the default) or M4 (`"m4"`) in `macaw_data`'s own package, over `Macaw.Data.Reduce`, or any transform an enabled package registers that declares `reduces/0` (`operations:`, the registry, `macaw_data`'s own by default); a name that is no registered reducer raises `ArgumentError` naming it. Then the union of the kept rows returned whole, in their order. When many series leave the union over the budget, an even stride over it keeps the first and the last: **never more than the budget**. A delivery within the budget, and a schema with no `:number` field to reduce by, come back as they are.
+5. **`:order`**: the rows sorted by the request's order (§2.3), stably, `ordered: :runtime`: every row the source served, in the order, so under a budget its head is the first rows in it. Where the source had already cut its rows, to its own budget (`reduced_by: :source`) or short of the window (`capped`), they are ordered all the same and the delivery says `ordered: :sample`: in the order, but not necessarily the first rows in it. The reader is told, and never shown a sample as the top.
+6. **`:budget`**: the rows reduced to the budget, `reduced_by: :runtime`. Each series (the rows sharing every `:category` field's value) is reduced field by field against the window field, or the row's place without one, by the registered reducer `reduce:` names, by spelling ([04 §7](04-operations.md#operations-reducers)): Largest-Triangle-Three-Buckets (`"lttb"`, the default) or M4 (`"m4"`) in `macaw_data`'s own package, over `Macaw.Data.Reduce`, or any transform an enabled package registers that declares `reduces/0` (`operations:`, the registry, `macaw_data`'s own by default); a name that is no registered reducer raises `ArgumentError` naming it. Then the union of the kept rows returned whole, in their order. When many series leave the union over the budget, an even stride over it keeps the first and the last: **never more than the budget**. A delivery within the budget, and a schema with no `:number` field to reduce by, come back as they are. **An ordered delivery keeps its head** (`served.ordered` set, by the source or by step 5): its first `budget` rows, whatever reducer is named, since a reader that orders rows wants the first of them, not a shape.
+
+A source naming `:order` serves its rows in the order asked, under a budget its first `budget` rows in it, and says so: `served.ordered: :source`. A source that doesn't name it serves as it would without one, capped or reduced as before, and finishing orders what it served (step 5).
 
 A step the source honored is not done again. **Finishing only removes rows,** so it never widens the window and never adds a row, and it **keeps the rows' form** (macaw#185): a table stays a table of the same columns and types, and any other source becomes the rows it kept, read by name (`Delivery.named_rows/1`), never packed; a delivery no step acts on comes back as it is. A request the schema cannot answer (`Macaw.Data.Window.check/2`) raises `ArgumentError`: a window not of the window field's type or with no window field, a box with no `:point` window field, a region field not described, not `:time` or `:number`, mixed or inverted, or `latest` with no declared identity or no `:time` or `:number` window field to order by; the request is the caller's. `Macaw.Data.Window` holds the comparisons, trims and positions it uses, ported from visualize's `Visualize.Feed.Window`, and **what a source steps its window by** (macaw#185): `before/4`, the rows in `[from, upper)` (the seam of a combination, an open bound open); `region/2`, the region a window asks of a schema (a range `[from, to]` the window field's region where it applies, else `nil`, the source's own span; a region as it is); `range/2`, a field's range of a window or a region, by either spelling; and `check/2` of the axes alone, a map of `window`, `box`, `region` and `latest`, as well as of a request, any other key `{[key], :unknown_key}`. visualize's box `%{ranges, latest}` (its D-168) is a request's `region` and `latest` here.
 
@@ -649,6 +667,10 @@ latest keeps each identity's latest row by the window field, dropping a row with
 
 ```test:finish-budget
 a budget the source did not honor is reduced, the ends kept, recorded runtime; an honored or unneeded budget is not; series share it; m4 reduces too
+```
+
+```test:finish-order
+an order the source did not honor is sorted, ordered runtime, and under a budget its first rows kept, not a reducer's shape; an honored order is not redone; rows the source cut by its budget or short of the window are ordered sample; reduce/5 of an ordered delivery keeps its head under every reducer, a table staying a table; for generated rows, orders and budgets, the finished rows are the first of all of them in the order
 ```
 
 ```test:finish-keeps-form
@@ -712,6 +734,7 @@ held/1's rows are a chunked table of the source's origin, its columns the schema
   - `resolution`: the spacing of the rows as served (seconds, or a name such as `:minute`), or `nil`;
   - `capped`: whether the source stopped short of the window it was asked for, `false` by default;
   - `reduced_by`: who brought the rows within budget: **`:source`** (the source honored the budget) or **`:runtime`** (Macaw reduced a pooled delivery to this reader's budget, finished a budget the source didn't honor, or clamped a budget to the host ceiling); `nil` when nobody had to. A component that draws fewer rows than it was handed says so in its own drawn state ([macaw_compose 05](https://github.com/dcoai/macaw/blob/main/spec/05-components.md#components-states)), not in the delivery;
+  - `ordered`: who put the rows in the request's `order` (§2.3, §2.4): **`:source`** (the source served its first rows in it), **`:runtime`** (Macaw ordered every row the source served and kept the first), **`:sample`** (Macaw ordered rows the source had already cut, its `reduced_by: :source` or `capped`, so they are in the order but need not be the first in it); `nil` when no order was asked;
   - `params`: the parameters it was answered for, a map, `%{}` by default;
   - `note`: a line for a person (`"coarsened from raw"`), or `nil`;
   - `position`: for a snapshot taken for a push subscription, the number of the last increment it reflects, a non-negative integer (`0` for none); `nil` for any other answer (§4.1);
@@ -740,7 +763,7 @@ for generated values with gaps, every gap reads back nil through the delivery's 
 ```
 
 ```test:delivery-served
-served holds the window, resolution, capped, reduced_by (source or runtime), params and note, with their defaults; visualize's feed and visualize reductions, a one-element window and every other bad fact are refused
+served holds the window, resolution, capped, reduced_by (source or runtime), ordered (source, runtime or sample), params and note, with their defaults; visualize's feed and visualize reductions, a one-element window and every other bad fact are refused
 ```
 
 ```test:delivery-box
@@ -919,7 +942,7 @@ served holds complete_until, a time or a number, nil by default; any other value
 ### 6.1 Budgets: the ceiling and pooling {#sources-budgets}
 
 - **The host ceiling** clamps every slot's budget ([macaw_compose 05](https://github.com/dcoai/macaw/blob/main/spec/05-components.md#components-budget)). A host sets it once; a page may lower it, never raise it. `Finish.ceiling/2` is the rule: `{budget, clamped?}`, a `nil` budget reading at the ceiling.
-- **Pooling:** several readers of one source and request cost one fetch, at the largest budget among them (`Finish.pooled/1`, `nil` when any reader wants every row), and each reader is reduced to its own budget (`Finish.reduce/4`, `reduced_by: :runtime`). (visualize.md C1.)
+- **Pooling:** several readers of one source and request cost one fetch, at the largest budget among them (`Finish.pooled/1`, `nil` when any reader wants every row), and each reader is reduced to its own budget (`Finish.reduce/4`, `reduced_by: :runtime`), an ordered delivery to its own head (§2.4). Readers pooled share one request, and so one order. (visualize.md C1.)
 
 ```test:finish-ceiling-pool
 the ceiling clamps a budget, reads a nil one at the ceiling and takes a page's lower one, never a higher; a pooled fetch asks the largest, nil when any reader wants every row; each reader is reduced to its own
@@ -1008,22 +1031,22 @@ These bind the component that draws, not this library's code; each emitting libr
 
 Every source runs **one kit**, `Macaw.Data.Source.Conformance`: the contract of §2–§4 as checks, so a provider proves conformance by running it rather than by reading this file. It is visualize's `Visualize.Feed.Conformance` (visualize spec 08 §12), with the checks a source's superset of a feed needs.
 
-**Two layers.** `check(check, source, opts)` answers one check's **findings**, `{check, reason}` terms, `[]` for a source that passes; `check(source, opts)` runs them all, in the order of `checks/0`; `format/1` words a finding as a line a person reads. `use Macaw.Data.Source.Conformance, source: …` inside a module that uses `ExUnit.Case` writes one test per check, in a `describe` block, failing with the findings. The kit itself references no ExUnit function (`describe`, `test` and `flunk` appear only in the code `use` writes), so it loads in production. `use` refuses a missing `source:` and an unknown option at compile time; `check/3` refuses an unknown check, an unknown option and a request key outside the six below.
+**Two layers.** `check(check, source, opts)` answers one check's **findings**, `{check, reason}` terms, `[]` for a source that passes; `check(source, opts)` runs them all, in the order of `checks/0`; `format/1` words a finding as a line a person reads. `use Macaw.Data.Source.Conformance, source: …` inside a module that uses `ExUnit.Case` writes one test per check, in a `describe` block, failing with the findings. The kit itself references no ExUnit function (`describe`, `test` and `flunk` appear only in the code `use` writes), so it loads in production. `use` refuses a missing `source:` and an unknown option at compile time; `check/3` refuses an unknown check, an unknown option and a request key outside the seven below.
 
 **The eight checks:**
 
 | Check | Holds |
 |---|---|
 | `:describe` | `describe/2`, given the host's `context:`, answers a description `Description.new/1` accepts as it stands; its schema is one `Schema.new/1` accepts, its version the content hash (§1.10); a measure the vocabulary refuses is its own finding, naming the field; a source naming `:window` has a `:time` or `:number` window field, one naming `:box` a `:point` one; a second describe answers the same description |
-| `:deliveries` | each request, at each budget, answers a well-formed delivery (§3) naming the described version: every row field described; the window field holding values of its type; every other `:time` field instants; every declared identity field present; every row within the served window; no two rows of a series closer than the served resolution; the served window complete (an open fetch holds no row inside it that the delivery lacks); `capped` true only with a shortfall and false only without one; `reduced_by` `:source` only when the source reduced, and never `:runtime`, which is Macaw's (§2.4) |
-| `:supports` | `supports` is distinct capabilities, and each it names is true: the window kept (served within, no row outside), the box kept, every region range kept, `latest` one row per identity and none older than its last, the budget never exceeded, `as_of` answered as of the instant asked (an origin names it, and an hour's later `now` changes nothing), `:push` subscribable; a source not naming `:push` refuses `subscribe/2` |
+| `:deliveries` | each request, at each budget, answers a well-formed delivery (§3) naming the described version: every row field described; the window field holding values of its type; every other `:time` field instants; every declared identity field present; every row within the served window; no two rows of a series closer than the served resolution; the served window complete (an open fetch holds no row inside it that the delivery lacks); `capped` true only with a shortfall and false only without one; `reduced_by` `:source` only when the source reduced, and never `:runtime`, which is Macaw's (§2.4); `ordered` never `:runtime` or `:sample`, which are Macaw's too |
+| `:supports` | `supports` is distinct capabilities, and each it names is true: the window kept (served within, no row outside), the box kept, every region range kept, `latest` one row per identity and none older than its last, an `order` kept (the rows in it, `ordered: :source`, and under a budget the first rows of the answer without one, compared by the order's readings, so rows it ties may be any of them), the budget never exceeded, `as_of` answered as of the instant asked (an origin names it, and an hour's later `now` changes nothing), `:push` subscribable; a source not naming `:push` refuses `subscribe/2` |
 | `:push` | the handshake's first message is the schema; every pushed schema is valid; every pushed snapshot and increment is well formed, within its served window, and after the schema it names; a snapshot states its position (`{:snapshot_position, got}`), and the increments are numbered one past it, or from `1` with none, each one past the last (`{:numbering, expected, got}`); `push:` makes an increment arrive (§4) |
 | `:errors` | requests no source can read (a window of no times, of either kind, mixed; a box; a region over an unknown field with `latest`) answer values, a delivery or an error, never a crash; an undeclared parameter never reaches the source (`{:error, {:params, faults}}`, §2.2); `unsubscribe/2` of an unknown reference is `:ok`; a `down:` source answers errors to `describe`, `fetch` and `subscribe` |
 | `:unsubscribe` | after `unsubscribe/2`, a push made by `push:` delivers nothing |
 | `:determinism` | one request, one `now`: two fetches give one answer, the same rows and served terms. A row stamped after `now` arrived between them and is not compared. An answer depends on the request, never on a clock the source reads |
 | `:viewers` | a source declaring `viewer_independent` answers the two `viewers:` alike, which pooling across viewers (§6) relies on |
 
-**Requests.** `requests:` lists what is asked, each a keyword list of request fields among `params`, `window`, `box`, `region`, `latest` and `as_of` (`[[]]` by default), each fetched at every one of `budgets:` (`[nil, 5]`), at `now:` (the moment the check starts by default) and as the first of `viewers:`. A capability the source names that no request probes is a finding (`{:no_probe, capability}`), and so is a request the schema cannot answer (`{:probe, ask, faults}`): both are the run's to fix. The other options are `context:`, `as_of:` (a day before `now` by default), `push:`, `down:`, `timeout:`, `reductions:`, `processes:` and `quiet:`.
+**Requests.** `requests:` lists what is asked, each a keyword list of request fields among `params`, `window`, `box`, `region`, `latest`, `order` and `as_of` (`[[]]` by default), each fetched at every one of `budgets:` (`[nil, 5]`), at `now:` (the moment the check starts by default) and as the first of `viewers:`. A capability the source names that no request probes is a finding (`{:no_probe, capability}`), and so is a request the schema cannot answer (`{:probe, ask, faults}`): both are the run's to fix. The other options are `context:`, `as_of:` (a day before `now` by default), `push:`, `down:`, `timeout:`, `reductions:`, `processes:` and `quiet:`.
 
 **Isolation.** Every callback runs in a process of its own (`Macaw.Data.Bounded`), so a raise or an exit is a finding (`{:raised, call, reason}`), not a crash of the check, and a raise logs no error-level message: the process is spawned through `:proc_lib`, and the finding is its report ([02 §6.4](02-derived.md#derived-runner), macaw_data#79). A callback is judged by the **reductions** its process spends against `reductions:`, the source author's cost budget (`nil` makes no cost claim), with the reductions of the named `processes:` during the call added for a source that works in a server; liveness is a separate wall-clock bound, `timeout:`, for a call blocked in `receive`, which is `{:hung, call, timeout}`. A budgeted callback still working when `timeout:` passes is left to its budget, so a slow one on a loaded host is judged by its count, never hung (macaw_data#33); a callback with no budget has only the clock, and past it is hung whatever it is doing. **Load changes no verdict:** nothing is judged by the clock but a hang.
 
@@ -1042,7 +1065,11 @@ a down source that answers describe, fetch and subscribe is three findings; a so
 ```
 
 ```test:conformance-probes
-a capability no request probes is a no_probe finding for the window, budget, push, region and box; a request the schema cannot answer is a probe finding; a request key outside the six is refused
+a capability no request probes is a no_probe finding for the window, budget, push, region and box; a request the schema cannot answer is a probe finding; a request key outside the seven is refused
+```
+
+```test:conformance-order
+a source that orders its rows passes; one serving them out of the order, one not stating ordered: :source, one serving a sorted sample under a budget, and one stating :runtime each fail with their finding; a source naming :order with no request to probe it is no_probe; an order the schema cannot answer is a probe finding
 ```
 
 ```test:conformance-use

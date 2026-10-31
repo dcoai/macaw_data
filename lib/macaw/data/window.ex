@@ -28,7 +28,7 @@ defmodule Macaw.Data.Window do
   alias Macaw.Data.Source.Request
 
   # The request's fields a window check reads.
-  @axes [:window, :box, :region, :latest]
+  @axes [:window, :box, :region, :latest, :order]
 
   @type time :: number() | DateTime.t() | NaiveDateTime.t() | Date.t()
   @type t :: [time() | nil] | nil
@@ -269,15 +269,16 @@ defmodule Macaw.Data.Window do
   end
 
   @doc """
-  Whether a schema can answer a request's window, box, region and latest: `:ok`, or
+  Whether a schema can answer a request's window, box, region, latest and order: `:ok`, or
   `{:error, faults}`, every fault `{path, reason}` by path. A window must apply to a
   `:time` or `:number` window field; a box needs a `:point` window field; each region
   field is described, `:time` or `:number`, its range two ends of its type, not inverted;
-  `latest` needs a `:time` or `:number` window field and a declared identity. A request asking none of them is
-  `:ok`.
+  `latest` needs a `:time` or `:number` window field and a declared identity; each field
+  of an `order` is described and of a type with an order (`Macaw.Data.Source.Order.faults/2`).
+  A request asking none of them is `:ok`.
 
   It takes a `%Request{}`, or the axes alone as a map of its fields (`window`, `box`,
-  `region`, `latest`, each defaulting as a request's does), so a source stepping its
+  `region`, `latest`, `order`, each defaulting as a request's does), so a source stepping its
   window checks one without a whole request (macaw#185); any other key is
   `{[key], :unknown_key}`.
 
@@ -307,7 +308,10 @@ defmodule Macaw.Data.Window do
     unknown = for key <- Map.keys(axes), key not in @axes, do: {[key], :unknown_key}
 
     request =
-      struct(Request, Map.merge(%{window: nil, box: nil, region: nil, latest: false}, axes))
+      struct(
+        Request,
+        Map.merge(%{window: nil, box: nil, region: nil, latest: false, order: []}, axes)
+      )
 
     case {unknown, check(request, schema)} do
       {[], result} -> result
@@ -324,7 +328,8 @@ defmodule Macaw.Data.Window do
       window_faults(request.window, type) ++
         box_faults(request.box, type) ++
         region_faults(request.region, schema) ++
-        latest_faults(request.latest, field, schema)
+        latest_faults(request.latest, field, schema) ++
+        Macaw.Data.Source.Order.faults(request.order, schema)
 
     case Enum.sort_by(faults, &elem(&1, 0)) do
       [] -> :ok

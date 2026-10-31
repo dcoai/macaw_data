@@ -196,6 +196,100 @@ defmodule Macaw.Data.FinishTest do
     assert Table.size(m4 |> Delivery.table!()) <= 12 and m4.served.reduced_by == :runtime
   end
 
+  @tag verifies: "finish-order"
+  test "an order the source did not honor is sorted; with a budget, its first rows are kept" do
+    # "Slowest first": the true top rows, where LTTB would keep a shape of the series.
+    d = Finish.finish(@hundred, described(@numbers), request(order: [{"v", :desc}], budget: 10))
+    rows = Delivery.rows(d)
+
+    assert length(rows) == 10
+    assert Enum.all?(rows, &(&1["v"] == 4))
+    assert Enum.map(rows, & &1["t"]) == Enum.take(for(t <- 1..100, rem(t * 7, 5) == 4, do: t), 10)
+    assert {d.served.ordered, d.served.reduced_by} == {:runtime, :runtime}
+
+    # Without a budget: every row, in the order, nothing reduced.
+    all = Finish.finish(@hundred, described(@numbers), request(order: [{"t", :desc}]))
+    assert ts(all) == Enum.to_list(100..1//-1)
+    assert {all.served.ordered, all.served.reduced_by} == {:runtime, nil}
+
+    # An order the source honored is not redone; it said so itself.
+    honored = Delivery.new(Delivery.rows(@hundred), served: [ordered: :source])
+
+    assert Finish.finish(honored, described(@numbers, [:order]), request(order: [{"t", :desc}])) ==
+             honored
+
+    # A source that cut the rows to its own budget, or short of the window, gives a sample:
+    # sorted here, the reader is told they need not be the first rows in the order.
+    cut =
+      Delivery.new(Enum.take_every(Delivery.rows(@hundred), 10), served: [reduced_by: :source])
+
+    sample =
+      Finish.finish(
+        cut,
+        described(@numbers, [:budget]),
+        request(order: [{"v", :desc}], budget: 10)
+      )
+
+    assert sample.served.ordered == :sample
+
+    assert Enum.map(Delivery.rows(sample), & &1["v"]) |> Enum.sort(:desc) ==
+             Enum.map(Delivery.rows(sample), & &1["v"])
+
+    capped = Delivery.new(Delivery.rows(@hundred), served: [capped: true])
+
+    assert Finish.finish(capped, described(@numbers), request(order: [{"v", :asc}])).served.ordered ==
+             :sample
+
+    # A request with no order is finished as before.
+    assert Finish.finish(@hundred, described(@numbers), request(budget: 10)).served.ordered == nil
+  end
+
+  @tag verifies: "finish-order"
+  test "reduce/5 of an ordered delivery keeps its head, so each pooled reader gets its own" do
+    pooled =
+      Finish.finish(
+        @hundred,
+        described(@numbers),
+        request(order: [{"t", :desc}], budget: Finish.pooled([60, 15]))
+      )
+
+    assert ts(pooled) == Enum.to_list(100..41//-1)
+
+    for method <- ["lttb", "m4"] do
+      reader = Finish.reduce(pooled, @numbers, 15, method)
+      assert ts(reader) == Enum.to_list(100..86//-1)
+      assert {reader.served.ordered, reader.served.reduced_by} == {:runtime, :runtime}
+    end
+
+    assert Finish.reduce(pooled, @numbers, 500) == pooled
+    assert_raise ArgumentError, fn -> Finish.reduce(pooled, @numbers, 15, "nope") end
+
+    # A table stays a table of the same columns.
+    table = Delivery.new(Delivery.table!(@hundred))
+    head = Finish.finish(table, described(@numbers), request(order: [{"t", :desc}], budget: 3))
+    assert %Table{} = head.rows
+    assert ts(head) == [100, 99, 98]
+  end
+
+  @tag verifies: "finish-order"
+  property "an ordered delivery finished to a budget is the first rows of all of them in the order" do
+    check all(
+            vs <- list_of(one_of([constant(nil), integer(-5..5)]), max_length: 80),
+            direction <- member_of([:asc, :desc]),
+            budget <- integer(1..30)
+          ) do
+      rows = for {v, t} <- Enum.with_index(vs, 1), do: %{"t" => t, "v" => v}
+      d = Delivery.new(rows, types: %{"t" => :number, "v" => :number})
+      order = [{"v", direction}]
+
+      finished = Finish.finish(d, described(@numbers), request(order: order, budget: budget))
+      expected = rows |> Macaw.Data.Source.Order.sort(order, @numbers) |> Enum.take(budget)
+
+      assert Delivery.rows(finished) == expected
+      assert finished.served.ordered == :runtime
+    end
+  end
+
   @tag verifies: "finish-only-removes"
   property "finishing never widens the window, never adds a row, and keeps at most the budget" do
     check all(

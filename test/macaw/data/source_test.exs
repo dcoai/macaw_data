@@ -60,7 +60,9 @@ defmodule Macaw.Data.SourceTest do
              Source.describe(%Pusher{}, %{params: %{"x" => %{type: :text, default: ""}}})
 
     assert Source.describe(%Pusher{answer: :bad}, %{}) == {:error, {:bad_describe, :whatever}}
-    assert Description.capabilities() == [:window, :box, :region, :latest, :budget, :push, :as_of]
+
+    assert Description.capabilities() ==
+             [:window, :box, :region, :latest, :order, :budget, :push, :as_of]
   end
 
   @tag verifies: "contract-description"

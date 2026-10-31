@@ -5,9 +5,9 @@ defmodule Macaw.Data.Source.Description do
 
   - `schema`: a `Macaw.Data.Schema`;
   - `params`: the parameters it takes, by name (strings), each a `Macaw.Data.Parameter`;
-  - `supports`: the capabilities it honors, distinct, among
-    `:window | :box | :region | :latest | :budget | :push | :as_of`. Every one is optional:
-    Macaw finishes what a source does not honor (spec/01 §2.4);
+  - `supports`: the capabilities it honors, distinct, among `:window | :box | :region |
+    :latest | :order | :budget | :push | :as_of`. Every one is optional: Macaw finishes
+    what a source does not honor (spec/01 §2.4);
   - `viewer_independent`: `true` declares the source answers every viewer the same, which
     only allows pooling across viewers, fetched with the anonymous viewer (spec/01 §6).
     `false` by default;
@@ -32,7 +32,7 @@ defmodule Macaw.Data.Source.Description do
   # A named resolution's seconds, for the span derived from it (spec/01 §1.1.3).
   @seconds %{second: 1, minute: 60, hour: 3600, day: 86_400}
 
-  @capabilities [:window, :box, :region, :latest, :budget, :push, :as_of]
+  @capabilities [:window, :box, :region, :latest, :order, :budget, :push, :as_of]
 
   @enforce_keys [:schema]
   defstruct [
@@ -46,7 +46,7 @@ defmodule Macaw.Data.Source.Description do
   ]
 
   @typedoc "A capability a source may honor."
-  @type capability :: :window | :box | :region | :latest | :budget | :push | :as_of
+  @type capability :: :window | :box | :region | :latest | :order | :budget | :push | :as_of
 
   @type t :: %__MODULE__{
           schema: Schema.t(),

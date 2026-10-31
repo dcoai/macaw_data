@@ -61,22 +61,35 @@ defmodule Macaw.Data.Source do
   @doc """
   One answer for a request, checked first against the description:
   `{:error, {:params, faults}}` without calling the source when a parameter is unknown,
-  missing or not legal (`Macaw.Data.Parameter.validate/2`). Otherwise the source is called
-  with every parameter, defaults filled in. An answer that is neither `{:ok, delivery}` nor
-  `{:error, reason}` is `{:error, {:bad_fetch, answer}}`.
+  missing or not legal (`Macaw.Data.Parameter.validate/2`), and `{:error, {:order,
+  faults}}` when the request's `order` names a field the schema does not describe, or one
+  of a type with no order (`Macaw.Data.Source.Order.faults/2`). Otherwise the source is
+  called with every parameter, defaults filled in. An answer that is neither `{:ok,
+  delivery}` nor `{:error, reason}` is `{:error, {:bad_fetch, answer}}`.
   """
   @spec fetch(t(), Description.t(), Request.t()) :: {:ok, Delivery.t()} | {:error, term()}
-  def fetch(%module{} = source, %Description{params: params}, %Request{} = request) do
-    case Parameter.validate(params, request.params) do
-      {:ok, filled} ->
-        case module.fetch(source, %{request | params: filled}) do
-          {:ok, %Delivery{}} = ok -> ok
-          {:error, _reason} = error -> error
-          other -> {:error, {:bad_fetch, other}}
-        end
+  def fetch(%module{} = source, %Description{} = description, %Request{} = request) do
+    with {:ok, filled} <- params(description, request),
+         :ok <- order(description, request) do
+      case module.fetch(source, %{request | params: filled}) do
+        {:ok, %Delivery{}} = ok -> ok
+        {:error, _reason} = error -> error
+        other -> {:error, {:bad_fetch, other}}
+      end
+    end
+  end
 
-      {:error, faults} ->
-        {:error, {:params, faults}}
+  defp params(%Description{params: params}, request) do
+    case Parameter.validate(params, request.params) do
+      {:ok, filled} -> {:ok, filled}
+      {:error, faults} -> {:error, {:params, faults}}
+    end
+  end
+
+  defp order(%Description{schema: schema}, request) do
+    case Macaw.Data.Source.Order.faults(request.order, schema) do
+      [] -> :ok
+      faults -> {:error, {:order, faults}}
     end
   end
 

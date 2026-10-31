@@ -125,6 +125,9 @@ defmodule Macaw.Data.Source.Conformance.Words do
   def words({:no_probe, :latest}),
     do: "the source names :latest, and requests: has none with latest: true to probe it"
 
+  def words({:no_probe, :order}),
+    do: "the source names :order, and requests: has none with an order to probe it"
+
   def words({:no_probe, :budget}),
     do: "the source names :budget, and budgets: has none to probe it"
 
@@ -160,6 +163,24 @@ defmodule Macaw.Data.Source.Conformance.Words do
     do:
       "#{probe(probe)}: the source names :latest and served a row of #{inspect(identity)} " <>
         "older than its last for the rest of the request"
+
+  def words({:order_unstated, probe, ordered}),
+    do:
+      "#{probe(probe)}: the source names :order and served ordered: #{inspect(ordered)}, " <>
+        "not :source"
+
+  def words({:not_ordered, probe}),
+    do: "#{probe(probe)}: the source names :order and served its rows out of the order asked"
+
+  def words({:not_first, probe}),
+    do:
+      "#{probe(probe)}: the source names :order and served rows that are not the first in " <>
+        "the order of its answer without a budget"
+
+  def words({:ordered, probe, by}),
+    do:
+      "#{probe(probe)}: ordered is #{inspect(by)}, which only Macaw states, when it orders " <>
+        "the rows itself (spec/01 §2.4)"
 
   def words({:as_of_origin, probe, as_of}),
     do:

@@ -118,6 +118,7 @@ defmodule Macaw.Data.Source.Conformance.Deliveries do
     {rows, row_faults} = read_rows(d, probe, o)
     window = Map.get(served, :window)
     reduced_by = Map.get(served, :reduced_by)
+    ordered = Map.get(served, :ordered)
 
     faults =
       row_faults ++
@@ -127,7 +128,9 @@ defmodule Macaw.Data.Source.Conformance.Deliveries do
         malformed(:params, is_map(Map.get(served, :params)), Map.get(served, :params), probe) ++
         malformed(:schema, is_nil(d.schema) or is_binary(d.schema), d.schema, probe) ++
         malformed(:resolution, resolution?(Map.get(served, :resolution)), served, probe) ++
-        if(reduced_by == :runtime, do: [{:reduced_by, probe, :runtime}], else: [])
+        malformed(:ordered, ordered in [nil, :source, :runtime, :sample], ordered, probe) ++
+        if(reduced_by == :runtime, do: [{:reduced_by, probe, :runtime}], else: []) ++
+        if(ordered in [:runtime, :sample], do: [{:ordered, probe, ordered}], else: [])
 
     {faults, rows}
   end

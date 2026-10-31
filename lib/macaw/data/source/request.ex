@@ -12,6 +12,9 @@ defmodule Macaw.Data.Source.Request do
     `:number` field, or `nil` (visualize's region, kept so a region-supporting feed has an
     equivalent; the owner's decision, 2026-10-27);
   - `latest`: `true` asks for each identity's latest row (spec/01 §1.4);
+  - `order`: the order the reader looks at the rows in, `[{field, :asc | :desc}, ...]`,
+    the first key deciding first, or `[]` for none (`Macaw.Data.Source.Order`): with a
+    budget, the reader wants the first rows in it, not a sample;
   - `budget`: the most rows the reader wants, or `nil`;
   - `as_of`: the `DateTime` the answer is as of, for a source supporting `:as_of`, or `nil`;
   - `viewer`: the host's viewer, **opaque** here, passed to the source and never stored;
@@ -31,6 +34,7 @@ defmodule Macaw.Data.Source.Request do
             box: nil,
             region: nil,
             latest: false,
+            order: [],
             budget: nil,
             as_of: nil,
             viewer: nil,
@@ -43,6 +47,7 @@ defmodule Macaw.Data.Source.Request do
           box: %{west: number(), south: number(), east: number(), north: number()} | nil,
           region: %{term() => [term()]} | nil,
           latest: boolean(),
+          order: Macaw.Data.Source.Order.t(),
           budget: pos_integer() | nil,
           as_of: DateTime.t() | nil,
           viewer: term(),
@@ -56,6 +61,7 @@ defmodule Macaw.Data.Source.Request do
     :box,
     :region,
     :latest,
+    :order,
     :budget,
     :as_of,
     :viewer,
@@ -112,6 +118,7 @@ defmodule Macaw.Data.Source.Request do
   defp field(:region, _), do: [{[:region], {:type, :region}}]
   defp field(:latest, b) when is_boolean(b), do: []
   defp field(:latest, _), do: [{[:latest], {:type, :boolean}}]
+  defp field(:order, order), do: Macaw.Data.Source.Order.shape(order)
   defp field(:budget, nil), do: []
   defp field(:budget, n) when is_integer(n) and n > 0, do: []
   defp field(:budget, _), do: [{[:budget], {:type, :pos_integer}}]
