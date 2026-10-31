@@ -49,6 +49,13 @@ defmodule Macaw.Data.Test.TraceTest do
     end
   end
 
+  # The module the next test writes and loads: absent when this file is compiled. Its call
+  # is checked as a remote call to a literal module once every test file is required, and
+  # tests start while the rest are still being required, so without this the check would
+  # warn exactly when it ran before the test did. Under --warnings-as-errors that aborted a
+  # suite whose every test passed, at random with the seed and the load (macaw_data#72).
+  @compile {:no_warn_undefined, :macaw_data_trace_test_lazy}
+
   # A module on the code path but not loaded until its first call, as modules are in the
   # test environment: a pattern set before it loads would match nothing.
   @tag :tmp_dir

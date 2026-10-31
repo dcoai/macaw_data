@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Changes
+
+- **Changed:** each build stages the native kernels in its own directory (#72, spec/04 §1.7). Zigler stages a module in `/tmp/<module>` by default, one directory for every checkout, worktree and build path on the host, so two builds at once wrote each other's `build.zig` and `module.zig`. The kernels now stage under the build's path, `<build path>/zigler/`, unless `ZIGLER_STAGING_ROOT` names another root.
+
 ## v0.8.0 (2026-10-31)
 
 **The source contract is a time-varying relation, and a table is chunked** (macaw_data#10, #9), with **optional native kernels** (#38). A push is a numbered changelog of increments, retractions and range replacements, with settled ranges and derived watermarks. A table is a list of immutable chunks with stable ids, and every step runs a chunk at a time, through a caching contract a caller holds. Where Zig is in the build, the hot steps run natively, bit for bit as their Elixir path, and a 50k-row live frame meets visualize's ~17 ms budget. The suite's verdicts no longer depend on how loaded the host is. On macaw_layers `~> 0.3.0`, as 0.7.0 was. This release is breaking: the guide below is what an adopter of 0.7.0 changes, and the entries after it are the detail.

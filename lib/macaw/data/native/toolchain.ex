@@ -54,6 +54,15 @@ defmodule Macaw.Data.Native.Toolchain do
        "macaw_data: config :macaw_data, native: #{inspect(mode)} is not :optional or " <>
          ":required (spec/04 §1.7)"}
 
+  @doc false
+  # Where Zigler stages this build's modules: `ZIGLER_STAGING_ROOT` where the environment
+  # sets it, else `zigler/` in the build's own path. Zigler's default is the system's temp
+  # directory, one `/tmp/<module>` for every checkout, worktree and build path on the host,
+  # so two builds at once wrote each other's build.zig and module.zig (macaw_data#72).
+  @spec staging_root(Path.t(), String.t() | nil) :: Path.t()
+  def staging_root(_build_path, root) when is_binary(root) and root != "", do: root
+  def staging_root(build_path, _root), do: Path.join(build_path, "zigler")
+
   defp candidate(want) do
     Enum.find_value(
       [

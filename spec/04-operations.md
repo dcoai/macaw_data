@@ -240,6 +240,7 @@ asked for parallel, a run above parallel_rows/0 with two chunks or more works it
 
 - **Identical results.** A kernel answers exactly what the step's Elixir path answers, term for term and bit for bit, so a run with kernels equals one without. Its floating point is Zig's strict mode, its default: no expression is reordered, contracted into a fused multiply-add or assumed finite, and each follows the Elixir path's order of operations. Where the Elixir path would answer with an integer past 64 bits, or raise, the kernel answers `:fallback` and the Elixir path runs, so the edge cases are the Elixir path's own.
 - **Optional, and visible.** The kernels are built when the build has Zigler and a Zig of the version Zigler targets (`.tool-versions`: Zigler 0.16.0, Zig 0.16.0). Zigler is an optional dependency: an adopter that wants the kernels lists `{:zigler, "~> 0.16.0", runtime: false}`. Without the toolchain the build prints a warning, not a compiler diagnostic, so a `--warnings-as-errors` build without Zig still succeeds, and every step runs its Elixir path. **`Macaw.Data.Native.loaded?/0`** is decided once, when the application starts, by asking the kernels their interface version, and held in `:persistent_term`.
+- **Each build stages its own.** Zigler builds a module in a staging directory, by default one `/tmp/<module>` shared by every checkout, worktree and build path on the host, so two builds at once overwrite each other's `build.zig` and `module.zig`. The kernels, and the suite's panicking kernel, are staged under the build's own path, `<build path>/zigler/`, unless `ZIGLER_STAGING_ROOT` names another root (macaw_data#72).
 - **`config :macaw_data, native: :optional | :required`**, default `:optional`. It is read at compile time. The deployer knows whether this build is expected to be fast. Set wrong, it fails loudly: `:required` without the toolchain fails the build, and `:required` with kernels that don't load fails the application's start. `:optional` degrades to the Elixir path, visible through `loaded?/0`.
 - **The 1 ms rule.** A kernel reads a row in nanoseconds, and builds its answer's terms at tens of nanoseconds each, so a call's time follows its rows and the size of its answer. A call over at most `Native.sync_rows/0` rows (8,192, one canonical chunk) runs on a normal scheduler, within the BEAM's 1 ms even when every row answers a term of its own. A larger one, a one-chunk table built from rows, runs the same kernel on a dirty CPU scheduler (`Native.scheduler/1`). Each kernel's test states its call's time.
 - **Reductions count no kernel's work on a normal scheduler.** A statement of work in reductions, such as the frame's (§1.5), is measured on the Elixir path: `Native.elixir/1` runs a function with every step in its process on its Elixir path, and `Native.active?/0`, which each step with a kernel asks, is false inside it. The Elixir path is also the reference each kernel is held equal to.
@@ -252,6 +253,10 @@ loaded? is a boolean held in persistent_term, decided when the application start
 
 ```test:operations-native-config
 the toolchain and the native: setting decide the build: built with a toolchain, the Elixir path and a warning without one under :optional, a failed build without one under :required, and any other setting refused
+```
+
+```test:operations-native-staged
+a build stages the kernels under its own build path unless ZIGLER_STAGING_ROOT names a root, and a build with the toolchain staged them there
 ```
 
 ```test:operations-native-scheduler

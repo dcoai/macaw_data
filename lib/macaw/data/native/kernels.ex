@@ -12,6 +12,10 @@ case Toolchain.decide(
     {:ok, exe} = Toolchain.detect()
     # Zigler runs Zig from a staging directory; it is given the executable itself.
     System.put_env("ZIG_EXECUTABLE_PATH", exe)
+    # A staging directory of this build's own (`Toolchain.staging_root/2`, macaw_data#72).
+    root = Toolchain.staging_root(Mix.Project.build_path(), System.get_env("ZIGLER_STAGING_ROOT"))
+    File.mkdir_p!(root)
+    System.put_env("ZIGLER_STAGING_ROOT", root)
 
     defmodule Macaw.Data.Native.Kernels do
       @moduledoc false

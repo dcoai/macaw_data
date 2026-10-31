@@ -4,6 +4,9 @@
 with {:module, toolchain} <- Code.ensure_compiled(Macaw.Data.Native.Toolchain),
      {:ok, exe} <- toolchain.detect() do
   System.put_env("ZIG_EXECUTABLE_PATH", exe)
+  root = toolchain.staging_root(Mix.Project.build_path(), System.get_env("ZIGLER_STAGING_ROOT"))
+  File.mkdir_p!(root)
+  System.put_env("ZIGLER_STAGING_ROOT", root)
 
   defmodule Macaw.Data.Test.NativePanic do
     @moduledoc false

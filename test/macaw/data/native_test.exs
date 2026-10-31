@@ -47,6 +47,23 @@ defmodule Macaw.Data.NativeTest do
     end
   end
 
+  describe "the staging directory" do
+    @tag verifies: "operations-native-staged"
+    test "a build stages the kernels under its own build path unless ZIGLER_STAGING_ROOT names a root" do
+      assert Toolchain.staging_root("/b/_build/test", nil) == "/b/_build/test/zigler"
+      assert Toolchain.staging_root("/b/_build/test", "") == "/b/_build/test/zigler"
+      assert Toolchain.staging_root("/b/_build/test", "/cache/zigler") == "/cache/zigler"
+
+      # Built with the toolchain, this build staged its kernels in its own path.
+      if Native.built?() do
+        root =
+          Toolchain.staging_root(Mix.Project.build_path(), System.get_env("ZIGLER_STAGING_ROOT"))
+
+        assert File.regular?(Path.join([root, "Elixir.Macaw.Data.Native.Kernels", "build.zig"]))
+      end
+    end
+  end
+
   describe "the scheduler" do
     @tag verifies: "operations-native-scheduler"
     test "a call over at most sync_rows rows, one canonical chunk, runs on a normal scheduler, a larger one dirty" do
