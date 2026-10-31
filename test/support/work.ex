@@ -49,7 +49,11 @@ defmodule Macaw.Data.Test.Work do
   168,691; its merges 167,635 to 167,642). So a guard that wants a count exact compares the
   least of several, or allows that bound. A signal another process sends the counted one
   is charged to it too (a `process_info/2` request a few reductions, a link or a monitor up
-  to 1,212): the counted function runs in a process nothing else is told of.
+  to 1,212): the counted function runs in a process nothing else is told of. So is the
+  runtime's own: a module purged anywhere in the VM sends every process a check of its
+  literal area, a few reductions each (a loop of 200,006 read 200,008 and 200,010 while
+  another process purged modules, macaw_data#81). A guard that wants a count exact runs
+  where no other test loads or purges code: not async.
 
   The function must do its work in the process it runs in — everything the suite
   measures this way is synchronous — and must not depend on the caller's process: its

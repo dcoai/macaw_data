@@ -1,7 +1,9 @@
 defmodule Macaw.Data.Test.WorkTest do
   # The suite's counter of work (macaw_data#66): a count is exact, but for the one BIF its
-  # moduledoc names, and that one's residue stays within the bound it states.
-  use ExUnit.Case, async: true
+  # moduledoc names, and that one's residue stays within the bound it states. Not async: a
+  # module purged anywhere in the VM charges every process its literal-area check, and the
+  # async tests compile and purge modules (#81); the sync tests run one at a time.
+  use ExUnit.Case, async: false
 
   alias Macaw.Data.Test.Work
 
