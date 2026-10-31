@@ -12,8 +12,7 @@ defmodule Macaw.Data.Operations.FrameLoopLoadTest do
   alias Macaw.Data.Test.{FrameLoop, Saturate, Work}
 
   # The per-chunk frame, its merges alone and its full recompute, counted with every
-  # kernel call on a normal scheduler, each the least of three counts: the counter's
-  # residue only ever adds (a count of 168,617 once read 169,597, idle; macaw_data#65, #66).
+  # kernel call on a normal scheduler, each the least of three counts (macaw_data#65, #66).
   defp counts(window, cache, warm) do
     count = fn fun ->
       Enum.min(
@@ -38,10 +37,11 @@ defmodule Macaw.Data.Operations.FrameLoopLoadTest do
     :ok = Saturate.stop(busy)
 
     if Native.loaded?() do
-      # Within the counter's stated residue, 0.2 % (Macaw.Data.Test.Work): a dirty call
-      # charged by its time moved these by up to 45 % (macaw_data#60).
+      # Within the counter's one residue, `:maps.from_list/1`'s charge (Macaw.Data.Test.Work):
+      # 4 reductions at most on these, measured; 16 allowed (macaw_data#66). A dirty call
+      # charged by its time moved them by up to 45 % (macaw_data#60).
       for {i, s} <- Enum.zip(Tuple.to_list(idle), Tuple.to_list(saturated)) do
-        assert abs(s - i) <= div(i, 500), "idle #{inspect(idle)}, saturated #{inspect(saturated)}"
+        assert abs(s - i) <= 16, "idle #{inspect(idle)}, saturated #{inspect(saturated)}"
         assert s <= 250_000, "saturated #{inspect(saturated)}"
       end
     end

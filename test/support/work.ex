@@ -18,8 +18,7 @@ defmodule Macaw.Data.Test.Work do
   collections, idle and loaded; in CI two counts of one gallery render in fresh processes
   were 8.5 % apart. So the run is counted in a process whose heap already holds
   everything the run allocates, and it collects nothing: that run counted 200,007 every
-  time, and a render's counts agree within 0.2 %, most to a few dozen reductions, idle
-  or loaded (the residue is how a yielding BIF is charged against its time slice).
+  time.
 
   The function runs twice, each time in a process of its own. The first run loads any
   module it calls first and measures the words it allocates, read from the collections
@@ -35,6 +34,22 @@ defmodule Macaw.Data.Test.Work do
   one input). The counted run's scheduling is traced too, and a run that went to a dirty
   scheduler is an error that names the cause, as a collection is: a count with the kernels
   in it is taken inside `Macaw.Data.Native.normal_schedulers/1`.
+
+  **The count is exact but for one BIF** (macaw_data#66). The run's trace goes to a
+  process held suspended through it: a tracer waiting in `receive` is woken by each trace
+  message, and the counted process was now and then charged for the wake-up, 4 reductions
+  at a time. That was most of the residue a count used to have: the per-chunk frame read
+  168,683 to 168,692, and with the trace held it reads one count every time, idle (168,688
+  in one VM, 168,687 to 168,690 across VMs). What remains is `:maps.from_list/1` building
+  a map of more than 32 keys, which `MapSet.new/1`, `Map.new/1`, a comprehension `into:` a
+  map and `Map.filter/2` all call: its charge moves from call to call, idle or loaded, by a
+  few reductions per hundred keys (20 to 22 for 33 keys, 56 to 60 for 100, 627 to 701 for
+  1,000), the same work charged differently, inherent to the runtime
+  (`Macaw.Data.Test.WorkTest` holds it to its bound). The frame's counts move by 4 at most from it, saturated (168,684 to
+  168,691; its merges 167,635 to 167,642). So a guard that wants a count exact compares the
+  least of several, or allows that bound. A signal another process sends the counted one
+  is charged to it too (a `process_info/2` request a few reductions, a link or a monitor up
+  to 1,212): the counted function runs in a process nothing else is told of.
 
   The function must do its work in the process it runs in — everything the suite
   measures this way is synchronous — and must not depend on the caller's process: its
@@ -81,13 +96,13 @@ defmodule Macaw.Data.Test.Work do
   end
 
   # `fun` run in a process spawned for it alone, with `options`, its collections and its
-  # scheduling traced to this process: the reductions it spent, its result, how many times
-  # it collected, how many words it allocated — each collection's young heap at its start,
-  # less what the one before it left, and what the last one left against the heap at the
-  # end — and how many times it came back from a dirty scheduler. The
-  # process knows its callers as a task does, so a log it writes is captured with the
-  # test's. Every wait is on a message, with no `after`: the test's own timeout bounds a
-  # run that never ends (spec/12 §6).
+  # scheduling traced to a collector held suspended (`collector/0`): the reductions it
+  # spent, its result, how many times it collected, how many words it allocated — each
+  # collection's young heap at its start, less what the one before it left, and what the
+  # last one left against the heap at the end — and how many times it came back from a
+  # dirty scheduler. The process knows its callers as a task does, so a log it writes is
+  # captured with the test's. Every wait is on a message, with no `after`: the test's own
+  # timeout bounds a run that never ends (spec/12 §6).
   defp run(fun, options) do
     parent = self()
     callers = [parent | Process.get(:"$callers", [])]
@@ -107,7 +122,8 @@ defmodule Macaw.Data.Test.Work do
         [:monitor | options]
       )
 
-    :erlang.trace(pid, true, [:garbage_collection, :running])
+    collector = collector()
+    :erlang.trace(pid, true, [:garbage_collection, :running, {:tracer, collector}])
     send(pid, tag)
 
     receive do
@@ -115,37 +131,56 @@ defmodule Macaw.Data.Test.Work do
         receive do: ({:DOWN, ^monitor, :process, ^pid, _reason} -> :ok)
         delivered = :erlang.trace_delivered(pid)
         receive do: ({:trace_delivered, ^pid, ^delivered} -> :ok)
-        {collections, words, dirty} = traced(pid, heap, 0, 0, 0, 0)
+        {collections, words, dirty} = traced(pid, heap, collected(collector))
         %{work: work, result: result, collections: collections, words: words, dirty: dirty}
 
       {:DOWN, ^monitor, :process, ^pid, reason} ->
+        collected(collector)
         crashed(reason)
     end
   end
 
-  # What was traced from `pid`, all delivered: how many collections, the words allocated,
-  # and how many times it was scheduled back in from a dirty scheduler, which a dirty call
-  # returns through (`erts_internal:dirty_nif_finalizer/1`). Every other schedule in or out
-  # is a preemption or a wait, which charges nothing. `after 0` reads the mailbox as it
-  # stands, which `:erlang.trace_delivered/1` has made complete.
-  defp traced(pid, heap, left, words, n, dirty) do
-    receive do
-      {:trace, ^pid, start, info} when start in [:gc_minor_start, :gc_major_start] ->
-        words = words + info[:heap_size] + info[:mbuf_size] - left
-        traced(pid, heap, left, words, n + 1, dirty)
-
-      {:trace, ^pid, finish, info} when finish in [:gc_minor_end, :gc_major_end] ->
-        traced(pid, heap, info[:heap_size], words, n, dirty)
-
-      {:trace, ^pid, :in, {:erts_internal, :dirty_nif_finalizer, _arity}} ->
-        traced(pid, heap, left, words, n, dirty + 1)
-
-      {:trace, ^pid, running, _mfa} when running in [:in, :out] ->
-        traced(pid, heap, left, words, n, dirty)
-    after
-      0 -> {n, words + heap - left, dirty}
-    end
+  # The process the counted run's trace goes to, suspended, so a trace message only joins
+  # its queue: a tracer waiting in `receive` is woken by each one, and the counted process
+  # is now and then charged for that wake-up, 4 reductions at a time (macaw_data#66).
+  # Linked, so it ends with the caller whatever happens.
+  defp collector do
+    collector = spawn_link(fn -> receive do: (:never_sent -> :ok) end)
+    true = :erlang.suspend_process(collector)
+    collector
   end
+
+  # The collector's queue, every trace message of the run, read from outside it; then the
+  # collector, done with, is ended.
+  defp collected(collector) do
+    {:messages, traces} = Process.info(collector, :messages)
+    Process.unlink(collector)
+    Process.exit(collector, :kill)
+    traces
+  end
+
+  # What was traced from `pid`, all delivered (`:erlang.trace_delivered/1`), in order: how
+  # many collections, the words allocated, and how many times it was scheduled back in from
+  # a dirty scheduler, which a dirty call returns through
+  # (`erts_internal:dirty_nif_finalizer/1`). Every other schedule in or out is a preemption
+  # or a wait, which charges nothing.
+  defp traced(pid, heap, traces) do
+    {left, words, n, dirty} = Enum.reduce(traces, {0, 0, 0, 0}, &trace(pid, &1, &2))
+    {n, words + heap - left, dirty}
+  end
+
+  defp trace(pid, {:trace, pid, start, info}, {left, words, n, dirty})
+       when start in [:gc_minor_start, :gc_major_start],
+       do: {left, words + info[:heap_size] + info[:mbuf_size] - left, n + 1, dirty}
+
+  defp trace(pid, {:trace, pid, finish, info}, {_left, words, n, dirty})
+       when finish in [:gc_minor_end, :gc_major_end],
+       do: {info[:heap_size], words, n, dirty}
+
+  defp trace(pid, {:trace, pid, :in, {:erts_internal, :dirty_nif_finalizer, _}}, acc),
+    do: put_elem(acc, 3, elem(acc, 3) + 1)
+
+  defp trace(pid, {:trace, pid, running, _mfa}, acc) when running in [:in, :out], do: acc
 
   defp crashed({exception, stacktrace}) when is_exception(exception),
     do: reraise(exception, stacktrace)
