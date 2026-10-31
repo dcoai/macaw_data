@@ -466,10 +466,13 @@ the version is pinned for two schemas, is the kernel's digest of the schema's te
 
 ### 1.11 The JSON form {#sources-schema-json}
 
-**`to_json/1` and `from_json/2` are public,** so no adopter reads a hidden function (visualize#879). **It is an adapter at the edge:** the schema's identity, equality and validity are its term's, and the version never goes through it (§1.10). The adapter is its own module, `Macaw.Data.Schema.Form`, and the schema's `to_map/1`, `to_json/1`, `from_map/1` and `from_json/2` delegate to it (macaw_data#35). The map form, `to_map/1`, is a list of `[name, description]` pairs sorted by name: every description key by its string, every name, state and role as the string the schema holds, every word of the vocabulary (`type`, `quantity`, `polarity`, `metric_kind`) as its string, `status` as sorted `[state, role]` pairs, `bounds`, `values` and booleans as they are, and a value entry's `color` in macaw_layers' color form (`Macaw.Layers.Color.Form`, [macaw_layers 04 §1.6](https://github.com/dcoai/macaw_layers/blob/main/spec/04-themes.md#themes-color-adapters)): a literal as `{"$rgb": "#2e7d32"}` (or its four fields when it is not 8-bit exact), a typed color by its tags, `{"$color": "good"}`, `{"$alpha": [{"$color": "bad"}, 0.74]}`. `to_json/1` is it encoded.
+**`to_json/1` and `from_json/2` are public,** so no adopter reads a hidden function (visualize#879). **It is an adapter at the edge:** the schema's identity, equality and validity are its term's, and the version never goes through it (§1.10). The adapter is its own module, `Macaw.Data.Schema.Form`, and the schema's `to_map/1`, `to_json/1`, `from_map/1` and `from_json/2` delegate to it (macaw_data#35). The map form, `to_map/1`, is a list of `[name, description]` pairs sorted by name: every description key by its string, every name, state and role as the string the schema holds, every word of the vocabulary (`type`, `quantity`, `polarity`, `metric_kind`) as its string, `status` as sorted `[state, role]` pairs, `bounds`, `values` and booleans as they are, and a value entry's `color` in macaw_layers' color form (`Macaw.Layers.Color.Form`, [macaw_layers 04 §1.6](https://github.com/dcoai/macaw_layers/blob/main/spec/04-themes.md#themes-color-adapters)): a literal as `{"$rgb": "#2e7d32"}` (or its four fields when it is not 8-bit exact), a typed color by its tags, `{"$color": "good"}`, `{"$alpha": [{"$color": "bad"}, 0.74]}`.
+
+**The JSON document is versioned; the map form is not** (macaw_data#84). `to_json/1` writes an object, `{"$version": 1, "fields": [[name, description], …]}`: the stamp is the schema form's own version line (`Macaw.Layers.Version`, [macaw_layers 01 §4](https://github.com/dcoai/macaw_layers/blob/main/spec/01-kernel.md#kernel-versions)), current 1, and `fields` is `to_map/1`. `to_map/1` stays the bare list, for a document that embeds a schema (a derived source's `"schema"`, [02 §1.5](02-derived.md#derived-forms)): the kernel's stamp sits only at a document's root, so what embeds it versions it. So the first change to the form can tell an old document from a new one.
 
 **Reading** (`from_map/1`, `from_json/2`):
-- `from_json/2` reads through the kernel's gates first, the byte limit and the scan that stops at a depth or items limit ([macaw_layers 01 §5](https://github.com/dcoai/macaw_layers/blob/main/spec/01-kernel.md#kernel-gates)), `limits:` tightening them, and then decodes;
+- `from_json/2` reads through the kernel's gates, `Macaw.Layers.Form.gates/3` ([macaw_layers 01 §5](https://github.com/dcoai/macaw_layers/blob/main/spec/01-kernel.md#kernel-gates)), and has no gate of its own. The gates are the byte limit; the scan that stops at a depth or items limit before any value is built; the decode, where malformed JSON is the kernel's `{[], {:json, words}}`; the version, where a newer stamp is refused by name, `{[], {:newer_schema, needs, 1}}`, before anything else is read, and a stamp that is no positive integer is `{["$version"], {:type, :pos_integer}}`; the migration; and the recount. `limits:` tightens them. The object holds `"$version"` and `"fields"` only: another key is `{[key], :unknown_key}`, and no `"fields"` is `{["fields"], :required}`. `format_error/1` words the kernel's reasons in the kernel's words (`Macaw.Layers.Fault`);
+- **a legacy document,** the bare list `to_json/1` wrote before macaw_data#84, has no stamp and no object root. The kernel's line starts at 1 and reads an unstamped object as current, so the list is neither a version 0 on it nor taken as whatever is current. **It is told by its root**, a list, which no version of the object has. Once the gates have held its bytes and nesting to the limits, it is lifted to version 1, `{"$version": 1, "fields": list}`, the version whose content it is, and held to the gates again as that document's map form, so every later migration step applies to it. A root that is neither an object nor a list is the kernel's `{[], {:type, :map}}`;
 - each word is read through its own closed vocabulary, every name, state and role is a string, and an entry's `color` is read inside out by the colors' own reader (`Macaw.Layers.Color.Form.decode_value/2`): **no atom is made from a document**;
 - a color the reader does not read, a bare string among them, stays as written, for `new/1` to refuse as `{:type, :color}`: JSON text is no more a color than any other string;
 - a key no description or entry has stays its string, and a word outside its vocabulary stays its string, for `new/1` to refuse by name;
@@ -479,11 +482,19 @@ the version is pinned for two schemas, is the kernel's digest of the schema's te
 A schema read back from its JSON form has the same version and the same JSON form, a literal or a typed color in an entry included; one spelled with strings, as JSON spells it, reads back exactly.
 
 ```test:schema-json-form
-to_map/1 is the sorted pairs with every name, state, role and word by its spelling, status as sorted pairs, bounds and values as they are, and to_json/1 is it encoded
+to_map/1 is the sorted pairs with every name, state, role and word by its spelling, status as sorted pairs, bounds and values as they are, and to_json/1 is them stamped under fields
 ```
 
 ```test:schema-json-read
 from_json/2 reads words through their vocabularies, names and states as strings and an entry's color by the colors' reader, makes no atom, refuses a color as text, refuses an unknown word or key by new/1, refuses a $url by type, refuses a non-schema and malformed JSON, and applies the byte and depth limits
+```
+
+```test:schema-json-document
+to_json/1 is the object stamped $version 1 with the pairs under fields, to_map/1 the bare pairs; from_json/2 reads it back; a newer stamp is refused by name before the fields are read, a stamp of 0 by type; a key beside the two and no fields are the kernel's faults; the kernel's reasons are worded in its words
+```
+
+```test:schema-json-legacy
+a legacy list document reads to the same schema, lifted to version 1, its bytes and depth held to the limits first; a root that is neither an object nor a list is refused by type
 ```
 
 ```test:schema-json-round-trip

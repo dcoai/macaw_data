@@ -6,9 +6,27 @@ defmodule Macaw.Data.Schema.Form do
   # read with `Schema.new/1`. The words it reads are the schema's own vocabularies, each read
   # through its closed table, and an entry's color is read by the colors' own reader, so no
   # atom is made from a document.
+  #
+  # The map form is the bare list of pairs, for a document that embeds a schema (a derived
+  # source's `"schema"`), whose own stamp versions it. The JSON document is an object at its
+  # root, `{"$version": 1, "fields": pairs}`, on its own version line (`Macaw.Layers.Version`),
+  # read through the kernel's gates (`Macaw.Layers.Form.gates/3`) and no gate of its own.
+
+  @behaviour Macaw.Layers.Version
 
   alias Macaw.Data.{Quantity, Schema}
-  alias Macaw.Layers.{Color, Limits, Scan, Vocabulary}
+  alias Macaw.Layers.{Color, Version, Vocabulary}
+  alias Macaw.Layers.Form, as: Adapter
+
+  @stamp Version.stamp()
+
+  # The line starts at 1: no stamped document is older. The list written before the line
+  # (macaw_data#84) is lifted to version 1 by its root, not by a step.
+  @impl Version
+  def current, do: 1
+
+  @impl Version
+  def step(document, _from), do: {:ok, document}
 
   @doc false
   @spec to_map(Schema.t()) :: [[term()]]
@@ -16,7 +34,8 @@ defmodule Macaw.Data.Schema.Form do
 
   @doc false
   @spec to_json(Schema.t()) :: String.t()
-  def to_json(%Schema{} = schema), do: JSON.encode!(to_map(schema))
+  def to_json(%Schema{} = schema),
+    do: JSON.encode!(%{@stamp => current(), "fields" => to_map(schema)})
 
   @doc false
   @spec from_map(term()) :: {:ok, Schema.t()} | {:error, [Schema.error(), ...]}
@@ -31,23 +50,38 @@ defmodule Macaw.Data.Schema.Form do
   @doc false
   @spec from_json(binary(), keyword()) :: {:ok, Schema.t()} | {:error, [Schema.error(), ...]}
   def from_json(json, opts \\ []) when is_binary(json) do
-    limits = Limits.new(Keyword.get(opts, :limits, []))
+    gates = Keyword.take(opts, [:limits])
 
-    cond do
-      byte_size(json) > limits.bytes ->
-        {:error, [{[], {:limit, :bytes, limits.bytes, byte_size(json)}}]}
+    with {:ok, document} <- json |> Adapter.gates(__MODULE__, gates) |> legacy(json, gates),
+         do: fields(document)
+  end
 
-      match?({:error, _}, Scan.scan(json, limits)) ->
-        {:error, fault} = Scan.scan(json, limits)
-        {:error, [fault]}
+  # The kernel's gates refuse a root that is no object by its type, once its bytes and its
+  # nesting are within the limits. A list there is the legacy document, the bare pairs
+  # written before the version line: lifted to version 1, the version whose content it is,
+  # and held to the gates again as that document's map form.
+  defp legacy({:error, [{[], {:type, :map}}]} = refused, json, gates) do
+    case JSON.decode(json) do
+      {:ok, pairs} when is_list(pairs) ->
+        Adapter.gates(%{@stamp => 1, "fields" => pairs}, __MODULE__, gates)
 
-      true ->
-        case JSON.decode(json) do
-          {:ok, map} -> from_map(map)
-          {:error, reason} -> {:error, [{[], {:json, inspect(reason)}}]}
-        end
+      _other ->
+        refused
     end
   end
+
+  defp legacy(gated, _json, _gates), do: gated
+
+  # The document holds the stamp and the fields, and nothing else: another key, and no
+  # fields, are the kernel's faults at the key.
+  defp fields(%{"fields" => pairs} = document) do
+    case document |> Map.keys() |> Kernel.--([@stamp, "fields"]) |> Enum.sort() do
+      [] -> from_map(pairs)
+      extra -> {:error, for(key <- extra, do: {[key], :unknown_key})}
+    end
+  end
+
+  defp fields(_document), do: {:error, [{["fields"], :required}]}
 
   # Names, states and roles are strings already (`new/1`); the adapter writes the keys
   # and the words of the vocabulary as theirs.

@@ -858,7 +858,11 @@ defmodule Macaw.Data.Schema do
   @spec to_map(t()) :: [[term()]]
   defdelegate to_map(schema), to: Form
 
-  @doc "The schema's JSON form: `to_map/1`, encoded."
+  @doc """
+  The schema's JSON document (spec/01 §1.11): an object stamped with the form's version,
+  `{"$version": 1, "fields": pairs}`, `fields` being `to_map/1`, encoded. The map form
+  stays the bare pairs, for a document that embeds a schema and versions it.
+  """
   @spec to_json(t()) :: String.t()
   defdelegate to_json(schema), to: Form
 
@@ -873,9 +877,13 @@ defmodule Macaw.Data.Schema do
   defdelegate from_map(pairs), to: Form
 
   @doc """
-  The schema a JSON document holds: read through the kernel's limits and scan first
-  (`Macaw.Layers.Limits`, `Macaw.Layers.Scan`), so a document over a limit is refused
-  before it is decoded, then decoded and read by `from_map/1`. `limits:` tightens them.
+  The schema a JSON document holds: read through the kernel's gates
+  (`Macaw.Layers.Form.gates/3`: the bytes, the scan's depth and items before any value is
+  built, the decode, a newer `"$version"` refused by name, the migration, the recount),
+  `limits:` tightening them, then its `"fields"` read by `from_map/1`. The document holds
+  `"$version"` and `"fields"` only. A legacy document, the bare pairs `to_json/1` wrote
+  before the version line, has a list for its root: once its bytes and nesting pass the
+  gates, it is lifted to version 1, the version whose content it is, and read from there.
   """
   @spec from_json(binary(), keyword()) :: {:ok, t()} | {:error, [error(), ...]}
   defdelegate from_json(json, opts \\ []), to: Form
@@ -971,4 +979,11 @@ defmodule Macaw.Data.Schema do
 
   defp words(:not_in_values),
     do: "is a state the field's values do not list: the values are every value there is"
+
+  # The kernel's own reasons, from the JSON document's gates (a limit, malformed JSON, a
+  # newer version), in the kernel's words (`Macaw.Layers.Fault`).
+  defp words(reason) do
+    ": " <> words = Macaw.Layers.Fault.format({[], reason}, root: "")
+    words
+  end
 end

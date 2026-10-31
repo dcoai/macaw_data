@@ -1133,7 +1133,8 @@ defmodule Macaw.Data.SchemaTest do
                ["where", %{"type" => "point", "window" => true}]
              ]
 
-      assert JSON.decode!(Schema.to_json(schema)) == Schema.to_map(schema)
+      assert JSON.decode!(Schema.to_json(schema)) ==
+               %{"$version" => 1, "fields" => Schema.to_map(schema)}
     end
 
     @tag verifies: "schema-json-round-trip"
@@ -1219,7 +1220,7 @@ defmodule Macaw.Data.SchemaTest do
                   {["v", "scale"], :unknown_key}
                 ]}
 
-      assert Schema.from_json(~s({"v":1})) == {:error, [{[], {:type, :schema}}]}
+      assert Schema.from_json(~s({"v":1})) == {:error, [{["fields"], :required}]}
       assert Schema.from_json("[") |> elem(0) == :error
 
       assert Schema.from_json(~s([["v",{"type":"number"}]]), limits: [bytes: 5]) ==
@@ -1227,6 +1228,60 @@ defmodule Macaw.Data.SchemaTest do
 
       assert {:error, [{_, {:limit, :depth, 2, 3}}]} =
                Schema.from_json(~s([["v",{"type":"number"}]]), limits: [depth: 2])
+    end
+
+    @tag verifies: "schema-json-document"
+    test "the JSON document is an object stamped with the form's version; the map form stays the list" do
+      schema = Schema.new!(%{v: %{type: :number}, s: %{type: :category, order: [:ok]}})
+
+      assert JSON.decode!(Schema.to_json(schema)) ==
+               %{"$version" => 1, "fields" => Schema.to_map(schema)}
+
+      assert is_list(Schema.to_map(schema))
+      assert {:ok, ^schema} = Schema.from_json(Schema.to_json(schema))
+
+      # A newer stamp is refused by name before anything else is read, the fields unread.
+      assert Schema.from_json(~s({"$version":2,"fields":"anything"})) ==
+               {:error, [{[], {:newer_schema, 2, 1}}]}
+
+      assert Schema.from_json(~s({"$version":0,"fields":[]})) ==
+               {:error, [{["$version"], {:type, :pos_integer}}]}
+
+      # The kernel's reasons read in the kernel's words.
+      assert Schema.format_error({[], {:newer_schema, 2, 1}}) ==
+               "schema: needs schema v2, this is v1"
+
+      assert {:error, [malformed]} = Schema.from_json(~s({"$version":1,"fields":[}))
+      assert Schema.format_error(malformed) =~ "schema: JSON does not parse"
+
+      # The object holds the stamp and the fields, and nothing else.
+      assert Schema.from_json(~s({"$version":1,"fields":[],"extra":1})) ==
+               {:error, [{["extra"], :unknown_key}]}
+
+      assert Schema.from_json(~s({"$version":1})) == {:error, [{["fields"], :required}]}
+
+      assert Schema.from_json(~s({"$version":1,"fields":{"v":1}})) ==
+               {:error, [{[], {:type, :schema}}]}
+    end
+
+    @tag verifies: "schema-json-legacy"
+    test "a legacy list document is lifted to version 1, held to the kernel's limits" do
+      schema = Schema.new!(%{v: %{type: :number}, s: %{type: :category, order: [:ok]}})
+      legacy = JSON.encode!(Schema.to_map(schema))
+
+      assert String.starts_with?(legacy, "[")
+      assert Schema.from_json(legacy) == {:ok, schema}
+
+      # Its bytes and nesting are held to the limits before it is lifted.
+      assert {:error, [{[], {:limit, :bytes, 5, _}}]} =
+               Schema.from_json(legacy, limits: [bytes: 5])
+
+      assert {:error, [{_, {:limit, :depth, 2, _}}]} =
+               Schema.from_json(legacy, limits: [depth: 2])
+
+      # A root that is neither an object nor a list is the kernel's refusal by type.
+      assert Schema.from_json(~s("v")) == {:error, [{[], {:type, :map}}]}
+      assert Schema.from_json("12") == {:error, [{[], {:type, :map}}]}
     end
 
     # The map form read without JSON, as `Macaw.Data.Derived.Form` reads an output schema.
