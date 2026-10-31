@@ -1213,6 +1213,23 @@ defmodule Macaw.Data.SchemaTest do
                Schema.from_json(~s([["v",{"type":"number"}]]), limits: [depth: 2])
     end
 
+    # The map form read without JSON, as `Macaw.Data.Derived.Form` reads an output schema.
+    @tag verifies: "schema-json-read"
+    test "from_map/1 reads the map form to_map/1 writes, and refuses anything but [string, map] pairs" do
+      schema =
+        Schema.new!(%{
+          v: %{type: :number, quantity: :duration, polarity: :lower_is_better},
+          s: %{type: :category, order: [:ok], status: %{ok: :good}}
+        })
+
+      assert Schema.from_map(Schema.to_map(schema)) == {:ok, schema}
+      assert Schema.from_map([["v", %{"type" => "float"}]]) |> elem(0) == :error
+
+      for other <- [%{"v" => %{"type" => "number"}}, [[:v, %{"type" => "number"}]], [["v"]], nil] do
+        assert Schema.from_map(other) == {:error, [{[], {:type, :schema}}]}, inspect(other)
+      end
+    end
+
     @tag verifies: "schema-json-round-trip"
     property "a schema read back from its JSON form has its version and its JSON" do
       check all(fields <- schema_fields()) do

@@ -53,7 +53,8 @@ defmodule Macaw.Data.Schema do
   """
 
   alias Macaw.Data.{Quantity, Table, Unit}
-  alias Macaw.Layers.{Color, Document, Limits, Scan, Vocabulary}
+  alias Macaw.Data.Schema.Form
+  alias Macaw.Layers.{Color, Document}
 
   @enforce_keys [:fields, :version]
   # `identity` is derived by `new/1`: the identity fields in order, read once per schema
@@ -148,6 +149,16 @@ defmodule Macaw.Data.Schema do
   # from its spelling through a closed vocabulary (spec/01 §1.11), never made an atom.
   @spec words() :: [atom(), ...]
   def words, do: @types ++ @polarities ++ @metric_kinds
+
+  @doc false
+  # Each word of a description's vocabulary by its key, which the JSON form reads through
+  # its own closed table (`Macaw.Data.Schema.Form`, spec/01 §1.11).
+  @spec vocabularies() :: %{
+          type: [atom(), ...],
+          polarity: [atom(), ...],
+          metric_kind: [atom(), ...]
+        }
+  def vocabularies, do: %{type: @types, polarity: @polarities, metric_kind: @metric_kinds}
 
   @doc """
   A value entry's three keys, `:value` first (spec/01 §1.3): what a codec reads an entry's
@@ -822,11 +833,20 @@ defmodule Macaw.Data.Schema do
   defp role?(v) when is_binary(v), do: v != ""
   defp role?(v), do: is_atom(v) and v not in @not_names
 
-  # -- the version and the JSON form (spec/01 §1.10, §1.11) -----------------------------
+  @doc false
+  # A name, a state, a role or a word by its spelling; anything else as it is. `new/1`
+  # normalizes names with it, and the JSON form (`Macaw.Data.Schema.Form`) writes words.
+  @spec spell(term()) :: term()
+  def spell(atom) when is_atom(atom) and atom not in @not_names, do: Atom.to_string(atom)
+  def spell(value), do: value
+
+  # -- the version (spec/01 §1.10) -------------------------------------------------------
 
   # The kernel's digest of the schema's term, its normalized fields; never of a
-  # representation of it, so the JSON form below is not on the way.
+  # representation of it, so the JSON form (`Macaw.Data.Schema.Form`) is not on the way.
   defp hash(fields), do: Document.digest(%{"fields" => fields})
+
+  # -- the JSON form (spec/01 §1.11): an adapter at the edge, `Macaw.Data.Schema.Form` --
 
   @doc """
   The schema's map form (spec/01 §1.11): the JSON-ready list of `[name, description]`
@@ -836,11 +856,11 @@ defmodule Macaw.Data.Schema do
   `{"$rgb": "#2e7d32"}`, a typed color by its tags, `{"$color": "good"}`).
   """
   @spec to_map(t()) :: [[term()]]
-  def to_map(%__MODULE__{fields: fields}), do: json_form(fields)
+  defdelegate to_map(schema), to: Form
 
   @doc "The schema's JSON form: `to_map/1`, encoded."
   @spec to_json(t()) :: String.t()
-  def to_json(%__MODULE__{} = schema), do: JSON.encode!(to_map(schema))
+  defdelegate to_json(schema), to: Form
 
   @doc """
   The schema a map form holds (spec/01 §1.11): `new/1` of what it reads. Each word is read
@@ -850,13 +870,7 @@ defmodule Macaw.Data.Schema do
   and a color the reader does not read stays as written, for `new/1` to refuse as no color.
   """
   @spec from_map(term()) :: {:ok, t()} | {:error, [error(), ...]}
-  def from_map(pairs) when is_list(pairs) do
-    if Enum.all?(pairs, &match?([name, d] when is_binary(name) and is_map(d), &1)),
-      do: pairs |> Map.new(fn [name, d] -> {name, read_description(d)} end) |> new(),
-      else: {:error, [{[], {:type, :schema}}]}
-  end
-
-  def from_map(_other), do: {:error, [{[], {:type, :schema}}]}
+  defdelegate from_map(pairs), to: Form
 
   @doc """
   The schema a JSON document holds: read through the kernel's limits and scan first
@@ -864,127 +878,7 @@ defmodule Macaw.Data.Schema do
   before it is decoded, then decoded and read by `from_map/1`. `limits:` tightens them.
   """
   @spec from_json(binary(), keyword()) :: {:ok, t()} | {:error, [error(), ...]}
-  def from_json(json, opts \\ []) when is_binary(json) do
-    limits = Limits.new(Keyword.get(opts, :limits, []))
-
-    cond do
-      byte_size(json) > limits.bytes ->
-        {:error, [{[], {:limit, :bytes, limits.bytes, byte_size(json)}}]}
-
-      match?({:error, _}, Scan.scan(json, limits)) ->
-        {:error, fault} = Scan.scan(json, limits)
-        {:error, [fault]}
-
-      true ->
-        case JSON.decode(json) do
-          {:ok, map} -> from_map(map)
-          {:error, reason} -> {:error, [{[], {:json, inspect(reason)}}]}
-        end
-    end
-  end
-
-  # Names, states and roles are strings already (`new/1`); the adapter writes the keys
-  # and the words of the vocabulary as theirs.
-  defp json_form(fields) do
-    fields
-    |> Enum.map(fn {name, description} -> [name, write_description(description)] end)
-    |> Enum.sort_by(&hd/1)
-  end
-
-  defp write_description(description) do
-    Map.new(description, fn
-      {:values, values} -> {"values", Enum.map(values, &write_value/1)}
-      {:status, status} -> {"status", status |> Enum.map(&Tuple.to_list/1) |> Enum.sort()}
-      {key, value} -> {Atom.to_string(key), spell(value)}
-    end)
-  end
-
-  defp write_value(%{} = entry),
-    do: Map.new(entry, fn {key, value} -> {Atom.to_string(key), write_entry(key, value)} end)
-
-  defp write_value(value), do: value
-
-  # An entry's color in the colors' JSON form (`Macaw.Layers.Color.Form`): a literal as its
-  # `$rgb`, a typed color by its tags. `new/1` admits only colors the form writes.
-  defp write_entry(:color, color) do
-    {:ok, form} = Color.Form.encode_value(color)
-    form
-  end
-
-  defp write_entry(_key, value), do: value
-
-  # A name, a state, a role or a word by its spelling; anything else as it is.
-  defp spell(atom) when is_atom(atom) and atom not in @not_names, do: Atom.to_string(atom)
-  defp spell(value), do: value
-
-  @attribute_table Vocabulary.table(@attributes)
-  @entry_table Vocabulary.table(@entry_keys)
-  @word_tables %{
-    type: Vocabulary.table(@types),
-    polarity: Vocabulary.table(@polarities),
-    metric_kind: Vocabulary.table(@metric_kinds),
-    quantity: Vocabulary.table(Quantity.all())
-  }
-
-  defp read_description(description) when is_map(description) do
-    Map.new(description, fn {key, value} ->
-      case Vocabulary.fetch(@attribute_table, key) do
-        {:ok, :status} -> {:status, read_status(value)}
-        {:ok, :values} when is_list(value) -> {:values, Enum.map(value, &read_value/1)}
-        {:ok, word} when is_map_key(@word_tables, word) -> {word, read_word(word, value)}
-        {:ok, key} -> {key, value}
-        :error -> {key, value}
-      end
-    end)
-  end
-
-  defp read_description(other), do: other
-
-  defp read_word(word, value) when is_binary(value),
-    do: Vocabulary.read(@word_tables[word], value)
-
-  defp read_word(_word, value), do: value
-
-  defp read_status(pairs) when is_list(pairs) do
-    if Enum.all?(pairs, &match?([_state, _role], &1)),
-      do: Map.new(pairs, fn [state, role] -> {state, role} end),
-      else: pairs
-  end
-
-  defp read_status(other), do: other
-
-  defp read_value(entry) when is_map(entry) do
-    Map.new(entry, fn {key, value} ->
-      case Vocabulary.fetch(@entry_table, key) do
-        {:ok, :color} -> {:color, read_color(value)}
-        {:ok, key} -> {key, value}
-        :error -> {key, value}
-      end
-    end)
-  end
-
-  defp read_value(value), do: value
-
-  @color_tags Color.Form.tags()
-
-  # A color's map form, read inside out by the colors' own reader (`Macaw.Layers.Color.Form`),
-  # which makes no atom: each operand's form before the tag that holds it. A form it does
-  # not read, and a bare string, stay as they are, for `new/1` to refuse as no color.
-  defp read_color(%{} = form) when map_size(form) == 1 do
-    [{tag, payload}] = Map.to_list(form)
-
-    with true <- tag in @color_tags,
-         {:ok, color} <- Color.Form.decode_value(tag, read_payload(payload)) do
-      color
-    else
-      _unread -> form
-    end
-  end
-
-  defp read_color(other), do: other
-
-  defp read_payload(list) when is_list(list), do: Enum.map(list, &read_color/1)
-  defp read_payload(payload), do: read_color(payload)
+  defdelegate from_json(json, opts \\ []), to: Form
 
   # -- formatting -----------------------------------------------------------------------
 
