@@ -4,7 +4,7 @@ defmodule Macaw.Data.ConformanceTest do
   to its negatives by fake sources whose every flaw must fail the check it targets. Ported
   from visualize's `Visualize.Feed.ConformanceTest`.
   """
-  # A raising source's process logs its crash; the kit reports it as a finding.
+  # A raising source is a finding, logged at no error level (macaw_data#79, BoundedTest).
   use ExUnit.Case, async: true
   @moduletag :capture_log
 

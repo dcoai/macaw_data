@@ -15,7 +15,11 @@ defmodule Macaw.Data.Bounded do
   (macaw_data#33, #67). A call with no cap has only the clock, and past it is hung
   whatever it is doing.
 
-  Nothing is rescued: a raise or an exit is read from the process's `:DOWN`.
+  Nothing is rescued: a raise or an exit is read from the process's `:DOWN`. The process
+  is spawned through `:proc_lib`, so a raise logs nothing at error level: the runtime would
+  report it through the logger's proxy, after the caller had its answer, but proc_lib ends
+  the process with the exception as its exit reason, the same `{exception, stack}`. Its own
+  crash report is a SASL report, logged before the process exits (macaw_data#79).
 
       iex> {:ok, 3, _spent} = Macaw.Data.Bounded.run(fn -> 1 + 2 end, timeout: 1_000)
       iex> Macaw.Data.Bounded.run(fn -> receive(do: (:never -> :ok)) end, timeout: 10)
@@ -33,12 +37,12 @@ defmodule Macaw.Data.Bounded do
           | {:down, term()}
 
   @doc """
-  `thunk` called in a process spawned with `spawn:` options and `:monitor`, the caller in
-  its `$callers`: `{:ok, value, reductions}`; `{:reductions, spent}` when it spent more
-  than `reductions:` (`nil`, no cap); `:hung` when it had not answered within `timeout:`
-  ms blocked in `receive` (with no cap, whatever it is doing); `{:down, reason}`
-  when it exited first, a heap limit's kill as `:killed`. A process
-  the caller kills is waited for, so nothing it does outlives the call.
+  `thunk` called in a process spawned through `:proc_lib` with `spawn:` options and
+  `:monitor`, the caller in its `$callers`: `{:ok, value, reductions}`; `{:reductions,
+  spent}` when it spent more than `reductions:` (`nil`, no cap); `:hung` when it had not
+  answered within `timeout:` ms blocked in `receive` (with no cap, whatever it is doing);
+  `{:down, reason}` when it exited first, a heap limit's kill as `:killed`. A process the
+  caller kills is waited for, so nothing it does outlives the call.
   """
   @spec run((-> term()), keyword()) :: outcome()
   def run(thunk, opts) when is_function(thunk, 0) do
@@ -49,7 +53,7 @@ defmodule Macaw.Data.Bounded do
     callers = [parent | Process.get(:"$callers", [])]
 
     {pid, monitor} =
-      :erlang.spawn_opt(
+      :proc_lib.spawn_opt(
         fn ->
           Process.put(:"$callers", callers)
           value = thunk.()

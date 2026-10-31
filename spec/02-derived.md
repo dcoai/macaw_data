@@ -413,6 +413,7 @@ a checked source compiles once into a closure that reads row.field by either spe
 - **The cap is derived** (visualize#852's root-cause note): `100_000_000` reductions is about 4,500 times the costliest stored document visualize has to compile and about 7,500 times its run over its four hosts, so a per-identity batch over some 180,000 input rows fits. A runaway reaches it in about 0.7 s idle and 2.4 s saturated.
 - **Liveness is separate from cost.** A call blocked in `receive` spends no reductions, so no cap stops it. `timeout:` is a generous wall-clock bound for that case alone: a call that has been **blocked** for that long on end, waiting in `receive` with its reductions unchanged at every 10 ms reading since it last worked, is killed and reported as **hung**, `{:error, :hung, timeout}`, never as slow. A call still working is left to its cap and judged by its count, as its value, `:reductions` or `:memory`, and one that worked and then waits has the whole bound again from its last work: on a loaded host a compile or a CPU-bound call can outlast a tight `timeout:` without being blocked, and a compile can wait a while on a server slow to answer, and each was once judged hung for it (macaw_data#33, #67). A wait on another process is a block all the same: in a node that loads modules on first use (interactive mode, as a test suite runs), a first compile waits on the code server, which a saturated host can keep waiting tens of milliseconds, so the bound is to be generous; the default is 30 s. The sandbox always runs with a cap; `Macaw.Data.Bounded` called with none has only the clock, and past it a call is hung whatever it is doing. A stored function cannot `receive` (§6.1).
 - **The outcome is read from the process, never rescued.** A result within the cap is `{:ok, value}`; one over it `{:error, :reductions, max_reductions}`. A `:DOWN` of `:killed` is the heap limit, `{:error, :memory, max_heap}`. The caller's own kills are `:reductions` and `:hung`. Any other exit is a raise, `{:error, :raised, name}`, `name` the exception's module as `Exception.normalize/3` reads the reason, **never its message**, which may quote the rows. A killed process is waited for before the call returns, so nothing it does outlives the call.
+- **A raise logs nothing at error level** (macaw_data#79). The answer, `{:error, :raised, name}`, is the report: a host that runs its users' functions would otherwise log an error for every user's mistake. The process is spawned through `:proc_lib`, which ends it with the exception as its exit reason, so the runtime reports no uncaught error. That report would reach the logger through its proxy after the caller has its answer, past any capture the caller holds. proc_lib's own crash report is a SASL report, logged by the process itself before it exits, so a host sees it only with `handle_sasl_reports: true`, and then before the answer. A compile the compiler refuses (§6.3) is the same.
 
 | Kind | When | Detail |
 |---|---|---|
@@ -429,6 +430,10 @@ a checked source compiles once into a closure that reads row.field by either spe
 
 ```test:derived-runner-outcomes
 a call answers its value; a raise is its exception's module and never its message; a heap overrun is memory; a call blocked in receive is hung at the bound; nothing the call started outlives it
+```
+
+```test:derived-runner-quiet-raise
+a raise in a call, in a compile and in the bounded runner itself logs no error-level message, synchronized with the logger's proxy, and still answers its raise
 ```
 
 ```test:derived-runner-reductions

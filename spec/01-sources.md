@@ -1024,7 +1024,7 @@ Every source runs **one kit**, `Macaw.Data.Source.Conformance`: the contract of 
 
 **Requests.** `requests:` lists what is asked, each a keyword list of request fields among `params`, `window`, `box`, `region`, `latest` and `as_of` (`[[]]` by default), each fetched at every one of `budgets:` (`[nil, 5]`), at `now:` (the moment the check starts by default) and as the first of `viewers:`. A capability the source names that no request probes is a finding (`{:no_probe, capability}`), and so is a request the schema cannot answer (`{:probe, ask, faults}`): both are the run's to fix. The other options are `context:`, `as_of:` (a day before `now` by default), `push:`, `down:`, `timeout:`, `reductions:`, `processes:` and `quiet:`.
 
-**Isolation.** Every callback runs in a process of its own (`Macaw.Data.Bounded`), so a raise or an exit is a finding (`{:raised, call, reason}`), not a crash of the check. A callback is judged by the **reductions** its process spends against `reductions:`, the source author's cost budget (`nil` makes no cost claim), with the reductions of the named `processes:` during the call added for a source that works in a server; liveness is a separate wall-clock bound, `timeout:`, for a call blocked in `receive`, which is `{:hung, call, timeout}`. A budgeted callback still working when `timeout:` passes is left to its budget, so a slow one on a loaded host is judged by its count, never hung (macaw_data#33); a callback with no budget has only the clock, and past it is hung whatever it is doing. **Load changes no verdict:** nothing is judged by the clock but a hang.
+**Isolation.** Every callback runs in a process of its own (`Macaw.Data.Bounded`), so a raise or an exit is a finding (`{:raised, call, reason}`), not a crash of the check, and a raise logs no error-level message: the process is spawned through `:proc_lib`, and the finding is its report ([02 §6.4](02-derived.md#derived-runner), macaw_data#79). A callback is judged by the **reductions** its process spends against `reductions:`, the source author's cost budget (`nil` makes no cost claim), with the reductions of the named `processes:` during the call added for a source that works in a server; liveness is a separate wall-clock bound, `timeout:`, for a call blocked in `receive`, which is `{:hung, call, timeout}`. A budgeted callback still working when `timeout:` passes is left to its budget, so a slow one on a loaded host is judged by its count, never hung (macaw_data#33); a callback with no budget has only the clock, and past it is hung whatever it is doing. **Load changes no verdict:** nothing is judged by the clock but a hang.
 
 The kit is **ported, not reinvented**, so visualize's feeds keep their checks when they become sources; the adapter that runs it over them is visualize's (macaw_compose#58, #112).
 
@@ -1037,7 +1037,7 @@ every flaw of the broken sources fails the check it targets with the finding tha
 ```
 
 ```test:conformance-errors
-a down source that answers describe, fetch and subscribe is three findings; a source raising on an unreadable request is a raised finding, not a crash
+a down source that answers describe, fetch and subscribe is three findings; a source raising on an unreadable request is a raised finding, not a crash, and logs no error-level message
 ```
 
 ```test:conformance-probes
