@@ -63,6 +63,17 @@ defmodule Macaw.Data.Derived.Sandbox do
   # The registry is the library's own package unless the caller gives one, or `nil`.
   defp defaults(opts), do: Keyword.put_new_lazy(opts, :operations, &Operations.registry/0)
 
+  @doc false
+  # At the application's start (spec/02 §6.3, macaw_data#69): one trivial function compiled
+  # and called through the path every stored one takes, so the modules that path loads on
+  # first use are loaded here, and no bounded compile or call waits on the code server.
+  @spec warm() :: :ok
+  def warm do
+    {:ok, compiled} = compile("fn rows -> Enum.map(rows, & &1.v * 2) end")
+    {:ok, [2]} = run(compiled, [[%{v: 1}]])
+    :ok
+  end
+
   @doc "As `compile/2` with no options."
   @spec compile(String.t()) :: {:ok, Compiled.t()} | {:error, [fault(), ...]}
   def compile(source), do: compile(source, [])

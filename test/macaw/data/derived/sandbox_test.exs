@@ -334,6 +334,45 @@ defmodule Macaw.Data.Derived.SandboxTest do
     end
   end
 
+  describe "the evaluator warmed at start (spec/02 §6.3; macaw_data#69)" do
+    # Every module a call loads on first use, in the calling process and every process it
+    # spawns: `error_handler:undefined_function/3` is how a node in interactive mode loads
+    # one, through the code server. Traced in a session of its own, so no other test's
+    # loads are seen.
+    defp loads(fun) do
+      me = self()
+      collector = spawn_link(fn -> loaded(me, []) end)
+      session = :trace.session_create(__MODULE__, collector, [])
+      1 = :trace.function(session, {:error_handler, :undefined_function, 3}, true, [:global])
+      :trace.process(session, me, true, [:call, :set_on_spawn])
+      fun.()
+      :trace.process(session, me, false, [:call, :set_on_spawn])
+      true = :trace.session_destroy(session)
+      send(collector, :done)
+      receive do: ({:loaded, ^collector, modules} -> modules)
+    end
+
+    defp loaded(to, modules) do
+      receive do
+        {:trace, _pid, :call, {:error_handler, :undefined_function, [module, _, _]}} ->
+          loaded(to, [module | modules])
+
+        :done ->
+          send(to, {:loaded, self(), Enum.uniq(modules)})
+      end
+    end
+
+    @tag verifies: "derived-compile-warm"
+    test "a bounded compile and call load no module, so neither waits on the code server" do
+      source = "fn rows -> Enum.map(rows, & &1.v * 2) end"
+
+      assert loads(fn ->
+               {:ok, compiled} = Sandbox.compile(source)
+               {:ok, [2, 4]} = Sandbox.run(compiled, [[%{v: 1}, %{v: 2}]])
+             end) == []
+    end
+  end
+
   describe "liveness: hung only when blocked (spec/02 §6.4; macaw_data#33)" do
     # A timeout of 1 ms: every call below takes longer than that working, so a runner that
     # read the clock alone would call each hung. Each is judged by what it did instead.

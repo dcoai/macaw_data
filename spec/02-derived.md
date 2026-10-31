@@ -390,6 +390,12 @@ a call of every allowed module's allowed function passes the checker, every excl
 - **In the bounded runner.** The evaluation runs as any call does (§6.4). A source the checker passed but the compiler refuses is the fault `{nil, {:compile, message}}`, the compiler's exception message, read from the process's exit reason and never rescued.
 - **The cache is a value.** `%Macaw.Data.Derived.Sandbox.Cache{}`, held by whatever owns the functions (the engine, §8), not a process or a table. `Cache.compile(cache, source, opts)` is `{:ok, compiled, cache}` or `{:error, faults, cache}`, keyed by the **SHA-256 of the source** together with the arities and the fields it was checked against. A source compiled before is a map lookup, a refusal included. `hash` is that SHA-256, 64 lowercase hexadecimal digits. The cache never evicts; its owner replaces it.
 
+- **Warmed at the application's start** (macaw_data#69). A compile and a call are bounded (§6.4), so neither may wait on another process for work that is not theirs. In a node that loads modules on first use (interactive mode, as a test suite runs), the first compile loads the evaluator's own modules (`:elixir_fn`, `:otp_internal` on Elixir 1.20) through the code server, one process that any other load or a saturated host keeps waiting, past any bound. So `Macaw.Data.Application` compiles and calls one trivial function through `compile/2` and `run/3` as it starts: whatever the evaluator needs is loaded before any stored function's compile, with no list of modules to keep. In a release every module is loaded at boot, and the warm-up costs a compile.
+
+```test:derived-compile-warm
+a bounded compile and call of a stored function load no module on first use, so neither waits on the code server
+```
+
 ```test:derived-compile-once
 a checked source compiles once into a closure that reads row.field by either spelling and raises on a non-map; warnings are kept, not printed; a checked source the compiler refuses is one compile fault; the cache answers a second compile, a refusal included, from its key without checking again
 ```
