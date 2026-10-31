@@ -27,6 +27,9 @@ defmodule Macaw.Data.Native do
   @normal {__MODULE__, :normal_schedulers}
   # The interface version kernels.zig answers (`abi/0`), so a stale library is not used.
   @abi 6
+  # Which module this build compiled, the kernels or their stub, read when this one compiles:
+  # a constant, so the start of a build without the kernels never reaches the probe.
+  @built Kernels.built?()
   @sync_rows 8_192
   @finish_buckets 2_048
   @sync_entries 2_048
@@ -141,9 +144,11 @@ defmodule Macaw.Data.Native do
   @doc false
   # At the application's start: whether the kernels loaded, held in `:persistent_term`. A
   # build under `native: :required` whose kernels don't load fails the start, with why.
+  # A build without them is not probed: the stub, chosen at compile time, says so itself,
+  # where its raise in the probe's process would log a crash report (macaw_data#76).
   @spec start() :: :ok | {:error, term()}
   def start do
-    result = probe()
+    result = if @built, do: probe(), else: {:error, :not_built}
     :persistent_term.put(@key, result == :ok)
     settle(result, mode())
   end
@@ -153,7 +158,7 @@ defmodule Macaw.Data.Native do
   @spec settle(:ok | {:error, term()}, :optional | :required) :: :ok | {:error, term()}
   def settle(:ok, _mode), do: :ok
   def settle({:error, reason}, :required), do: {:error, {:native_kernels, reason}}
-  def settle({:error, {:not_built, _stack}}, :optional), do: :ok
+  def settle({:error, :not_built}, :optional), do: :ok
 
   def settle({:error, reason}, :optional) do
     Logger.warning(
@@ -164,9 +169,8 @@ defmodule Macaw.Data.Native do
     :ok
   end
 
-  # The kernels are asked their interface version in a process of its own: a library not
-  # built (`:not_built`) or not loaded raises there, and its exit reason is the answer,
-  # with nothing caught.
+  # The built kernels are asked their interface version in a process of its own: a library
+  # that did not load raises there, and its exit reason is the answer, with nothing caught.
   defp probe do
     {pid, ref} = spawn_monitor(fn -> exit({:abi, Kernels.abi()}) end)
 

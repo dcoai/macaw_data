@@ -41,7 +41,11 @@ defmodule Macaw.Data.MixProject do
         "GitHub" => @source_url,
         "Changelog" => "https://hexdocs.pm/macaw_data/changelog.html"
       },
-      files: ~w(lib spec mix.exs README.md LICENSE CHANGELOG.md .formatter.exs .tool-versions)
+      files: ~w(lib spec mix.exs README.md LICENSE CHANGELOG.md .formatter.exs .tool-versions),
+      # Zigler writes its copy of a module's Zig source beside it at compile time
+      # (`.Elixir.<Module>.zig`, gitignored), so a package built from a checkout that compiled
+      # the kernels would carry it (macaw_data#76). ci/adopter_boot.exs refuses any.
+      exclude_patterns: [~r"(^|/)\.Elixir\.[^/]*$"]
     ]
   end
 

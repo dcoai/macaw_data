@@ -3,6 +3,8 @@ defmodule Macaw.Data.NativeTest do
   # tests that trace calls into the window of #37's race.
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureLog
+
   alias Macaw.Data.Native
   alias Macaw.Data.Native.Toolchain
 
@@ -22,7 +24,7 @@ defmodule Macaw.Data.NativeTest do
 
       # A start whose probe fails: `:required` refuses, `:optional` runs the Elixir path.
       assert Native.settle({:error, :boom}, :required) == {:error, {:native_kernels, :boom}}
-      assert Native.settle({:error, {:not_built, []}}, :optional) == :ok
+      assert Native.settle({:error, :not_built}, :optional) == :ok
       assert Native.settle(:ok, :required) == :ok
     end
   end
@@ -137,6 +139,26 @@ defmodule Macaw.Data.NativeTest do
         assert for(_ <- 1..5, do: elem(counted.(), 0)) == List.duplicate(once, 5)
         assert once < 1_000, "the gather counted #{once}"
       end
+    end
+  end
+
+  describe "the start" do
+    # macaw_data#76: a build without the kernels was probed all the same, and the stub's
+    # raise in the probe's process logged a crash report at every adopter's start.
+    @tag verifies: "operations-native-quiet-start"
+    test "the application starts, the kernels built or not, with no error logged" do
+      log =
+        capture_log([level: :debug], fn ->
+          assert :ok = Application.stop(:macaw_data)
+          assert {:ok, [:macaw_data]} = Application.ensure_all_started(:macaw_data)
+          # A process's crash report reaches the handlers through the logger's proxy;
+          # asked its state, the proxy has handled every event sent to it before.
+          _ = :sys.get_state(:logger_proxy)
+        end)
+
+      refute log =~ "[error]"
+      refute log =~ "raised an exception"
+      assert Native.loaded?() == Native.built?()
     end
   end
 

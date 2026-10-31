@@ -115,6 +115,15 @@ test-elixir:
     - mix compile --warnings-as-errors
     - mix test --warnings-as-errors
 
+# As an adopter first meets it (#76): the Hex package, built from this checkout, compiled
+# and started by a minimal app that lists no zigler. Any `[error]` line, a `loaded?` other
+# than false, or a Zigler `.Elixir*` file in the package fails the job.
+adopter-boot:
+  extends: .elixir
+  stage: test
+  script:
+    - elixir ci/adopter_boot.exs
+
 # `native: :required` and no toolchain: the build must fail, and for that reason.
 native-required:
   extends: .elixir
