@@ -42,10 +42,15 @@ defmodule Macaw.Data.Test.Work do
   168,683 to 168,692, and with the trace held it reads one count every time, idle (168,688
   in one VM, 168,687 to 168,690 across VMs). What remains is `:maps.from_list/1` building
   a map of more than 32 keys, which `MapSet.new/1`, `Map.new/1`, a comprehension `into:` a
-  map and `Map.filter/2` all call: its charge moves from call to call, idle or loaded, by a
-  few reductions per hundred keys (20 to 22 for 33 keys, 56 to 60 for 100, 627 to 701 for
-  1,000), the same work charged differently, inherent to the runtime
-  (`Macaw.Data.Test.WorkTest` holds it to its bound). The frame's counts move by 4 at most from it, saturated (168,684 to
+  map and `Map.filter/2` all call: its charge moves from call to call, idle or loaded, the
+  same work charged differently, inherent to the runtime (macaw_data#86). The BIF sorts the
+  keys' hashes with OTP's `erts_qsort` and charges its steps, 40 to a reduction, and the
+  sort's pivot is a hash of the array's address and, past 128 items, of the scheduler's
+  random: up to 128 keys the charge moves only with where the runtime put the array (20 to
+  22 for 33 keys, 56 to 62 for 100), and past it, with the quicksort's random count of
+  steps, a floor and a long tail (616 to 748 for 1,000 keys over 5,000 counts, sd 16;
+  `Macaw.Data.Test.WorkTest` states its bound and the bound's basis). The frame's counts
+  move by 4 at most from it, saturated (168,684 to
   168,691; its merges 167,635 to 167,642). So a guard that wants a count exact compares the
   least of several, or allows that bound. A signal another process sends the counted one
   is charged to it too (a `process_info/2` request a few reductions, a link or a monitor up
