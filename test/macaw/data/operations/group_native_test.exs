@@ -12,6 +12,7 @@ defmodule Macaw.Data.Operations.GroupNativeTest do
   alias Macaw.Data.Operations.Aggregates
   alias Macaw.Data.Operations.Transforms.Aggregate
   alias Macaw.Data.Table.Chunk
+  alias Macaw.Data.Test.Gen
   alias Macaw.Data.Test.Storage
 
   @registry Operations.registry()
@@ -26,10 +27,10 @@ defmodule Macaw.Data.Operations.GroupNativeTest do
   # the largest (but summing within range), and ordinary.
   defp float_gen do
     frequency([
-      {6, float(min: -1.0e6, max: 1.0e6)},
+      {6, Gen.float(min: -1.0e6, max: 1.0e6)},
       {2, map(integer(-50..50), &(&1 * 5.0e-324))},
       {1, member_of([0.0, -0.0])},
-      {1, map(float(min: -1.0, max: 1.0), &(&1 * 1.0e300))},
+      {1, map(Gen.float(min: -1.0, max: 1.0), &(&1 * 1.0e300))},
       {1, map(integer(-40..40), &:math.pow(2.0, &1))}
     ])
   end

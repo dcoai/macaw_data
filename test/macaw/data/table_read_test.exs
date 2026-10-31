@@ -11,7 +11,7 @@ defmodule Macaw.Data.TableReadTest do
 
   alias Macaw.Data.Table
   alias Macaw.Data.Table.{Bitmap, Chunk, Column}
-  alias Macaw.Data.Test.Work
+  alias Macaw.Data.Test.{Gen, Work}
 
   # A zone the column keeps whole, consistent with its offset, with no time-zone database.
   defp zoned(%DateTime{} = utc) do
@@ -29,8 +29,8 @@ defmodule Macaw.Data.TableReadTest do
     one =
       case form do
         :int64 -> integer(-1_000..1_000)
-        :float64 -> float(min: -1.0e6, max: 1.0e6)
-        :integral -> one_of([integer(-1_000..1_000), float(min: -1.0e3, max: 1.0e3)])
+        :float64 -> Gen.float(min: -1.0e6, max: 1.0e6)
+        :integral -> one_of([integer(-1_000..1_000), Gen.float(min: -1.0e3, max: 1.0e3)])
         :utc -> map(integer(0..2_000_000_000), &DateTime.from_unix!/1)
         :zoned -> map(integer(0..2_000_000_000), &zoned(DateTime.from_unix!(&1)))
         :naive -> map(integer(0..2_000_000_000), &DateTime.to_naive(DateTime.from_unix!(&1)))

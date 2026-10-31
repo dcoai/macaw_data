@@ -5,11 +5,12 @@ defmodule Macaw.Data.Operations.LadderPackedTest do
   use ExUnitProperties
 
   alias Macaw.Data.Operations.Transforms.Ladder.Packed
+  alias Macaw.Data.Test.Gen
 
   @int64_max 0x7FFF_FFFF_FFFF_FFFF
 
   defp number(:int), do: integer(-1_000_000..1_000_000)
-  defp number(:float), do: float(min: -1.0e12, max: 1.0e12)
+  defp number(:float), do: Gen.float(min: -1.0e12, max: 1.0e12)
   defp number(:big), do: member_of([@int64_max + 1, -@int64_max - 2, 2 ** 80])
   defp number(:mixed), do: one_of([number(:int), number(:float)])
 

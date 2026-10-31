@@ -12,6 +12,7 @@ defmodule Macaw.Data.Operations.LadderNativeTest do
   alias Macaw.Data.Native.Kernels
   alias Macaw.Data.Operations.Transforms.Ladder
   alias Macaw.Data.Table.Chunk
+  alias Macaw.Data.Test.{Gen, Work}
 
   @epoch ~U[1970-01-01 00:00:00.000000Z]
   @forms [:int, :float, :utc, :naive, :zoned, :date]
@@ -89,27 +90,62 @@ defmodule Macaw.Data.Operations.LadderNativeTest do
     Kernels.ladder(xf, xd, xv, yf, yd, yv, first, count, kd, k)
   end
 
+  # The property's runs, and the most reductions generating all their cases may cost:
+  # 12,000,000, measured 9,609,000 (macaw_data#68). The property's body adds about 6.3
+  # million over its 400 cases, a case's walk at most about 25,000. With StreamData's own
+  # `float(min:, max:)` the same cases cost 975,170,667 reductions to generate, 99 % of the
+  # property, which took 17 to 32 s on a loaded host and met ExUnit's 60 s timeout at load
+  # 45: that float's cost grows with the generation size, and the size grows with the run
+  # (Macaw.Data.Test.Gen). Its work is bounded, so it needs no timeout of its own.
+  @runs 400
+  @generation 12_000_000
+
+  # A case: an x form and kind, a level, rows with gaps, and how they are laid out.
+  defp cases do
+    gen all(
+          form <- member_of(@forms),
+          kind <- member_of([:linear, :time]),
+          k <- one_of([integer(-8..24), member_of([-1100, -70, -40, 40, 63, 70, 1100])]),
+          rows <-
+            list_of(
+              tuple(
+                {frequency([{8, integer(-2_000..20_000)}, {1, constant(nil)}]),
+                 frequency([{6, Gen.float(min: -100.0, max: 100.0)}, {1, constant(nil)}])}
+              ),
+              min_length: 1,
+              max_length: 400
+            ),
+          int_y? <- boolean(),
+          sorted? <- boolean(),
+          offset <- integer(0..9)
+        ) do
+      {form, kind, k, rows, int_y?, sorted?, offset}
+    end
+  end
+
+  describe "the property's own work" do
+    test "generating its cases costs a stated count of reductions, whatever the box's load" do
+      # One case at each size the property reaches, its run index, from fixed seeds: what
+      # the property generates, counted rather than timed.
+      {work, lengths} =
+        Work.reductions(fn ->
+          for size <- 1..@runs do
+            [{_, _, _, rows, _, _, _}] =
+              cases() |> StreamData.resize(size) |> StreamData.seeded(size) |> Enum.take(1)
+
+            length(rows)
+          end
+        end)
+
+      assert Enum.max(lengths) > 300, "the largest case has #{Enum.max(lengths)} rows"
+      assert work <= @generation, "generating #{@runs} cases cost #{work} reductions"
+    end
+  end
+
   describe "the kernel against the Elixir walk" do
     @tag verifies: "operations-ladder-native-identical"
     property "on every x form, both kinds, gaps, unsorted x and levels far either side of 0" do
-      check all(
-              form <- member_of(@forms),
-              kind <- member_of([:linear, :time]),
-              k <- one_of([integer(-8..24), member_of([-1100, -70, -40, 40, 63, 70, 1100])]),
-              rows <-
-                list_of(
-                  tuple(
-                    {frequency([{8, integer(-2_000..20_000)}, {1, constant(nil)}]),
-                     frequency([{6, float(min: -100.0, max: 100.0)}, {1, constant(nil)}])}
-                  ),
-                  min_length: 1,
-                  max_length: 400
-                ),
-              int_y? <- boolean(),
-              sorted? <- boolean(),
-              offset <- integer(0..9),
-              max_runs: 400
-            ) do
+      check all({form, kind, k, rows, int_y?, sorted?, offset} <- cases(), max_runs: @runs) do
         rows = if sorted?, do: Enum.sort_by(rows, &(elem(&1, 0) || 0)), else: rows
         rows = List.duplicate({1, 1.0}, offset) ++ rows
         xs = for {i, _} <- rows, do: i && x_of(form, i)

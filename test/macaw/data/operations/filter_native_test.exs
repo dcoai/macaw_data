@@ -10,7 +10,7 @@ defmodule Macaw.Data.Operations.FilterNativeTest do
   alias Macaw.Data.Native.Kernels
   alias Macaw.Data.Operations.Transforms.Filter
   alias Macaw.Data.Table.{Chunk, Column}
-  alias Macaw.Data.Test.Storage
+  alias Macaw.Data.Test.{Gen, Storage}
 
   @registry Operations.registry()
   @tests [:eq, :ne, :lt, :lte, :gt, :gte, :present, :absent]
@@ -48,7 +48,7 @@ defmodule Macaw.Data.Operations.FilterNativeTest do
   defp value_gen do
     one_of([
       integer(-20..60),
-      float(min: -20.0, max: 60.0),
+      Gen.float(min: -20.0, max: 60.0),
       member_of([@big - 7, @big - 7.0, 2 ** 70, -(2 ** 70), 9.3e18, -9.3e18, 0.5]),
       member_of(["a", "c", :b, "t7", nil, true, @epoch])
     ])

@@ -12,7 +12,7 @@ defmodule Macaw.Data.Operations.LadderTest do
   alias Macaw.Data.Operations.Step
   alias Macaw.Data.Operations.Transforms.{Ladder, Lttb, M4}
   alias Macaw.Data.Operations.Transforms.Ladder.Packed
-  alias Macaw.Data.Test.{Storage, Work}
+  alias Macaw.Data.Test.{Gen, Storage, Work}
 
   @registry Operations.registry()
 
@@ -451,11 +451,11 @@ defmodule Macaw.Data.Operations.LadderTest do
                   tuple(
                     {frequency([
                        {6, integer(1..5_000)},
-                       {3, float(min: 0.5, max: 5_000.0)},
+                       {3, Gen.float(min: 0.5, max: 5_000.0)},
                        {1, constant(nil)}
                      ]),
                      frequency([
-                       {8, float(min: -100.0, max: 100.0)},
+                       {8, Gen.float(min: -100.0, max: 100.0)},
                        {2, integer(-5..5)},
                        {1, constant(nil)}
                      ])}

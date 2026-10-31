@@ -13,7 +13,7 @@ defmodule Macaw.Data.Operations.HotPathsTest do
   alias Macaw.Data.{Exact, Native, Operations, Table}
   alias Macaw.Data.Operations.Aggregates
   alias Macaw.Data.Operations.Transforms.{Aggregate, Filter}
-  alias Macaw.Data.Test.Work
+  alias Macaw.Data.Test.{Gen, Work}
 
   @registry Operations.registry()
   @tests [:eq, :ne, :lt, :lte, :gt, :gte, :present, :absent]
@@ -57,13 +57,13 @@ defmodule Macaw.Data.Operations.HotPathsTest do
               gaps? <- boolean(),
               values <-
                 list_of(
-                  if(ints?, do: integer(-50..50), else: float(min: -50.0, max: 50.0)),
+                  if(ints?, do: integer(-50..50), else: Gen.float(min: -50.0, max: 50.0)),
                   min_length: 1,
                   max_length: 60
                 ),
               holes <- list_of(boolean(), length: length(values)),
               test <- member_of(@tests),
-              value <- one_of([integer(-50..50), float(min: -50.0, max: 50.0)]),
+              value <- one_of([integer(-50..50), Gen.float(min: -50.0, max: 50.0)]),
               from <- integer(0..(length(values) - 1)),
               max_runs: 400
             ) do
@@ -132,7 +132,7 @@ defmodule Macaw.Data.Operations.HotPathsTest do
                 list_of(
                   tuple(
                     {one_of([member_of(~w(a b c)), constant(nil)]), integer(0..3),
-                     one_of([float(min: -1.0e3, max: 1.0e3), integer(-9..9), constant(nil)])}
+                     one_of([Gen.float(min: -1.0e3, max: 1.0e3), integer(-9..9), constant(nil)])}
                   ),
                   min_length: 1,
                   max_length: 50
@@ -227,7 +227,7 @@ defmodule Macaw.Data.Operations.HotPathsTest do
               values <-
                 list_of(
                   frequency([
-                    {6, float(min: -1.0e6, max: 1.0e6)},
+                    {6, Gen.float(min: -1.0e6, max: 1.0e6)},
                     {2, map(integer(-1_000..1_000), &(&1 * 5.0e-324))},
                     {1, map(integer(-5..5), &(&1 * 1.0e306))},
                     {2, integer(-1_000..1_000)}
