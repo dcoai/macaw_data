@@ -27,8 +27,12 @@ defmodule Macaw.Data.Derived.Sandbox do
   alias Macaw.Data.Operations
   alias Macaw.Data.Operations.Registry
 
-  # The `Macaw.Data.Derived.Columns` accessors a stored function reads spelled.
-  @spelled [:names, :type, :column, :rows]
+  # The `Macaw.Data.Derived.Columns` accessors, each a stored function calls as its spelled
+  # twin in `Sandbox.Runtime` (spec/02 §6.3).
+  @spelled Enum.map(
+             Macaw.Data.Derived.Sandbox.Allowlist.allowed(Macaw.Data.Derived.Columns),
+             &elem(&1, 0)
+           )
 
   @check_opts [arity: [1, 2], fields: nil, max_source: 10_000, operations: nil]
   @run_opts [max_reductions: 100_000_000, timeout: 30_000, max_heap: 10_000_000]
@@ -145,8 +149,8 @@ defmodule Macaw.Data.Derived.Sandbox do
       when name in [:aggregate, :transform] and is_list(args) and args != [] ->
         if ops?(receiver), do: run_call(name, args, call_meta, registry), else: node
 
-      # The accessors whose answer holds names or values read as the function reads its own
-      # literals, spelled (spec/02 §2.2): their twins in `Sandbox.Runtime`.
+      # Every accessor is its twin in `Sandbox.Runtime`, which answers as the function reads
+      # its own literals: names, values and reasons spelled (spec/02 §2.2, §6.3).
       {{:., dot_meta, [receiver, name]}, call_meta, args} = node
       when name in @spelled and is_list(args) ->
         if columns?(receiver),

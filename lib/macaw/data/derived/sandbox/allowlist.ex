@@ -365,23 +365,40 @@ defmodule Macaw.Data.Derived.Sandbox.Allowlist do
   @ops [aggregate: 2, aggregate: 3, transform: 2, transform: 3]
 
   # A function's input read as columns (spec/02 §2.2, macaw_data#107): every accessor
-  # reads the table it is given and makes nothing else, so every export.
+  # reads the table it is given and makes nothing else, so every export: each accessor and
+  # its `!` variant, and `format_error/1`.
   @columns [
     column: 2,
+    column!: 2,
     count: 2,
+    count!: 2,
+    format_error: 1,
     instants: 2,
+    instants!: 2,
     max: 2,
+    max!: 2,
     mean: 2,
+    mean!: 2,
     min: 2,
+    min!: 2,
     names: 1,
+    names!: 1,
     numbers: 2,
+    numbers!: 2,
     rows: 1,
+    rows!: 1,
     size: 1,
+    size!: 1,
     slice: 3,
+    slice!: 3,
     sum: 2,
+    sum!: 2,
     take: 2,
+    take!: 2,
     type: 2,
-    valid: 2
+    type!: 2,
+    valid: 2,
+    valid!: 2
   ]
 
   # The decided exclusions (visualize#643, 2026-10-15) and every deprecated export (visualize D-194).

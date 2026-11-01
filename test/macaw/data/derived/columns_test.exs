@@ -133,19 +133,19 @@ defmodule Macaw.Data.Derived.ColumnsTest do
 
   defp accessors(table) do
     %{
-      names: Columns.names(table),
-      size: Columns.size(table),
-      types: for(name <- ["t", "v", "s", "c"], do: Columns.type(table, name)),
-      columns: for(name <- ["t", "v", "s", "c"], do: Columns.column(table, name)),
-      valid: for(name <- ["t", "v", "s", "c"], do: Columns.valid(table, name)),
-      counts: for(name <- ["t", "v", "s", "c"], do: Columns.count(table, name)),
-      numbers: Columns.numbers(table, "v"),
-      instants: Columns.instants(table, "t"),
-      sum: Columns.sum(table, "v"),
-      mean: Columns.mean(table, "v"),
+      names: Columns.names!(table),
+      size: Columns.size!(table),
+      types: for(name <- ["t", "v", "s", "c"], do: Columns.type!(table, name)),
+      columns: for(name <- ["t", "v", "s", "c"], do: Columns.column!(table, name)),
+      valid: for(name <- ["t", "v", "s", "c"], do: Columns.valid!(table, name)),
+      counts: for(name <- ["t", "v", "s", "c"], do: Columns.count!(table, name)),
+      numbers: Columns.numbers!(table, "v"),
+      instants: Columns.instants!(table, "t"),
+      sum: Columns.sum!(table, "v"),
+      mean: Columns.mean!(table, "v"),
       extremes:
-        {Columns.min(table, "v"), Columns.max(table, "v"), Columns.min(table, "t"),
-         Columns.max(table, "t")}
+        {Columns.min!(table, "v"), Columns.max!(table, "v"), Columns.min!(table, "t"),
+         Columns.max!(table, "t")}
     }
   end
 
@@ -177,11 +177,11 @@ defmodule Macaw.Data.Derived.ColumnsTest do
                 first_by(times, &Order.instant/1, :lt), first_by(times, &Order.instant/1, :gt)}
 
       # Either spelling names a column, and a part of the input is the rows it holds.
-      assert Columns.column(table, :v) == got.columns |> Enum.at(1)
+      assert Columns.column!(table, :v) == got.columns |> Enum.at(1)
       n = div(length(rows), 2)
-      assert Columns.rows(Columns.take(table, n)) == Enum.take(rows, n)
-      assert Columns.rows(Columns.take(table, -n)) == Enum.take(rows, -n)
-      assert Columns.rows(Columns.slice(table, 1, n)) == Enum.slice(rows, 1, n)
+      assert Columns.rows!(Columns.take!(table, n)) == Enum.take(rows, n)
+      assert Columns.rows!(Columns.take!(table, -n)) == Enum.take(rows, -n)
+      assert Columns.rows!(Columns.slice!(table, 1, n)) == Enum.slice(rows, 1, n)
     end
   end
 
@@ -206,23 +206,64 @@ defmodule Macaw.Data.Derived.ColumnsTest do
     table = Table.new!([{"f", :number, floats}, {"i", :number, ints}, {"t", :time, us}])
 
     for name <- ["f", "i"], fun <- [:sum, :mean, :min, :max, :count] do
+      assert {:ok, _} = apply(Columns, fun, [table, name])
+
       assert apply(Columns, fun, [table, name]) ===
                Native.elixir(fn -> apply(Columns, fun, [table, name]) end)
     end
 
-    assert Columns.sum(table, "i") === Enum.sum(Enum.reject(ints, &is_nil/1))
-    assert Columns.min(table, "t") == Enum.min_by(us, &DateTime.to_unix(&1, :microsecond))
-    assert Columns.max(table, "t") == Native.elixir(fn -> Columns.max(table, "t") end)
+    assert Columns.sum!(table, "i") === Enum.sum(Enum.reject(ints, &is_nil/1))
+    assert Columns.min!(table, "t") == Enum.min_by(us, &DateTime.to_unix(&1, :microsecond))
+    assert Columns.max!(table, "t") == Native.elixir(fn -> Columns.max!(table, "t") end)
   end
 
-  @tag verifies: "derived-columns-accessors"
-  test "a name the input lacks and a typed read of another type raise ArgumentError" do
-    table = Table.new!([{"s", :text, ["a"]}, {"v", :number, [nil]}])
-    assert_raise ArgumentError, ~r/no column "w"/, fn -> Columns.column(table, "w") end
-    assert_raise ArgumentError, ~r/:text, not :number/, fn -> Columns.sum(table, :s) end
-    assert_raise ArgumentError, ~r/not :time/, fn -> Columns.instants(table, "v") end
-    assert Columns.sum(table, "v") === 0
-    assert Columns.mean(table, "v") == nil
-    assert Columns.min(table, "v") == nil
+  @tag verifies: "derived-columns-errors"
+  test "every accessor answers its reason, never a raise, and its ! variant raises the reason's words" do
+    table = Table.new!([{"s", :text, ["a"]}, {"v", :number, [nil]}, {"t", :time, [nil]}])
+    named = [:type, :column, :numbers, :instants, :valid, :count, :sum, :mean, :min, :max]
+
+    for fun <- named do
+      assert apply(Columns, fun, [table, "w"]) == {:error, {:unknown_column, "w"}}
+      assert apply(Columns, fun, [table, 1]) == {:error, {:type, :name}}
+      assert apply(Columns, fun, [[%{"w" => 1}], "w"]) == {:error, {:type, :table}}
+    end
+
+    for fun <- [:names, :size, :rows],
+        do: assert(apply(Columns, fun, [nil]) == {:error, {:type, :table}})
+
+    assert Columns.sum(table, :s) == {:error, {:wrong_type, "s", [:number], :text}}
+    assert Columns.mean(table, "t") == {:error, {:wrong_type, "t", [:number], :time}}
+    assert Columns.numbers(table, "t") == {:error, {:wrong_type, "t", [:number], :time}}
+    assert Columns.instants(table, "v") == {:error, {:wrong_type, "v", [:time], :number}}
+    assert Columns.min(table, "s") == {:error, {:wrong_type, "s", [:number, :time], :text}}
+    assert Columns.max(table, "s") == {:error, {:wrong_type, "s", [:number, :time], :text}}
+    assert Columns.take(table, 1.5) == {:error, {:type, :integer}}
+    assert Columns.slice(table, -1, 2) == {:error, {:type, :non_neg_integer}}
+    assert Columns.slice(table, 0, nil) == {:error, {:type, :non_neg_integer}}
+    assert Columns.take(nil, 1) == {:error, {:type, :table}}
+    assert Columns.slice(nil, 0, 1) == {:error, {:type, :table}}
+
+    # Of no readings: the aggregates' values.
+    assert Columns.sum(table, "v") === {:ok, 0}
+    assert Columns.mean(table, "v") == {:ok, nil}
+    assert Columns.min(table, "v") == {:ok, nil}
+    assert Columns.count(table, "v") == {:ok, 0}
+
+    assert_raise ArgumentError, ~s|the input has no column "w"|, fn ->
+      Columns.column!(table, "w")
+    end
+
+    assert_raise ArgumentError, ~s|column "s" is :text, not :number|, fn ->
+      Columns.sum!(table, :s)
+    end
+
+    assert_raise ArgumentError, ~s|column "v" is :number, not :time|, fn ->
+      Columns.instants!(table, "v")
+    end
+
+    assert_raise ArgumentError, ~r/an atom or a string/, fn -> Columns.count!(table, 1) end
+    assert_raise ArgumentError, ~r/not a Macaw.Data.Table/, fn -> Columns.size!(nil) end
+    assert_raise ArgumentError, ~r/integer count/, fn -> Columns.take!(table, :x) end
+    assert_raise ArgumentError, ~r/non-negative integers/, fn -> Columns.slice!(table, 0, -1) end
   end
 end

@@ -112,17 +112,17 @@ defmodule Macaw.Data.Derived.SandboxTest do
       source = """
       fn t ->
         %{
-          size: #{@columns}.size(t),
-          numbers: #{@columns}.numbers(t, "v"),
-          instants: t |> #{@columns}.instants("t"),
-          valid: #{@columns}.valid(t, :v),
-          count: #{@columns}.count(t, "state"),
+          size: #{@columns}.size!(t),
+          numbers: #{@columns}.numbers!(t, "v"),
+          instants: t |> #{@columns}.instants!("t"),
+          valid: #{@columns}.valid!(t, :v),
+          count: #{@columns}.count!(t, "state"),
           sum: #{@columns}.sum(t, "v"),
-          mean: #{@columns}.mean(t, "v"),
-          min: #{@columns}.min(t, "t"),
-          max: #{@columns}.max(t, "v"),
-          slice: #{@columns}.size(#{@columns}.slice(t, 1, 5)),
-          take: #{@columns}.numbers(#{@columns}.take(t, -1), "v"),
+          mean: #{@columns}.mean!(t, "v"),
+          min: #{@columns}.min!(t, "t"),
+          max: #{@columns}.max!(t, "v"),
+          slice: #{@columns}.size!(#{@columns}.slice!(t, 1, 5)),
+          take: #{@columns}.numbers!(#{@columns}.take!(t, -1), "v"),
           sizes: Enum.map([t, t], &#{@columns}.size/1)
         }
       end
@@ -139,16 +139,16 @@ defmodule Macaw.Data.Derived.SandboxTest do
                  %{
                    size: 3,
                    numbers: [1, nil, 2.5],
-                   instants: c.instants(t, "t"),
+                   instants: c.instants!(t, "t"),
                    valid: [true, false, true],
                    count: 2,
-                   sum: 3.5,
+                   sum: {:ok, 3.5},
                    mean: 1.75,
                    min: ~U[2026-01-01 00:00:00Z],
                    max: 2.5,
                    slice: 2,
                    take: [2.5],
-                   sizes: [3, 3]
+                   sizes: [{:ok, 3}, {:ok, 3}]
                  },
                  fn {k, v} -> {to_string(k), v} end
                )
@@ -158,31 +158,66 @@ defmodule Macaw.Data.Derived.SandboxTest do
     test "names, types, values and rows come back as the function reads its literals" do
       source = """
       fn t ->
-        {#{@columns}.names(t), #{@columns}.type(t, "state") == :category,
-         Enum.member?(#{@columns}.column(t, "state"), :ok),
-         Enum.map(#{@columns}.rows(t), & &1.state), Enum.map([t], &#{@columns}.names/1)}
+        {#{@columns}.names!(t), #{@columns}.type(t, "state") == {:ok, :category},
+         Enum.member?(#{@columns}.column!(t, "state"), :ok),
+         Enum.map(#{@columns}.rows!(t), & &1.state), Enum.map([t], &#{@columns}.names/1)}
       end
       """
 
       assert call(source, [table()]) ==
                {:ok,
-                {["v", "state", "t"], true, true, [:ok, "warning", nil], [["v", "state", "t"]]}}
+                {["v", "state", "t"], true, true, [:ok, "warning", nil],
+                 [{:ok, ["v", "state", "t"]}]}}
     end
 
     @tag verifies: "derived-allowlist-columns"
     test "a literal column name is held to fields:, a computed one to the table" do
       fields = [fields: [:v, :state]]
-      assert ok?(~s|fn t -> #{@columns}.sum(t, "v") + #{@columns}.count(t, :state) end|, fields)
+      assert ok?(~s|fn t -> #{@columns}.sum!(t, "v") + #{@columns}.count!(t, :state) end|, fields)
 
       assert [{:unknown_field, "w"}] = reasons(~s|fn t -> #{@columns}.sum(t, "w") end|, fields)
       assert [{:unknown_field, "w"}] = reasons(~s|fn t -> t \|> #{@columns}.sum(:w) end|, fields)
 
-      name = ~s|fn t -> n = Enum.at(#{@columns}.names(t), 0); #{@columns}.numbers(t, n) end|
+      name = ~s|fn t -> n = Enum.at(#{@columns}.names!(t), 0); #{@columns}.numbers(t, n) end|
       assert ok?(name, fields)
-      assert call(name, [table()]) == {:ok, [1, nil, 2.5]}
+      assert call(name, [table()]) == {:ok, {:ok, [1, nil, 2.5]}}
+
+      # A bad call answers its reason, spelled as the function's literals are, so the
+      # function matches it with its own words; one that matches {:ok, v} on it raises
+      # MatchError, and a ! variant ArgumentError, each the runner's :raised.
+      w = ~s|Enum.join(["w"])|
+
+      assert call(~s|fn t -> #{@columns}.sum(t, #{w}) end|, [table()]) ==
+               {:ok, {:error, {"unknown_column", "w"}}}
+
+      matched = """
+      fn t ->
+        case #{@columns}.mean(t, "t") do
+          {:ok, m} -> m
+          {:error, {:wrong_type, name, [:number], :time}} -> {:not_a_number, name}
+        end
+      end
+      """
+
+      assert call(matched, [table()]) == {:ok, {"not_a_number", "t"}}
+
+      assert {:error, :raised, MatchError} =
+               call(~s|fn t -> {:ok, s} = #{@columns}.sum(t, #{w}); s end|, [table()])
 
       assert {:error, :raised, ArgumentError} =
-               call(~s|fn t -> #{@columns}.sum(t, Enum.join(["w"])) end|, [table()])
+               call(~s|fn t -> #{@columns}.sum!(t, #{w}) end|, [table()])
+
+      assert {:error, :raised, ArgumentError} =
+               call(~s|fn t -> #{@columns}.column!(t, #{w}) end|, [table()])
+
+      assert call(~s|fn t -> #{@columns}.column(t, #{w}) end|, [table()]) ==
+               {:ok, {:error, {"unknown_column", "w"}}}
+
+      words =
+        ~s|fn t -> {:error, r} = #{@columns}.min(t, "state"); #{@columns}.format_error(r) end|
+
+      assert call(words, [table()]) ==
+               {:ok, ~s|column "state" is :category, not :number or :time|}
     end
 
     @tag verifies: "derived-allowlist-columns"
