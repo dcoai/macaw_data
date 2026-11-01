@@ -599,9 +599,28 @@ defmodule Macaw.Data.Derived do
   An answer held to the source's schema (spec/02 §1.2): `{:ok, rows}`, the rows keyed by
   their fields' strings, or `{:error, {index, field, reason}}` for the first row that does
   not hold, never the value.
+
+  A source that reads its inputs as columns (`input: :columns`) may also answer a
+  `Macaw.Data.Table` or a column map, `%{field => [values]}`, held to the schema column by
+  column and answered as the output table, packed under the schema and never made into
+  rows: `{:ok, table}`. A fault of a whole column (`:undescribed`, `:duplicate`,
+  `:not_a_column`, `{:length, n}`, a table column's `{:type, type}`) has index `nil`;
+  any other is the lowest row index at fault, an identity gap before a value fault at one
+  index, fields in name order.
+
+      iex> source = Macaw.Data.Derived.new!(id: :c, from: [in: nil], input: :columns,
+      ...>   schema: %{n: %{type: :number}, s: %{type: :category, values: [:ok]}}, function: :f)
+      iex> {:ok, table} = Macaw.Data.Derived.conform(source, %{n: [1, 2], s: [:ok, nil]})
+      iex> Macaw.Data.Table.rows(table)
+      [%{"n" => 1, "s" => "ok"}, %{"n" => 2, "s" => nil}]
+      iex> Macaw.Data.Derived.conform(source, %{n: [1, "two"]})
+      {:error, {1, "n", {:type, :number}}}
+      iex> Macaw.Data.Derived.conform(source, %{n: [1], s: []})
+      {:error, {nil, "s", {:length, 1}}}
   """
   @spec conform(t(), term()) ::
-          {:ok, [map()]} | {:error, {non_neg_integer() | nil, String.t() | nil, term()}}
+          {:ok, [map()] | Table.t()}
+          | {:error, {non_neg_integer() | nil, String.t() | nil, term()}}
   def conform(%__MODULE__{schema: schema}, rows) when is_list(rows) do
     identity = Schema.identity(schema)
 
@@ -618,7 +637,195 @@ defmodule Macaw.Data.Derived do
     fault || {:ok, Enum.map(rows, &keyed/1)}
   end
 
+  def conform(%__MODULE__{input: :columns, schema: schema}, %Table{} = table),
+    do: conform_table(schema, table)
+
+  def conform(%__MODULE__{input: :columns, schema: schema}, columns)
+      when is_map(columns) and not is_struct(columns),
+      do: conform_map(schema, columns)
+
   def conform(%__MODULE__{}, _other), do: {:error, {nil, nil, :not_a_list}}
+
+  # -- a columnar answer (spec/02 §1.2, macaw_data#107) ------------------------------------
+
+  # A column map: every key a described field, by either spelling, once, its value a list,
+  # every list of one length; then each column's values as a row's would be held.
+  defp conform_map(schema, columns) do
+    named =
+      columns
+      |> Enum.map(fn {key, values} -> {field_name(key), key, values} end)
+      |> Enum.sort_by(fn {name, key, _values} -> {name || "", inspect(key)} end)
+
+    with :ok <- whole_columns(named, schema),
+         n = size_of(named),
+         :ok <-
+           rows_fault(schema, n, Map.new(named, fn {name, _key, values} -> {name, values} end)) do
+      packed(schema, n, fn name ->
+        case List.keyfind(named, name, 0) do
+          {_name, _key, values} -> values
+          nil -> nil
+        end
+      end)
+    end
+  end
+
+  defp whole_columns(named, schema) do
+    n = size_of(named)
+
+    Enum.reduce_while(named, {:ok, MapSet.new()}, fn {name, key, values}, {:ok, seen} ->
+      cond do
+        not (is_atom(key) or is_binary(key)) or Schema.fetch(schema, key) == :error ->
+          {:halt, {:error, {nil, name, :undescribed}}}
+
+        MapSet.member?(seen, name) ->
+          {:halt, {:error, {nil, name, :duplicate}}}
+
+        not is_list(values) ->
+          {:halt, {:error, {nil, name, :not_a_column}}}
+
+        length(values) != n ->
+          {:halt, {:error, {nil, name, {:length, n}}}}
+
+        true ->
+          {:cont, {:ok, MapSet.put(seen, name)}}
+      end
+    end)
+    |> case do
+      {:ok, _seen} -> :ok
+      error -> error
+    end
+  end
+
+  defp size_of([{_name, _key, values} | _]) when is_list(values), do: length(values)
+  defp size_of(_named), do: 0
+
+  # A table: every column a described field, once, of the field's type; then the columns
+  # a table's type does not hold to the schema's (text and category hold any value) and
+  # the identity read as a row's would be.
+  defp conform_table(schema, table) do
+    names = Table.names(table)
+
+    whole =
+      Enum.reduce_while(names, {:ok, MapSet.new()}, fn column, {:ok, seen} ->
+        name = field_name(column)
+
+        cond do
+          name == nil or Schema.fetch(schema, column) == :error ->
+            {:halt, {:error, {nil, name, :undescribed}}}
+
+          MapSet.member?(seen, name) ->
+            {:halt, {:error, {nil, name, :duplicate}}}
+
+          Table.column_type(table, column) != Schema.fetch(schema, column, :type) |> elem(1) ->
+            {:halt, {:error, {nil, name, {:type, elem(Schema.fetch(schema, column, :type), 1)}}}}
+
+          true ->
+            {:cont, {:ok, MapSet.put(seen, name)}}
+        end
+      end)
+
+    with {:ok, _seen} <- whole,
+         columns = Map.new(names, &{Names.name(&1), &1}),
+         n = Table.size(table),
+         read = fn name ->
+           Map.get(columns, name) && Table.column(table, Map.fetch!(columns, name))
+         end,
+         :ok <- rows_fault(schema, n, fn name -> checked_column(schema, name, read) end) do
+      if laid_out?(schema, table),
+        do: {:ok, table},
+        else: packed(schema, n, read)
+    end
+  end
+
+  # A table column whose type holds every value the schema's does is read only where the
+  # schema asks more of it: a category's declared values, an identity's gaps.
+  defp checked_column(schema, name, read) do
+    {:ok, description} = Schema.fetch(schema, name)
+
+    if description.type in [:text, :category] or Schema.values(schema, name) != nil or
+         name in Enum.map(Schema.identity(schema), &Names.name/1),
+       do: read.(name),
+       else: :unread
+  end
+
+  # A conforming table is the output as it is when it is already in its layout: a column a
+  # field, named by its string, of its type, in name order (spec/02 §8.2).
+  defp laid_out?(%Schema{fields: fields}, table) do
+    header = for {name, %{type: type}} <- Enum.sort(fields), do: {name, type}
+    Enum.map(Table.names(table), &{&1, Table.column_type(table, &1)}) == header
+  end
+
+  # The lowest row index at fault over the columns: `columns` a map, or a function, from a
+  # field's string to its values, `nil` for an absent column, `:unread` for one the type
+  # already holds.
+  defp rows_fault(%Schema{fields: fields} = schema, n, columns) do
+    read = if is_map(columns), do: &Map.get(columns, &1), else: columns
+    identity = Enum.map(Schema.identity(schema), &Names.name/1)
+
+    faults =
+      for {name, _description} <- Enum.sort(fields),
+          fault = column_fault(schema, name, name in identity, read.(name), n),
+          fault != nil,
+          do: fault
+
+    case Enum.min_by(faults, fn {i, rank, name, _reason} -> {i, rank, name} end, fn -> nil end) do
+      nil -> :ok
+      {i, _rank, name, reason} -> {:error, {i, name, reason}}
+    end
+  end
+
+  defp column_fault(_schema, name, true, nil, n) when n > 0, do: {0, 0, name, :no_identity}
+  defp column_fault(_schema, _name, _identity?, nil, _n), do: nil
+  defp column_fault(_schema, _name, false, :unread, _n), do: nil
+
+  # A column's first fault, its field's type and declared values read once: each value
+  # held as `value_fault/3` holds a row's.
+  defp column_fault(schema, name, identity?, values, _n) do
+    {:ok, %{type: type}} = Schema.fetch(schema, name)
+
+    declared =
+      case Schema.values(schema, name) do
+        nil -> nil
+        values -> {MapSet.new(values, &Names.category/1), values}
+      end
+
+    scan(values, 0, {name, type, declared, identity?})
+  end
+
+  defp scan([], _i, _field), do: nil
+
+  defp scan([nil | rest], i, {name, _type, _declared, identity?} = field),
+    do: if(identity?, do: {i, 0, name, :no_identity}, else: scan(rest, i + 1, field))
+
+  defp scan([value | rest], i, {name, type, declared, _identity?} = field) do
+    cond do
+      not typed?(type, value) -> {i, 1, name, {:type, type}}
+      not declared?(declared, value) -> {i, 1, name, :not_in_values}
+      true -> scan(rest, i + 1, field)
+    end
+  end
+
+  # A category value is one of the declared ones by its spelling (`member?/2`): a set
+  # lookup, else the comparison `Macaw.Layers.Names.same?/2` makes (`1` and `1.0`).
+  defp declared?(nil, _value), do: true
+
+  defp declared?({set, values}, value),
+    do: MapSet.member?(set, Names.category(value)) or member?(values, value)
+
+  # The output table of a conforming columnar answer: a column a field, named by its
+  # string, of its type, in name order, `nil` where the answer has no column.
+  defp packed(%Schema{fields: fields}, n, values) do
+    columns =
+      for {name, %{type: type}} <- Enum.sort(fields) do
+        case values.(name) do
+          nil -> {name, type, List.duplicate(nil, n)}
+          list -> {name, type, list}
+        end
+      end
+
+    {:ok, table} = Table.new(columns)
+    {:ok, table}
+  end
 
   defp keyed(row), do: Map.new(row, fn {k, v} -> {Names.name(k), v} end)
 
@@ -705,7 +912,7 @@ defmodule Macaw.Data.Derived do
     end
 
     answers = Enum.map(groups, fn {identity, rows} -> {identity, call.(argument.(rows))} end)
-    join_answers(answers, Schema.identity(source.schema))
+    join_answers(answers, Schema.identity(source.schema), source.input)
   end
 
   # A table's entities (`input: :columns`): each row's identity read from the identity
@@ -771,10 +978,10 @@ defmodule Macaw.Data.Derived do
       else: fields |> Enum.zip(values) |> Map.new()
   end
 
-  defp join_answers(answers, fields) do
+  defp join_answers(answers, fields, input) do
     answers
     |> Enum.reduce_while({:ok, []}, fn {identity, answer}, {:ok, acc} ->
-      case entity_rows(answer) do
+      case entity_rows(answer, input) do
         {:ok, rows} -> {:cont, {:ok, acc ++ Enum.map(rows, &{identity, &1})}}
         :error -> {:halt, {:error, :nonconforming, {nil, nil, :not_a_list}}}
       end
@@ -785,9 +992,12 @@ defmodule Macaw.Data.Derived do
     end
   end
 
-  defp entity_rows(row) when is_map(row) and not is_struct(row), do: {:ok, [row]}
-  defp entity_rows(rows) when is_list(rows), do: {:ok, rows}
-  defp entity_rows(_other), do: :error
+  # Under `input: :columns` an entity may answer a table, read as its rows: they are
+  # stamped with the entity's identity and joined as any entity's rows are (spec/02 §1.3).
+  defp entity_rows(%Table{} = table, :columns), do: {:ok, Table.rows(table)}
+  defp entity_rows(row, _input) when is_map(row) and not is_struct(row), do: {:ok, [row]}
+  defp entity_rows(rows, _input) when is_list(rows), do: {:ok, rows}
+  defp entity_rows(_other, _input), do: :error
 
   # Each row given its entity's identity; a row that names another value for one does not
   # conform.

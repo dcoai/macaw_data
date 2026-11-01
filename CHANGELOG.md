@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Added:** a `:columns` source may answer a table or a column map (#107, #113, spec/02 §1.2, §8.2). `Macaw.Data.Derived.conform/2` holds the answer to the schema column by column and answers the output table, `{:ok, table}`; `Macaw.Data.Derived.Engine` packs it without making a row.
+  - A whole column's fault has index `nil`. The new reasons are `:duplicate`, `:not_a_column` and `{:length, n}`. A table column of another type is `{:type, type}`.
+  - Any other fault is at the lowest index, with an identity gap before a value fault. A single fault is the one the answer's rows would give.
+  - A table already in the output's layout is the output as it is.
+  - Under `per`, an entity may answer a table, which is read as its rows.
+  - A `:rows` source still answers rows alone.
+- **Faster:** answering 5,000 rows of two fields as a column map costs the engine 164,585 reductions to conform and pack, where the same rows cost 976,673.
 - **Added:** a derived source may read its inputs as columns: `input: :rows | :columns` on `Macaw.Data.Derived` (#107, #112, spec/02 §1.1, §2.2, §7, §8.2). It is `:rows` by default, and a `:rows` source runs exactly as before.
   - Under `:columns`, `Macaw.Data.Derived.Engine` hands the function each input as a `Macaw.Data.Table`, read with `Macaw.Data.Derived.Columns`, and makes no row.
   - A table delivery is handed over as windowed. A list delivery, or a request window's finished rows, is packed under the input's schema. Rows that don't pack are the fault `:nonconforming`, with detail `{:input, key, faults}` and no value.

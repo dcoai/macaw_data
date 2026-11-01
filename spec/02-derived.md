@@ -91,6 +91,26 @@ in context, a function reading a field no input or output describes, a window it
 | `:not_in_values` | a `:category` field's value is not one of its declared `values` |
 | `:no_identity` | an identity field is `nil` or absent: a row that does not say what it is about names nothing |
 | `:identity` | under `per`, a row names another identity than its entity's |
+| `:duplicate` | a columnar answer names one field twice, an atom and a string of one spelling (`index` is `nil`) |
+| `:not_a_column` | a column map's value is not a list (`index` is `nil`) |
+| `{:length, n}` | a column map's column is not `n` long, the length of its first column in name order (`index` is `nil`) |
+
+**A columnar answer** (macaw_data#107). A source that reads its inputs as columns (`input: :columns`, §2.2) may answer, besides rows, a **`Macaw.Data.Table`** or, outside `per`, a **column map** `%{field => [values]}`, keyed by fields by either spelling, each value a list, every list one length. It is held to the schema **column by column**, and no row is made: `conform/2` answers `{:ok, table}`, the output table (§8.2), or the fault.
+
+- **A whole column's fault** has index `nil`: a column of no described field (`:undescribed`), a field named twice (`:duplicate`), a column map's value that is not a list (`:not_a_column`), a column of another length (`{:length, n}`), and a table's column whose declared type is not the field's (`{:type, type}`). They are found in name order, before any value is read.
+- **Otherwise the lowest index at fault** over every field, in name order. At one index an identity gap (`:no_identity`) comes before a value's fault. Values are held as a row's are (§1.2): `{:type, type}`, `:not_in_values`. An identity field with no column is `:no_identity` at `0` when there are rows. A table's columns are read only where its types hold less than the schema's: a `:text` or `:category` column (a table's holds any value), a field with declared values, an identity field. So a single fault in an answer is the fault its rows would answer.
+- **The output.** A conforming table already in the output's layout (a column a field, named by its string, of its type, in name order) is the output as it is. Any other columnar answer is packed once from its columns under the schema, `nil` where it has no column.
+- **Under `per`** an entity may answer a table, which is read as its rows, then stamped with the entity's identity and joined (§1.3). A map stays a row there, so a column map is not an entity's answer.
+- A `:rows` source answers rows alone: a map or a table is `:not_a_list`, as before.
+
+```test:derived-conform-columns
+a table, a column map and rows of one answer give one output; a table in the output's layout is the output as it is, any other packed by name with nil for an absent column; under per an entity's table is read as its rows; each columnar fault at its index and field, a whole column's at nil; a single fault is the one rows would answer, and holds no value (property); a :rows source still answers rows alone
+```
+
+```test:derived-conform-columns-cost
+answering 5,000 rows as a column map costs the engine's process, which conforms and packs it, under a quarter of what answering them as rows does, under a pinned bound
+```
+
 
 An answer that does not conform is the engine's fault `:nonconforming` (§8.3), this its detail; the output the source last held stays.
 
@@ -106,7 +126,7 @@ no fault of conform ever holds a value of the rows (property over rows carrying 
 
 With `per`, the function is called **once per entity** of one input, its **identity input**: the only input under `:identity`, the one named under `{:identity, input}`. Its schema must declare identity (`{:per, :no_identity}`).
 
-- **Each call** is given that entity's rows of the identity input, its history in the input's window (§2.2), as rows, or under `input: :columns` as a table of those rows gathered from the input's chunks: the rows alone when the source has one input (`fn rows -> … end`), else the inputs' map with the identity input's key holding the entity's rows and every other input whole. A function of two arguments is given the source's context beside them, the same for every entity. It answers one row, a map, or a list of rows.
+- **Each call** is given that entity's rows of the identity input, its history in the input's window (§2.2), as rows, or under `input: :columns` as a table of those rows gathered from the input's chunks: the rows alone when the source has one input (`fn rows -> … end`), else the inputs' map with the identity input's key holding the entity's rows and every other input whole. A function of two arguments is given the source's context beside them, the same for every entity. It answers one row, a map, or a list of rows, or under `input: :columns` a table, read as its rows (§1.2).
 - **Entities** are grouped by the input's declared identity (`Macaw.Data.Schema.identity/2`), in their order of first appearance; a row with no identity is dropped.
 - **The output's identity is the input's:** its schema must declare as identity exactly the input's identity fields, of the same types (`{:per, {:identity, …}}`, `{:per, {:identity_type, …}}`). Each answered row is given the entity's identity values, and a row that names another value for an identity field does not conform (`:identity`).
 - **Joined back by identity:** the output holds every entity's rows, entity by entity, in the input's order of first appearance.
@@ -612,7 +632,7 @@ a set of derived sources is defined with every input resolved and ranks assigned
 - **Every input present.** A source with an input that has no delivery yet (a source loading, a derived source not yet computed) does not run; it stays `:loading`.
 - **In context.** Before a source first runs, and again when an input's schema version changes, it is validated given its inputs' schemas and the registry (§1.1). A source that fails is the fault `:restricted`, its detail the faults.
 - A function of two arguments is given its context (§2.3), which the engine builds from what it was shown.
-- **The answer is a table.** A conforming answer (§1.2) is packed **once** into a table under the source's output schema ([01 §1.1](01-sources.md#sources-table)). Each field is a column named by its string, of its type, in name order, and `nil` where a row lacks it. That table is the output a reader reads (§8.4, §8.5), so no reader packs it again, and a downstream source windows it on its columns (§2.2). It reads back as any table does: every field present, a category's atom as its string.
+- **The answer is a table.** A conforming answer (§1.2) is packed **once** into a table under the source's output schema (a columnar answer is packed from its columns, or is the output as it is when it is already in its layout, and makes no row) ([01 §1.1](01-sources.md#sources-table)). Each field is a column named by its string, of its type, in name order, and `nil` where a row lacks it. That table is the output a reader reads (§8.4, §8.5), so no reader packs it again, and a downstream source windows it on its columns (§2.2). It reads back as any table does: every field present, a category's atom as its string.
 - **A change is told by the table's identity** ([01 §1.1.2](01-sources.md#sources-table-identity)): the new table is `Table.equal?/2` to the last one or it is a change. Two canonical tables compare their chunks' digests, decoding nothing. So `1` and `1.0` differ, and so do `0.0` and `-0.0`. A category's atom and its string, and an absent field and a `nil`, are one value. The row comparison this replaced (`!=` over the conformed rows) told the last two apart and missed the first. A change of the watermark alone is a change too (§8.6).
 
 ```test:derived-engine-change

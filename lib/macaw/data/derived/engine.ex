@@ -527,8 +527,8 @@ defmodule Macaw.Data.Derived.Engine do
 
   defp answered(engine, path, source, rows, watermark, now) do
     case Derived.conform(source, rows) do
-      {:ok, rows} ->
-        table = output(source.schema, rows)
+      {:ok, conformed} ->
+        table = output(source.schema, conformed)
         previous = engine.outputs[path]
 
         # The answer's identity is its table's (spec/01 §1.1.2): two canonical tables
@@ -560,6 +560,8 @@ defmodule Macaw.Data.Derived.Engine do
   # An answer packed once, under its schema: a column a field, by its name's string, of
   # its type, in name order, `nil` where a row lacks it (spec/02 §8.4). The rows
   # conformed, so they pack.
+  defp output(_schema, %Table{} = table), do: table
+
   defp output(%Schema{fields: fields}, rows) do
     columns =
       for {name, %{type: type}} <- Enum.sort(fields),
