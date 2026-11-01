@@ -1,6 +1,21 @@
 # Changelog
 
-## Unreleased
+## v0.9.0 (2026-11-01)
+
+**On macaw_layers 0.4.0, and a request carries a row order** (#92, #94). A capped or budgeted delivery now holds the first rows in the order a reader asked for, where it used to hold a sorted sample. The schema's JSON document carries a version stamp and is read through the kernel's gates (#95). A derived source can hold no URL. `sort` orders a time column by its instant (#93). A raise in a stored function or a conformance callback is answered without logging an `[error]` (#83). This release is breaking for an adopter that pins macaw_layers `~> 0.3`, matches the fault shapes below, or reads `Schema.to_json/1`'s output itself. The guide below lists what to change, and the entries after it give the detail.
+
+### Upgrading from 0.8.x
+
+1. **Move to macaw_layers `~> 0.4.0`** (#92). macaw_data 0.9.0 requires it, so an application that pins `{:macaw_layers, "~> 0.3.0"}` (or `~> 0.3`) widens the pin to `"~> 0.4.0"` and follows macaw_layers 0.4.0's own upgrade notes: `Form.read/3` takes `urls:` and refuses every URL without it, and a theme refuses untrusted text. macaw_data builds no theme and its documents hold no URL, so neither change touches what it reads.
+2. **Match the new fault shapes.**
+   - A derived source document's `$atom` outside the form's atoms is `{:unknown_atom, spelling}` at its path. It was `{:enum, [:identity]}`.
+   - A URL anywhere in a derived source document (`{"$url": …}`) is `{path, {:url, reason}}` at the source's path. A schema document refuses one by type.
+   - `Schema.from_json/2`'s malformed JSON is `{[], {:json, words}}`, where it was `{:json, inspect(reason)}`. A newer stamp is `{[], {:newer_schema, needs, 1}}`, a stamp that is no positive integer is `{["$version"], {:type, :pos_integer}}`, a key beside `"$version"` and `"fields"` is `{[key], :unknown_key}`, and no `"fields"` is `{["fields"], :required}`.
+   - A request's order that is malformed or that the schema can't answer is `{[:order, i], reason}` from `Request.new/1` and `Window.check/2`, and `{:error, {:order, faults}}` from `Source.fetch/3`.
+   - `Derived.format_error/1` and `Schema.format_error/1` word the kernel's reasons in the kernel's words (`Macaw.Layers.Fault`). A test that matches the old `inspect/1` text needs its expected words updated.
+3. **`Schema.to_json/1` writes an object** (#95): `{"$version": 1, "fields": [[name, description], …]}`. Where you decode its output yourself, match on the object, not a list. **A document written by 0.8.x or earlier still reads:** `Schema.from_json/2` lifts its list root to version 1. `to_map/1` and `from_map/1` are unchanged, still the bare pairs, so a derived source's embedded `"schema"` is unchanged too.
+4. **`Request.order` is new and defaults to `[]`** (#94). A request with no order behaves as before. A source that declares the `:order` capability must serve its first `budget` rows in the order and say `served.ordered: :source`. Otherwise finishing sorts what the source served. `Finish.reduce/5` of an ordered delivery keeps the head where it would have reduced by LTTB or M4. `Description.capabilities/0` now lists `:order`, so a test that pins that list needs updating.
+5. **`sort` puts a `nil` last in either direction** (#93). It came first for a time, text or category column ascending, and first for a number column descending. A time column now sorts by its instant, not by struct term order, so an expectation written from the old order changes.
 
 ### Changes
 
@@ -13,6 +28,9 @@
 - **Fixed:** a derived source holds no URL (spec/02 §1.5). macaw_layers 0.4.0 makes `$url` live in every tag table, and a derived source's reader composes the kernel's gates with `new/1` rather than `Form.read/3`, so a `{"$url": …}` at a window's bound read into a `%Macaw.Layers.Url{}` that `new/1` accepted, under no host's policy. The reader now holds the source it reads to the kernel's closed policy: a URL, whatever its scheme, is `{path, {:url, reason}}` at the source's path, and its words never quote it. A schema's reader reads no `$url`, so one is refused by type (spec/01 §1.11).
 - **Changed:** `Derived.format_error/1` words the kernel's own reasons (an unknown tag or atom, a limit, a newer version, a URL) in the kernel's words (`Macaw.Layers.Fault`), where it showed them with `inspect/1`.
 - **Fixed:** `sort` orders a column by its type, not by term order (#93, #97, spec/04 §4.6). A time column was sorted by `%DateTime{}`'s struct term order, so by day of month before year: `2026-10-01, 2026-10-02, 2026-09-30, 2025-12-31` ascending. A time now sorts by its instant, as `DateTime.compare/2` orders it, a number by its value, and text or a category by its spelling. `:color`, `:point` and `:term` keep term order. The step shares `Macaw.Data.Source.Order`'s comparison (`key/2`, `sort_by/2`, new) with a request's row order, so the two order a field alike. **Changed (behavior):** a `nil` reading sorts last in either direction. Before, it came first for a time, text or category column ascending, and first for a number column descending. `filter`'s orderings still compare by term order (#96).
+- **Fixed:** a raise answered by the bounded runner logs no error (#83, spec/02 §6.4, spec/01 §9). `Macaw.Data.Bounded` spawned its process with `:erlang.spawn_opt/2`, so a raise in a stored function, in a compile the compiler refused, or in a conformance callback was also reported by the runtime, as an `[error]` logged a few milliseconds after the caller had its answer, `{:error, :raised, module}`. A host running its users' functions logged an error for every user mistake. The runner now spawns through `:proc_lib.spawn_opt/2`: the answer and the exit reasons are unchanged, and nothing is rescued.
+- **Changed (internal):** the schema's JSON adapter lives in its own hidden module, Macaw.Data.Schema.Form (#85, spec/01 §1.11). `Schema.to_map/1`, `to_json/1`, `from_map/1` and `from_json/2` stay on `Macaw.Data.Schema` with their docs, so the public API is unchanged.
+- **Tests:** the dev-only `surfex` dependency is `~> 0.11.0` (#90), and `WorkTest` bounds `maps:from_list/1`'s randomly seeded sort charge (#87). Neither changes the package.
 - A value entry's `{"$ramp": [name, t]}` reads for any name in a theme's grammar (macaw_layers 0.3.1's `Color.Form`), as `$color` does, so a schema's ramp color round-trips through JSON.
 
 ## v0.8.1 (2026-10-31)
