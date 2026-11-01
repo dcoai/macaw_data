@@ -26,7 +26,7 @@ defmodule Macaw.Data.Native do
   @elixir {__MODULE__, :elixir}
   @normal {__MODULE__, :normal_schedulers}
   # The interface version kernels.zig answers (`abi/0`), so a stale library is not used.
-  @abi 6
+  @abi 7
   # Which module this build compiled, the kernels or their stub, read when this one compiles:
   # a constant, so the start of a build without the kernels never reaches the probe.
   @built Kernels.built?()

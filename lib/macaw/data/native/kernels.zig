@@ -10,18 +10,20 @@
 //! - `ladder.zig`: the ladder partial (spec/04 §4.5.1);
 //! - `finish.zig`: m4's columns and lttb's selection over packed pieces (§4.5.4).
 //! - `group.zig`: the exact sum by group over dictionary codes (spec/04 §5.1);
-//! - `filter.zig`: filter's mask and the gather of fixed-width slots and bits (§4.1.1).
+//! - `filter.zig`: filter's mask and the gather of fixed-width slots and bits (§4.1.1);
+//! - `extremes.zig`: a column's first least and greatest slot (spec/02 §2.2).
 
 const beam = @import("beam");
 const ladder_walk = @import("ladder.zig");
 const finishes = @import("finish.zig");
 const grouping = @import("group.zig");
 const filtering = @import("filter.zig");
+const extremity = @import("extremes.zig");
 
 /// The kernels' interface version, read once at start (`Macaw.Data.Native`): the library
 /// answers only when it is the version the Elixir side was compiled against.
 pub fn abi() u32 {
-    return 6;
+    return 7;
 }
 
 /// A view's piece of the ladder partial (`ladder.zig`).
@@ -57,4 +59,9 @@ pub fn take(data: beam.term, width: usize, indexes: beam.term) !beam.term {
 /// The bits of a bitmap at a list of indexes, packed (`filter.zig`).
 pub fn take_bits(bitmap: beam.term, indexes: beam.term) !beam.term {
     return filtering.take_bits(bitmap, indexes);
+}
+
+/// The first least and greatest present slot of a view (`extremes.zig`).
+pub fn extremes(form: u8, data: beam.term, validity: beam.term, first: usize, count: usize) !beam.term {
+    return extremity.extremes(form, data, validity, first, count);
 }

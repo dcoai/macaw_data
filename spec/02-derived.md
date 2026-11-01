@@ -205,6 +205,36 @@ Over a table and over that table's rows, the window keeps the same rows in the s
 last n over a table is Table.equal? to the row window over its rows, over generated inputs of every kind of time, mixed kinds, a number field, nils, one, two or no identity fields and several chunks read through views; a time orders by its instant whatever its kind, to the microsecond; a sorted table without identity is a slice of its chunks
 ```
 
+**Reading an input as columns** (macaw_data#107). `Macaw.Data.Derived.Columns` reads a windowed input table through its packed buffers and never makes a row. Every accessor names a column by either spelling, its atom or its string, as a row's field is read. A name the table lacks, and a typed accessor on a column of another type, raise `ArgumentError`, so a function that reads what is not there fails at once.
+
+| Accessor | Answers |
+|---|---|
+| `names/1`, `type/2`, `size/1` | the column names in order, as the table spells them; a column's declared type; the number of rows |
+| `column/2` | the column's values in order, `nil` at a gap, as `Table.column/2` decodes them |
+| `numbers/2` | a `:number` column's values in order, `nil` at a gap |
+| `instants/2` | a `:time` column's instants in order, `nil` at a gap: integer Unix microseconds on `Source.Order.instant/1`'s scale (a naive time by its wall clock, a date by its midnight), read from the buffer with no time made |
+| `valid/2` | the presence mask in order, `true` where a value is present |
+| `count/2` | the number of readings, the values present |
+| `sum/2`, `mean/2` | a `:number` column's exact sum (`Macaw.Data.Exact`, [04 §5](04-operations.md#operations-statistics): an integer when every reading is one, `0` of none), and the exact sum over the count (`nil` of none) |
+| `min/2`, `max/2` | a `:number` or `:time` column's least and greatest reading, the first on a tie, `nil` of none. A time is compared by its instant and answered as its value |
+| `slice/3`, `take/2` | a table of some of the rows: the `count` from `start`, or the first `n` (the last `-n` when `n` is negative), views of the chunks, nothing decoded |
+| `rows/1` | the row view, `Table.rows/1`, for a function that wants rows after all |
+
+The positional reads (`column`, `numbers`, `instants`, `valid`) answer one value a row, so two columns zip row by row. The reductions mean what the package's aggregates of the same name mean over the readings ([04 §5](04-operations.md#operations-statistics)). With the native kernels loaded ([04 §1.7](04-operations.md#operations-native)):
+
+- `sum`, `count` and `mean` read an int64 or float64 buffer in the exact-sum kernel, ungrouped, view by view, the views' sums merged exactly;
+- `min` and `max` find their slot in the extremes kernel, which reads an int64, float64 or int32 buffer: numbers, an integral column's values, and the microseconds and days of the packed time forms. The kernel answers the first least and the first greatest slot by index, so one slot is decoded.
+
+Their Elixir path reads the same buffers and answers the same, term for term. Any other form (a union, a list) is read as its values.
+
+```test:derived-columns-accessors
+every accessor agrees with the row view over the same table: names, types, values, presence, numbers, instants, count, exact sum, mean, and the first least and greatest by value or instant, over number columns of every form, every kind of time and mixed kinds, text and category, gaps, several chunks and views that start inside one; either spelling names a column; slice and take hold the rows they name; a missing name or a typed read of another type raises ArgumentError
+```
+
+```test:derived-columns-native
+with the native kernels loaded, every accessor answers term for term what its Elixir path answers, over generated inputs and over whole canonical chunks
+```
+
 **Nothing is aligned** (visualize#643, settled question 13): each input's rows are its current window, and a function over inputs that arrive at different rates aligns them itself.
 
 **How a function reads its inputs.** The function receives the inputs as one map from key to rows: `fn %{hosts: rows} -> … end`.

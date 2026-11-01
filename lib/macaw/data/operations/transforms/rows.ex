@@ -151,7 +151,7 @@ defmodule Macaw.Data.Operations.Transforms.Filter do
   # decided once over the dictionary by the Elixir path's own test). Any other column (a
   # union, an integral, a date, a list) or test is the Elixir path's.
   defp buffers(column, test, _x, _passes?) when test in [:present, :absent] do
-    case validity(column) do
+    case Column.validity(column) do
       nil -> :elixir
       validity -> {0, <<>>, validity, test == :present, <<>>, 0}
     end
@@ -190,17 +190,6 @@ defmodule Macaw.Data.Operations.Transforms.Filter do
   end
 
   defp int64?(x), do: is_integer(x) and x >= @s64_min and x <= @s64_max
-
-  # A column's validity bitmap, where it alone says which rows are `nil`.
-  defp validity({form, _data, validity}) when form in [:int64, :float64, :date, :bool],
-    do: validity
-
-  defp validity({form, _us, validity, _precision}) when form in [:utc, :naive], do: validity
-  defp validity({:zoned, _us, validity, _precision, _zones, _codes}), do: validity
-  defp validity({form, _offsets, _data, validity}) when form in [:text, :binary], do: validity
-  defp validity({:dictionary, _codes, validity, _dictionary, _booleans}), do: validity
-  defp validity({:integral, _data, validity, _integral}), do: validity
-  defp validity(_column), do: nil
 
   @doc false
   # The selection by the Elixir path alone, whatever the kernels: the path a build without

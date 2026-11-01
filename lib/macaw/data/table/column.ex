@@ -887,6 +887,20 @@ defmodule Macaw.Data.Table.Column do
 
   defp all_strings(_data, _last, []), do: []
 
+  @doc false
+  # A column's validity bitmap, a bit set where a value is present; `nil` for a form
+  # that keeps none (a union, whose missing value is its int64 child's, and a list).
+  @spec validity(t()) :: binary() | nil
+  def validity({form, _data, validity}) when form in [:int64, :float64, :date, :bool],
+    do: validity
+
+  def validity({form, _us, validity, _precision}) when form in [:utc, :naive], do: validity
+  def validity({:zoned, _us, validity, _precision, _zones, _codes}), do: validity
+  def validity({form, _offsets, _data, validity}) when form in [:text, :binary], do: validity
+  def validity({:dictionary, _codes, validity, _dictionary, _booleans}), do: validity
+  def validity({:integral, _data, validity, _integral}), do: validity
+  def validity(_column), do: nil
+
   # -- slicing ----------------------------------------------------------------------------
 
   @doc false

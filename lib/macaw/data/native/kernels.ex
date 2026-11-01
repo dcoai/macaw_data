@@ -46,7 +46,9 @@ case Toolchain.decide(
           take: [],
           take_dirty: [alias: :take, concurrency: :dirty_cpu],
           take_bits: [],
-          take_bits_dirty: [alias: :take_bits, concurrency: :dirty_cpu]
+          take_bits_dirty: [alias: :take_bits, concurrency: :dirty_cpu],
+          extremes: [],
+          extremes_dirty: [alias: :extremes, concurrency: :dirty_cpu]
         ]
 
       @doc false
@@ -129,6 +131,13 @@ case Toolchain.decide(
 
       @doc false
       def take_bits_dirty(_bitmap, _indexes), do: :erlang.nif_error(:not_built)
+
+      @doc false
+      def extremes(_form, _data, _validity, _first, _count), do: :erlang.nif_error(:not_built)
+
+      @doc false
+      def extremes_dirty(_form, _data, _validity, _first, _count),
+        do: :erlang.nif_error(:not_built)
     end
 
   {:fail, message} ->
