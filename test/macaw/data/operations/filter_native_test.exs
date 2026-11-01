@@ -135,8 +135,13 @@ defmodule Macaw.Data.Operations.FilterNativeTest do
               offset <- integer(0..3),
               max_runs: 200
             ) do
-        # An ordering's value is of the column's kind (any other is refused, below).
-        value = if test in @orderings, do: of_kind, else: any
+        # An ordering's value is of the column's kind, and so is a time's under eq and ne
+        # (any other is refused, below).
+        value =
+          if test in @orderings or (kind(form) == :time and test in [:eq, :ne]),
+            do: of_kind,
+            else: any
+
         {type, readings} = column(form, is)
         table = Table.new!([{"v", type, readings}]) |> Storage.chunked(size)
         raw = %{op: "filter", field: "v", test: test, value: value}
@@ -151,12 +156,12 @@ defmodule Macaw.Data.Operations.FilterNativeTest do
           assert Filter.chunk(node, view, bound) == elixir
 
           # The forms the kernel reads, it answers: a time's instants under an ordering
-          # among them (#96), but for a date column's days.
+          # (#96) and under eq and ne (#102) among them, but for a date column's days.
           reads? =
             (test in [:present, :absent] and form not in [:union]) or
               (form in [:int, :wide, :float, :category] and
                  (not is_integer(value) or abs(value) < 2 ** 63)) or
-              (form in [:time, :zoned, :naive] and test in @orderings)
+              (form in [:time, :zoned, :naive] and test not in [:present, :absent])
 
           if Native.loaded?() and reads?, do: assert(native != :fallback)
         end
@@ -179,6 +184,24 @@ defmodule Macaw.Data.Operations.FilterNativeTest do
         native = Filter.native(node, view, bound)
         if Native.loaded?(), do: assert(native != :fallback)
         if native != :fallback, do: assert(native == Filter.chunk_elixir(node, view, bound))
+      end
+    end
+  end
+
+  describe "a time's eq and ne against a value with no instant" do
+    @tag verifies: "operations-filter-native-identical"
+    test "is refused alike with and without the kernels" do
+      for form <- [:time, :zoned, :naive, :date],
+          value <- [5, "not a time", nil, 2.5],
+          test <- [:eq, :ne] do
+        {type, readings} = column(form, [1, nil, 2])
+        table = Table.new!([{"v", type, readings}])
+        node = %{op: "filter", field: "v", test: test, value: value}
+        run = fn -> Operations.apply!(@registry, [node], table) end
+        message = ~r/the :time field "v" with a value of its type/
+
+        assert_raise ArgumentError, message, run
+        assert_raise ArgumentError, message, fn -> Native.elixir(run) end
       end
     end
   end

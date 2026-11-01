@@ -633,9 +633,10 @@ defmodule Macaw.Data.Table.Column do
   # buffer scanned as it lies: `{:ok, rows}`. A packed time column (`:utc`, `:zoned`,
   # `:naive`, `:date`) is compared the same way against an instant in Unix microseconds
   # (`Macaw.Data.Source.Order.instant/1`), its buffer holding exactly those (a naive
-  # column's by its wall clock) or days since 1970 (a date's midnight), a missing value
-  # passing none. `:general` for any other column, test or value, which a caller reads
-  # value by value.
+  # column's by its wall clock) or days since 1970 (a date's midnight), under an ordering,
+  # `:eq` or `:ne`, a missing value passing `:ne` alone. `:general` for any other column,
+  # test or value, which a caller reads value by value.
+  @compares [:lt, :lte, :gt, :gte, :eq, :ne]
   @spec where(t(), non_neg_integer(), atom(), term()) :: {:ok, [non_neg_integer()]} | :general
   def where({form, data, validity}, n, test, value)
       when form in [:int64, :float64] and test in [:lt, :lte, :gt, :gte] and is_number(value) do
@@ -643,15 +644,15 @@ defmodule Macaw.Data.Table.Column do
   end
 
   def where({form, us, validity, _precision}, n, test, instant)
-      when form in [:utc, :naive] and test in [:lt, :lte, :gt, :gte] and is_integer(instant),
+      when form in [:utc, :naive] and test in @compares and is_integer(instant),
       do: {:ok, instants(us, valid(validity, n), test, instant)}
 
   def where({:zoned, us, validity, _precision, _zones, _codes}, n, test, instant)
-      when test in [:lt, :lte, :gt, :gte] and is_integer(instant),
+      when test in @compares and is_integer(instant),
       do: {:ok, instants(us, valid(validity, n), test, instant)}
 
   def where({:date, days, validity}, n, test, instant)
-      when test in [:lt, :lte, :gt, :gte] and is_integer(instant),
+      when test in @compares and is_integer(instant),
       do: {:ok, days(test, days, valid(validity, n), instant, 0, [])}
 
   def where(_column, _n, _test, _value), do: :general
@@ -659,12 +660,17 @@ defmodule Macaw.Data.Table.Column do
   defp instants(us, :all, test, x), do: where(:int64, test, us, x, 0, [])
   defp instants(us, bits, test, x), do: present(test, us, bits, x, 0, [])
 
-  # An int64 buffer's slots compared where the validity bit is set.
-  for {test, op} <- [lt: :<, lte: :<=, gt: :>, gte: :>=] do
+  # An int64 buffer's slots compared where the validity bit is set; `ne` passes a missing
+  # slot too, as the negation of `eq`.
+  for {test, op} <- [lt: :<, lte: :<=, gt: :>, gte: :>=, eq: :==] do
     defp present(unquote(test), <<v::signed-little-64, rest::binary>>, [1 | bits], x, i, acc)
          when unquote(op)(v, x),
          do: present(unquote(test), rest, bits, x, i + 1, [i | acc])
   end
+
+  defp present(:ne, <<v::signed-little-64, rest::binary>>, [bit | bits], x, i, acc)
+       when bit == 0 or v != x,
+       do: present(:ne, rest, bits, x, i + 1, [i | acc])
 
   defp present(test, <<_::64, rest::binary>>, [_ | bits], x, i, acc),
     do: present(test, rest, bits, x, i + 1, acc)
@@ -672,13 +678,17 @@ defmodule Macaw.Data.Table.Column do
   defp present(_test, _rest, [], _x, _i, acc), do: :lists.reverse(acc)
 
   # A date32 buffer's days, each at its midnight in Unix microseconds, compared where the
-  # validity bit is set (`:all`, every slot).
+  # validity bit is set (`:all`, every slot); `ne` passes a missing slot too.
   @day_us 86_400_000_000
-  for {test, op} <- [lt: :<, lte: :<=, gt: :>, gte: :>=] do
+  for {test, op} <- [lt: :<, lte: :<=, gt: :>, gte: :>=, eq: :==] do
     defp days(unquote(test), <<d::signed-little-32, rest::binary>>, bits, x, i, acc)
          when (bits == :all or hd(bits) == 1) and unquote(op)(d * @day_us, x),
          do: days(unquote(test), rest, tail(bits), x, i + 1, [i | acc])
   end
+
+  defp days(:ne, <<d::signed-little-32, rest::binary>>, bits, x, i, acc)
+       when (bits != :all and hd(bits) == 0) or d * @day_us != x,
+       do: days(:ne, rest, tail(bits), x, i + 1, [i | acc])
 
   defp days(test, <<_::32, rest::binary>>, bits, x, i, acc),
     do: days(test, rest, tail(bits), x, i + 1, acc)
@@ -688,7 +698,7 @@ defmodule Macaw.Data.Table.Column do
   defp tail(:all), do: :all
   defp tail([_ | bits]), do: bits
 
-  for {test, op} <- [lt: :<, lte: :<=, gt: :>, gte: :>=] do
+  for {test, op} <- [lt: :<, lte: :<=, gt: :>, gte: :>=, eq: :==, ne: :!=] do
     defp where(:float64, unquote(test), <<v::float-little-64, rest::binary>>, x, i, acc)
          when unquote(op)(v, x),
          do: where(:float64, unquote(test), rest, x, i + 1, [i | acc])

@@ -1,13 +1,15 @@
 defmodule Macaw.Data.Operations.Transforms.Filter do
   @moduledoc """
   `filter` (spec/04 §4.1): the rows, in order, whose reading of `field` passes `test`
-  against `value`. `present` and `absent` test `nil`; `eq` and `ne` compare with a
-  category one value whichever spelling it has (`Macaw.Data.Operations.same?/2`); the
-  orderings compare the reading and `value` by the column's type, by the keys `sort`
-  orders by (`Macaw.Data.Source.Order.key/2`), the value read as the column reads it at
-  the edge. A `nil` reading, and one of no reading for its type, never passes an
-  ordering; a value of no reading for the column's type (`nil` included) is a fault,
-  raised before any row is read.
+  against `value`. `present` and `absent` test `nil`; `eq` and `ne` compare a number by
+  its value (`1` equals `1.0`) and a category one value whichever spelling it has
+  (`Macaw.Data.Operations.same?/2`), and a time by its instant; the orderings compare the
+  reading and `value` by the column's type, by the keys `sort` orders by
+  (`Macaw.Data.Source.Order.key/2`), the value read as the column reads it at the edge.
+  So `lte` and `gte` both hold exactly when `eq` does. A `nil` reading, and one of no
+  reading for its type, never passes an ordering nor `eq`; a value of no reading for the
+  column's type (`nil` included) is a fault under an ordering, and under `eq` and `ne` on
+  a time column, raised before any row is read.
   """
   @behaviour Macaw.Data.Transform
 
@@ -19,6 +21,7 @@ defmodule Macaw.Data.Operations.Transforms.Filter do
 
   @tests [:eq, :ne, :lt, :lte, :gt, :gte, :present, :absent]
   @orderings [:lt, :lte, :gt, :gte]
+  @equalities [:eq, :ne]
   # The kernel's code of each comparison.
   @codes %{eq: 0, ne: 1, lt: 2, lte: 3, gt: 4, gte: 5}
   @s64_min -0x8000000000000000
@@ -26,7 +29,8 @@ defmodule Macaw.Data.Operations.Transforms.Filter do
 
   @typedoc """
   What a chunk is tested with: the column's name (`nil` for a column the rows lack), its
-  type, and for an ordering the value's key under that type (else `nil`).
+  type, and for an ordering, or `eq` and `ne` on a time column, the value's key under
+  that type (else `nil`).
   """
   @type bound :: {Table.name() | nil, Table.type() | nil, term()}
 
@@ -59,10 +63,10 @@ defmodule Macaw.Data.Operations.Transforms.Filter do
   @impl true
   def reads, do: []
 
-  # The column and, for an ordering, the value's key under its type, once over the input:
-  # a value of no reading for the column's type is the caller's fault, raised here, before
-  # any row is read (spec/04 §3.1). A column the rows lack has no type: every reading is
-  # `nil`, and no row passes.
+  # The column and, for an ordering or a time's `eq` and `ne`, the value's key under its
+  # type, once over the input: a value of no reading for the column's type is the caller's
+  # fault, raised here, before any row is read (spec/04 §3.1). A column the rows lack has
+  # no type: every reading is `nil`, and no row passes.
   @impl true
   def bind(%{"field" => field, "test" => test, "value" => value}, table, _context) do
     name = Transforms.name_in(Table.names(table), field)
@@ -70,7 +74,8 @@ defmodule Macaw.Data.Operations.Transforms.Filter do
     %{bound: {name, type, at(test, type, value, field)}}
   end
 
-  defp at(test, type, value, field) when test in @orderings and type != nil do
+  defp at(test, type, value, field)
+       when (test in @orderings and type != nil) or (test in @equalities and type == :time) do
     case Order.key(type).(Table.at_edge(type, value)) do
       nil ->
         raise ArgumentError,
@@ -129,9 +134,10 @@ defmodule Macaw.Data.Operations.Transforms.Filter do
 
   def native(_node, _view, _bound), do: :fallback
 
-  # What a reading is compared with: an ordering's, the value's key; any other test's, the
-  # value as given.
+  # What a reading is compared with: an ordering's, and a time's `eq` and `ne`, the value's
+  # key; any other test's, the value as given.
   defp against(%{"test" => test}, {_name, _type, at}) when test in @orderings, do: at
+  defp against(%{"test" => test}, {_name, :time, at}) when test in @equalities, do: at
   defp against(%{"value" => value}, _bound), do: value
 
   # What the kernel reads of a column, `{mode, data, validity, present, pass, ncodes}`:
@@ -140,10 +146,10 @@ defmodule Macaw.Data.Operations.Transforms.Filter do
   # (1, 2: the values compared); against any other value (0: no number equals a term of
   # another type, so one answer holds for every reading; an ordering's value is always a
   # number here, `bind/3` refusing any other); a time column's instants, Unix
-  # microseconds in an int64 buffer, under an ordering against its value's instant (1); a
-  # dictionary of strings (3: each code's answer, decided once over the dictionary by the
-  # Elixir path's own test). Any other column (a union, an integral, a date, a list) or
-  # test is the Elixir path's.
+  # microseconds in an int64 buffer, under any comparison against its value's instant (1,
+  # `bind/3` refusing a value with none); a dictionary of strings (3: each code's answer,
+  # decided once over the dictionary by the Elixir path's own test). Any other column (a
+  # union, an integral, a date, a list) or test is the Elixir path's.
   defp buffers(column, test, _x, _passes?) when test in [:present, :absent] do
     case validity(column) do
       nil -> :elixir
@@ -164,13 +170,12 @@ defmodule Macaw.Data.Operations.Transforms.Filter do
     end
   end
 
-  defp buffers({form, us, validity, _precision}, test, x, _passes?)
-       when form in [:utc, :naive] and test in @orderings,
+  defp buffers({form, us, validity, _precision}, _test, x, _passes?)
+       when form in [:utc, :naive],
        do: instants(us, validity, x)
 
-  defp buffers({:zoned, us, validity, _precision, _zones, _codes}, test, x, _passes?)
-       when test in @orderings,
-       do: instants(us, validity, x)
+  defp buffers({:zoned, us, validity, _precision, _zones, _codes}, _test, x, _passes?),
+    do: instants(us, validity, x)
 
   defp buffers({:dictionary, codes, validity, dictionary, nil}, _test, _x, passes?) do
     strings = Column.dictionary_strings(dictionary)
@@ -238,13 +243,16 @@ defmodule Macaw.Data.Operations.Transforms.Filter do
     if List.last(kept) == a + n - 1, do: {:run, a, n}, else: {:rows, kept}
   end
 
-  # A reading's test, built once a chunk. An ordering keys the reading under the column's
-  # type, as `sort` does, and compares the key with the value's: a reading with no key
-  # (`nil`, or no reading for its type) never passes, nor does any reading of a column the
-  # rows lack. A number's key is the number itself, and a text's its string, so they are
-  # compared directly.
+  # A reading's test, built once a chunk. A time's `eq` compares the reading's instant
+  # with the value's, and `ne` is its negation, so a `nil` reading passes `ne` alone. An
+  # ordering keys the reading under the column's type, as `sort` does, and compares the
+  # key with the value's: a reading with no key (`nil`, or no reading for its type) never
+  # passes, nor does any reading of a column the rows lack. A number's key is the number
+  # itself, and a text's its string, so they are compared directly.
   defp tester(%{"test" => :present}, _bound), do: &(&1 != nil)
   defp tester(%{"test" => :absent}, _bound), do: &(&1 == nil)
+  defp tester(%{"test" => :eq}, {_name, :time, x}), do: &(Order.instant(&1) == x)
+  defp tester(%{"test" => :ne}, {_name, :time, x}), do: &(Order.instant(&1) != x)
   defp tester(%{"test" => :eq, "value" => value}, _bound), do: &Operations.same?(&1, value)
   defp tester(%{"test" => :ne, "value" => value}, _bound), do: &(not Operations.same?(&1, value))
   defp tester(%{"test" => _ordering}, {_name, nil, _at}), do: fn _reading -> false end

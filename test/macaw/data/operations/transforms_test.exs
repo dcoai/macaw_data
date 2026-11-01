@@ -163,6 +163,160 @@ defmodule Macaw.Data.Operations.TransformsTest do
       assert ordered(:category, [:ok, "bad", "warn"], :gte, "ok") == ["ok", "warn"]
     end
 
+    # The rows (by their place) of a table of readings `t`, chunked `size` rows a chunk,
+    # that a filter keeps.
+    defp kept(type, readings, test, value, size) do
+      table =
+        Table.new!([
+          {"t", type, readings},
+          {"i", :number, Enum.to_list(0..(length(readings) - 1))}
+        ])
+        |> Macaw.Data.Test.Storage.chunked(size)
+
+      @registry
+      |> Operations.apply!([%{op: "filter", field: "t", test: test, value: value}], table)
+      |> Table.column("i")
+    end
+
+    defp east(utc),
+      do: %{DateTime.add(utc, 3600) | utc_offset: 3600, time_zone: "Etc/GMT-1", zone_abbr: "+01"}
+
+    defp instants(times), do: Enum.map(times, &(&1 && Macaw.Data.Source.Order.instant(&1)))
+
+    # #102's reproduction: one instant written in another zone or at another precision is
+    # `lte` and `gte` the value, and was not `eq` it.
+    @tag verifies: "operations-filter-equal"
+    test "eq and ne compare a time by its instant, whatever its zone, precision or kind" do
+      at = ~U[2026-01-01 00:00:00Z]
+      later = ~U[2026-01-02 00:00:00Z]
+      times = [at, later, nil, east(at)]
+
+      for value <- [
+            at,
+            east(at),
+            ~U[2026-01-01 00:00:00.000000Z],
+            "2026-01-01T01:00:00+01:00",
+            ~N[2026-01-01 00:00:00],
+            ~D[2026-01-01]
+          ],
+          size <- [:one, 1, 3] do
+        assert kept(:time, times, :eq, value, size) == [0, 3]
+        assert kept(:time, times, :ne, value, size) == [1, 2]
+        assert Native.elixir(fn -> kept(:time, times, :eq, value, size) end) == [0, 3]
+      end
+
+      # Naive and date columns against a DateTime: a wall clock, a midnight.
+      naive = [~N[2026-01-01 00:00:00], ~N[2026-01-01 00:00:01], nil]
+      assert instants(ordered(:time, naive, :eq, at)) == instants([at])
+
+      assert ordered(:time, [~D[2026-01-01], ~D[2026-01-02], nil], :ne, at) == [
+               ~D[2026-01-02],
+               nil
+             ]
+
+      assert instants(ordered(:time, [~D[2026-01-01], later], :eq, east(at))) == instants([at])
+    end
+
+    @tag verifies: "operations-filter-equal"
+    property "on every kind of time column, lte and gte both hold exactly when eq does, as DateTime.compare/2 says" do
+      check all(
+              kind <- member_of([:utc, :zoned, :naive, :date]),
+              steps <-
+                list_of(one_of([constant(nil), integer(-12..12)]), min_length: 1, max_length: 60),
+              at <- integer(-12..12),
+              spelling <- member_of([:utc, :zoned, :naive, :date, :iso, :micro]),
+              size <- member_of([:one, 1, 5, 32])
+            ) do
+        # A date column's readings are midnights; the others step by the hour.
+        unit = if kind == :date or spelling == :date, do: 86_400, else: 3600
+        utc = &DateTime.from_unix!(&1 * unit)
+
+        as = fn t, spelled ->
+          case spelled do
+            :utc -> t
+            :zoned -> east(t)
+            :naive -> DateTime.to_naive(t)
+            :date -> DateTime.to_date(t)
+            :iso -> t |> east() |> DateTime.to_iso8601()
+            :micro -> %{t | microsecond: {0, 6}}
+          end
+        end
+
+        times = Enum.map(steps, &(&1 && as.(utc.(&1), kind)))
+        value = as.(utc.(at), spelling)
+        edge = &Table.at_edge(:time, &1)
+
+        expected =
+          for {t, i} <- Enum.with_index(times),
+              t != nil and DateTime.compare(edge.(t), edge.(value)) == :eq,
+              do: i
+
+        eq = kept(:time, times, :eq, value, size)
+
+        both =
+          MapSet.intersection(
+            MapSet.new(kept(:time, times, :lte, value, size)),
+            MapSet.new(kept(:time, times, :gte, value, size))
+          )
+
+        assert eq == expected
+        assert eq == Enum.sort(both)
+        assert kept(:time, times, :ne, value, size) == Enum.to_list(0..(length(times) - 1)) -- eq
+        assert Native.elixir(fn -> kept(:time, times, :eq, value, size) end) == eq
+
+        assert Native.elixir(fn -> kept(:time, times, :ne, value, size) end) ==
+                 Enum.to_list(0..(length(times) - 1)) -- eq
+      end
+    end
+
+    # A number by its value, as the orderings compare it (spec/04 §4.1): 1 is 1.0 and 0.0
+    # is -0.0, so lte and gte cannot both hold where eq does not.
+    @tag verifies: "operations-filter-equal"
+    property "on a number column, lte and gte both hold exactly when eq does, 1 and 1.0 alike" do
+      number = one_of([integer(-3..3), map(integer(-3..3), &(&1 * 1.0)), constant(-0.0)])
+
+      check all(
+              values <-
+                list_of(
+                  one_of([constant(nil), number, Macaw.Data.Test.Gen.float(min: -3.0, max: 3.0)]),
+                  min_length: 1,
+                  max_length: 60
+                ),
+              value <- number,
+              size <- member_of([:one, 1, 5, 32])
+            ) do
+        expected = for {v, i} <- Enum.with_index(values), v != nil and v == value, do: i
+        eq = kept(:number, values, :eq, value, size)
+
+        both =
+          MapSet.intersection(
+            MapSet.new(kept(:number, values, :lte, value, size)),
+            MapSet.new(kept(:number, values, :gte, value, size))
+          )
+
+        assert eq == expected
+        assert eq == Enum.sort(both)
+        assert Native.elixir(fn -> kept(:number, values, :eq, value, size) end) == eq
+      end
+    end
+
+    @tag verifies: "operations-filter-equal"
+    test "eq and ne on a time column refuse a value with no instant; on a number column another kind equals none" do
+      for value <- [1_767_225_600, "yesterday", nil], test <- [:eq, :ne] do
+        message =
+          "filter, value: #{inspect(test)} compares the :time field \"t\" with a value of its " <>
+            "type, and #{inspect(value)} is none (spec/04 §4.1)"
+
+        run = fn -> ordered(:time, [~U[2026-01-01 00:00:00Z]], test, value) end
+        assert_raise ArgumentError, message, run
+        assert_raise ArgumentError, message, fn -> Native.elixir(run) end
+      end
+
+      assert ordered(:number, [1, 2], :eq, "1") == []
+      assert ordered(:number, [1, 2], :ne, "1") == [1, 2]
+      assert ordered(:number, [1, nil], :eq, nil) == [nil]
+    end
+
     @tag verifies: "operations-filter-typed"
     test "a value of another kind is refused before any row is read; a column the rows lack keeps none" do
       for {type, readings, value} <- [
