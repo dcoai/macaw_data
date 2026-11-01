@@ -27,6 +27,9 @@ defmodule Macaw.Data.Derived.Sandbox do
   alias Macaw.Data.Operations
   alias Macaw.Data.Operations.Registry
 
+  # The `Macaw.Data.Derived.Columns` accessors a stored function reads spelled.
+  @spelled [:names, :type, :column, :rows]
+
   @check_opts [arity: [1, 2], fields: nil, max_source: 10_000, operations: nil]
   @run_opts [max_reductions: 100_000_000, timeout: 30_000, max_heap: 10_000_000]
 
@@ -142,6 +145,14 @@ defmodule Macaw.Data.Derived.Sandbox do
       when name in [:aggregate, :transform] and is_list(args) and args != [] ->
         if ops?(receiver), do: run_call(name, args, call_meta, registry), else: node
 
+      # The accessors whose answer holds names or values read as the function reads its own
+      # literals, spelled (spec/02 §2.2): their twins in `Sandbox.Runtime`.
+      {{:., dot_meta, [receiver, name]}, call_meta, args} = node
+      when name in @spelled and is_list(args) ->
+        if columns?(receiver),
+          do: {{:., dot_meta, [Macaw.Data.Derived.Sandbox.Runtime, name]}, call_meta, args},
+          else: node
+
       # A guard calls nothing: its map reads stay `:erlang.map_get/2` of the field as its
       # inputs spell it, a word's atom or the string (spec/02 §2.3, visualize D-195).
       {:->, meta, [[{:when, when_meta, args}], body]} ->
@@ -164,6 +175,11 @@ defmodule Macaw.Data.Derived.Sandbox do
     do: Enum.reject(parts, &(&1 == Elixir)) == [:Macaw, :Data, :Ops]
 
   defp ops?(_receiver), do: false
+
+  defp columns?({:__aliases__, _meta, parts}),
+    do: Enum.reject(parts, &(&1 == Elixir)) == [:Macaw, :Data, :Derived, :Columns]
+
+  defp columns?(_receiver), do: false
 
   defp run_call(kind, [subject, name | rest], meta, registry) do
     options =

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **Added:** a stored function may read columns: `Macaw.Data.Derived.Columns` is on the sandbox's allowlist with all fifteen accessors (#107, #111, spec/02 §6.1–§6.3). It is written by its full name, as `Macaw.Data.Ops` is.
+  - The checker holds a literal column name, a string or an atom, to `fields:` as it holds `row.field`, so `Columns.sum(t, "w")` over inputs without `w` is `{:unknown_field, "w"}` at its line.
+  - `names/1`, `type/2`, `column/2` and `rows/1` compile to twins in the sandbox's runtime that spell their answers by the function's literals' rule, so a stored function's `:ok` matches a category's `"ok"`, as it does in rows.
+  - A map read of a table (`t.chunks`) raises `ArgumentError`, so a table's fields are read through the accessors alone.
+  - `Macaw.Data.Derived.Sandbox.Allowlist.modules/0` now lists nine modules.
+- **Changed:** a checker fault that names an unknown function of an allowed module whose name is an accessor's (`Macaw.Data.Ops.mean(rows)`) names it by the atom (`{:restricted, {Macaw.Data.Ops, :mean, 1}}`), as it names every function the checker knows; it named it by its string. A fault that names a function no allowed module has is unchanged.
 - **Added:** `Macaw.Data.Derived.Columns`, a derived function's input read as columns (#107, #110, spec/02 §2.2). It holds accessors over a windowed input table that read its packed buffers and never make a row:
   - `names/1`, `type/2` and `size/1`;
   - the positional reads `column/2`, `numbers/2`, `instants/2` (integer Unix microseconds on `Macaw.Data.Source.Order.instant/1`'s scale, read from the buffer with no time made) and `valid/2`, each `nil` (or `false`) at a gap;

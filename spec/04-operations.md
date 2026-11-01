@@ -784,6 +784,8 @@ end
 
 **Both take their subject first**, so a pipe reads in order, and the name second. Called from a host's own code rather than a stored function, they use `macaw_data`'s own package (`Macaw.Data.Operations.registry/0`). **Options are the nodes a design writes**, the same keys and values, so a step moves between a design and a stored function unchanged; a transform's options name no `op`, since the name is the op, and one that does raises. They are read by spelling: an option key or enum value the checker doesn't know as an atom comes back as its string (02 §6.1), and the operation reads it as the same option. The checker's word table therefore doesn't grow with the registry, and a stored function makes no atom through one.
 
+**A column's statistics need no rows** (macaw_data#107). A stored function may also call `Macaw.Data.Derived.Columns` (02 §2.2, §6.2), on the allowlist beside `Ops`. Its `count`, `sum`, `mean`, `min` and `max` mean what the aggregates of the same names mean (§5) over one column's readings, and they read the column's buffers, through the kernels where loaded (§1.7). An input is handed as a table only to a function whose source reads its inputs as columns (02 §8). `Ops` itself still takes values and rows: `Ops.aggregate(Columns.numbers(t, "cpu"), "quantile", %{p: 0.95})` reads one column and makes no row.
+
 ```test:operations-sandbox-ops
 Ops takes its subject first and the name second, so a pipe reads in order; called from host code it runs macaw_data's own package, rows in and rows out; a transform's options that name an op raise
 ```

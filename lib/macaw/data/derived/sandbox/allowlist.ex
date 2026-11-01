@@ -9,10 +9,21 @@ defmodule Macaw.Data.Derived.Sandbox.Allowlist do
   adds fails that test until it is reviewed and listed. `Macaw.Data.Ops` is the library's
   own and held the same way: through it a stored function reaches the registered transforms
   and aggregates by literal name, and which ones is the registry's, never a list here
-  (spec/04 §6). Ported from visualize's `Visualize.VirtualSource.Sandbox.Allowlist`.
+  (spec/04 §6). `Macaw.Data.Derived.Columns` is the library's too, every accessor of a
+  function's input read as columns allowed (spec/02 §2.2). Ported from visualize's `Visualize.VirtualSource.Sandbox.Allowlist`.
   """
 
-  @modules [Enum, Map, Keyword, String, Integer, Float, :math, Macaw.Data.Ops]
+  @modules [
+    Enum,
+    Map,
+    Keyword,
+    String,
+    Integer,
+    Float,
+    :math,
+    Macaw.Data.Ops,
+    Macaw.Data.Derived.Columns
+  ]
 
   @enum [
     all?: 1,
@@ -353,6 +364,26 @@ defmodule Macaw.Data.Derived.Sandbox.Allowlist do
   # registered aggregates and transforms.
   @ops [aggregate: 2, aggregate: 3, transform: 2, transform: 3]
 
+  # A function's input read as columns (spec/02 §2.2, macaw_data#107): every accessor
+  # reads the table it is given and makes nothing else, so every export.
+  @columns [
+    column: 2,
+    count: 2,
+    instants: 2,
+    max: 2,
+    mean: 2,
+    min: 2,
+    names: 1,
+    numbers: 2,
+    rows: 1,
+    size: 1,
+    slice: 3,
+    sum: 2,
+    take: 2,
+    type: 2,
+    valid: 2
+  ]
+
   # The decided exclusions (visualize#643, 2026-10-15) and every deprecated export (visualize D-194).
   @excluded %{
     Enum => [
@@ -396,7 +427,8 @@ defmodule Macaw.Data.Derived.Sandbox.Allowlist do
       {{:to_string, 2}, :deprecated}
     ],
     :math => [],
-    Macaw.Data.Ops => [{{:__run__, 5}, :internal}]
+    Macaw.Data.Ops => [{{:__run__, 5}, :internal}],
+    Macaw.Data.Derived.Columns => []
   }
 
   @allowed %{
@@ -407,7 +439,8 @@ defmodule Macaw.Data.Derived.Sandbox.Allowlist do
     Integer => @integer,
     Float => @float,
     :math => @math,
-    Macaw.Data.Ops => @ops
+    Macaw.Data.Ops => @ops,
+    Macaw.Data.Derived.Columns => @columns
   }
 
   @is_guards [

@@ -96,6 +96,103 @@ defmodule Macaw.Data.Derived.SandboxTest do
     end
   end
 
+  describe "Macaw.Data.Derived.Columns in a stored function (spec/02 §6.2; macaw_data#107)" do
+    @columns "Macaw.Data.Derived.Columns"
+
+    defp table do
+      Macaw.Data.Table.new!([
+        {"v", :number, [1, nil, 2.5]},
+        {"state", :category, ["ok", "warning", nil]},
+        {"t", :time, [~U[2026-01-01 00:00:00Z], nil, ~U[2026-01-01 00:00:02Z]]}
+      ])
+    end
+
+    @tag verifies: "derived-allowlist-columns"
+    test "every accessor is called, piped into and captured, and answers what a host's call answers" do
+      source = """
+      fn t ->
+        %{
+          size: #{@columns}.size(t),
+          numbers: #{@columns}.numbers(t, "v"),
+          instants: t |> #{@columns}.instants("t"),
+          valid: #{@columns}.valid(t, :v),
+          count: #{@columns}.count(t, "state"),
+          sum: #{@columns}.sum(t, "v"),
+          mean: #{@columns}.mean(t, "v"),
+          min: #{@columns}.min(t, "t"),
+          max: #{@columns}.max(t, "v"),
+          slice: #{@columns}.size(#{@columns}.slice(t, 1, 5)),
+          take: #{@columns}.numbers(#{@columns}.take(t, -1), "v"),
+          sizes: Enum.map([t, t], &#{@columns}.size/1)
+        }
+      end
+      """
+
+      t = table()
+      c = Macaw.Data.Derived.Columns
+
+      # A literal key is a string but for a word (`:size`), as the function reads its literals.
+      assert {:ok, answer} = call(source, [t])
+
+      assert Map.new(answer, fn {k, v} -> {to_string(k), v} end) ==
+               Map.new(
+                 %{
+                   size: 3,
+                   numbers: [1, nil, 2.5],
+                   instants: c.instants(t, "t"),
+                   valid: [true, false, true],
+                   count: 2,
+                   sum: 3.5,
+                   mean: 1.75,
+                   min: ~U[2026-01-01 00:00:00Z],
+                   max: 2.5,
+                   slice: 2,
+                   take: [2.5],
+                   sizes: [3, 3]
+                 },
+                 fn {k, v} -> {to_string(k), v} end
+               )
+    end
+
+    @tag verifies: "derived-allowlist-columns"
+    test "names, types, values and rows come back as the function reads its literals" do
+      source = """
+      fn t ->
+        {#{@columns}.names(t), #{@columns}.type(t, "state") == :category,
+         Enum.member?(#{@columns}.column(t, "state"), :ok),
+         Enum.map(#{@columns}.rows(t), & &1.state), Enum.map([t], &#{@columns}.names/1)}
+      end
+      """
+
+      assert call(source, [table()]) ==
+               {:ok,
+                {["v", "state", "t"], true, true, [:ok, "warning", nil], [["v", "state", "t"]]}}
+    end
+
+    @tag verifies: "derived-allowlist-columns"
+    test "a literal column name is held to fields:, a computed one to the table" do
+      fields = [fields: [:v, :state]]
+      assert ok?(~s|fn t -> #{@columns}.sum(t, "v") + #{@columns}.count(t, :state) end|, fields)
+
+      assert [{:unknown_field, "w"}] = reasons(~s|fn t -> #{@columns}.sum(t, "w") end|, fields)
+      assert [{:unknown_field, "w"}] = reasons(~s|fn t -> t \|> #{@columns}.sum(:w) end|, fields)
+
+      name = ~s|fn t -> n = Enum.at(#{@columns}.names(t), 0); #{@columns}.numbers(t, n) end|
+      assert ok?(name, fields)
+      assert call(name, [table()]) == {:ok, [1, nil, 2.5]}
+
+      assert {:error, :raised, ArgumentError} =
+               call(~s|fn t -> #{@columns}.sum(t, Enum.join(["w"])) end|, [table()])
+    end
+
+    @tag verifies: "derived-allowlist-columns"
+    test "a map read of a table raises: its internals are read through the accessors alone" do
+      assert {:error, :raised, ArgumentError} = call("fn t -> t.names end", [table()])
+      assert {:error, :raised, ArgumentError} = call("fn t -> t.size end", [table()])
+      assert {:ok, 1} = call("fn row -> row.v end", [%{v: 1}])
+    end
+  end
+
   describe "check/2: the faults" do
     @tag verifies: "derived-checker-shape"
     test "too long and syntax; a name never seen is a string" do
@@ -312,9 +409,12 @@ defmodule Macaw.Data.Derived.SandboxTest do
       assert [{:restricted, {"Macaw.Data.Reduce", "lttb", 3}}] =
                reasons("fn rows -> Macaw.Data.Reduce.lttb(rows, 3, & &1) end")
 
+      # A name the checker knows (`mean`, an accessor's) is its atom, any other its string.
       for name <- ["mode", "mean"] do
-        assert [{:restricted, {Macaw.Data.Ops, ^name, 1}}] =
+        assert [{:restricted, {Macaw.Data.Ops, written, 1}}] =
                  reasons("fn rows -> Macaw.Data.Ops.#{name}(rows) end")
+
+        assert to_string(written) == name
       end
     end
 

@@ -21,10 +21,20 @@ defmodule Macaw.Data.Derived.AllowlistTest do
     Enum.uniq(functions ++ module.__info__(:macros))
   end
 
-  @modules [Enum, Map, Keyword, String, Integer, Float, :math, Macaw.Data.Ops]
+  @modules [
+    Enum,
+    Map,
+    Keyword,
+    String,
+    Integer,
+    Float,
+    :math,
+    Macaw.Data.Ops,
+    Macaw.Data.Derived.Columns
+  ]
 
   @tag verifies: "derived-allowlist-exact"
-  test "the eight modules, in order" do
+  test "the nine modules, in order" do
     assert Allowlist.modules() == @modules
   end
 

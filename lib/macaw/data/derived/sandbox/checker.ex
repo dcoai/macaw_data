@@ -31,7 +31,8 @@ defmodule Macaw.Data.Derived.Sandbox.Checker do
     [:Float] => Float,
     [:Access] => Access,
     [:Kernel] => Kernel,
-    [:Macaw, :Data, :Ops] => Macaw.Data.Ops
+    [:Macaw, :Data, :Ops] => Macaw.Data.Ops,
+    [:Macaw, :Data, :Derived, :Columns] => Macaw.Data.Derived.Columns
   }
 
   @doc false
@@ -332,6 +333,9 @@ defmodule Macaw.Data.Derived.Sandbox.Checker do
             module == Macaw.Data.Ops ->
               operation(name, Enum.at(args, 1), state)
 
+            module == Macaw.Data.Derived.Columns ->
+              column_name(Enum.at(args, 1), state)
+
             true ->
               state
           end
@@ -374,6 +378,15 @@ defmodule Macaw.Data.Derived.Sandbox.Checker do
       :error -> fault(state, {:unknown_operation, :transform, name})
     end
   end
+
+  # A `Macaw.Data.Derived.Columns` call names its column as `row.field` names a field: a
+  # literal name is held to `fields:` (spec/02 §6.1). A name computed from the data is the
+  # accessor's to refuse, at run time; an accessor of the table alone names none.
+  defp column_name(name, state)
+       when is_binary(name) or (is_atom(name) and name not in [nil, true, false]),
+       do: field(name, state)
+
+  defp column_name(_name, state), do: state
 
   defp module({:__aliases__, _meta, parts}) do
     case Map.fetch(@aliases, Enum.reject(parts, &(&1 == Elixir))) do

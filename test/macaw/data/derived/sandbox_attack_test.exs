@@ -184,13 +184,36 @@ defmodule Macaw.Data.Derived.SandboxAttackTest do
      {:restricted, {"Macaw.Data.Reduce", "lttb", 3}}}
   ]
 
+  # The column accessors (spec/02 §6.2, macaw_data#107): the module's listed functions at
+  # their arities, written by its full name, and nothing the library keeps beside them.
+  @columns [
+    {"fn t -> Macaw.Data.Derived.Columns.__info__(:functions) end",
+     {:restricted, {Macaw.Data.Derived.Columns, "__info__", 1}}},
+    {"fn t -> Macaw.Data.Derived.Columns.module_info() end",
+     {:restricted, {Macaw.Data.Derived.Columns, "module_info", 0}}},
+    {"fn t -> &Macaw.Data.Derived.Columns.module_info/0 end",
+     {:restricted, {Macaw.Data.Derived.Columns, "module_info", 0}}},
+    {~S|fn t -> Macaw.Data.Derived.Columns.sum(t) end|,
+     {:restricted, {Macaw.Data.Derived.Columns, :sum, 1}}},
+    {~S|fn t -> Macaw.Data.Derived.Sandbox.Runtime.get(t, "v") end|,
+     {:restricted, {"Macaw.Data.Derived.Sandbox.Runtime", "get", 2}}},
+    {~S|fn t -> Macaw.Data.Derived.Sandbox.Runtime.rows(t) end|,
+     {:restricted, {"Macaw.Data.Derived.Sandbox.Runtime", "rows", 1}}},
+    {~S|fn t -> Macaw.Data.Table.rows(t) end|, {:restricted, {"Macaw.Data.Table", "rows", 1}}},
+    {~S|fn t -> Macaw.Data.Table.Chunk.storage(t, "v", 0, 1) end|,
+     {:restricted, {"Macaw.Data.Table.Chunk", "storage", 4}}},
+    {~S|fn t -> Columns.sum(t, "v") end|, {:restricted, {"Columns", :sum, 2}}},
+    {"fn %Macaw.Data.Table{} = t -> t end", {:restricted, :struct}}
+  ]
+
   for {group, attacks} <- [
         atoms: @atoms,
         calls: @calls,
         processes: @processes,
         code: @code,
         structs: @structs,
-        collectables: @collectables
+        collectables: @collectables,
+        columns: @columns
       ],
       {{source, reason}, i} <- Enum.with_index(attacks) do
     @tag verifies: ["derived-attacks", "derived-checker-refusals"]
@@ -246,6 +269,15 @@ defmodule Macaw.Data.Derived.SandboxAttackTest do
         rest = Enum.map_join(2..arity//1, ", ", fn _ -> "x" end)
         assert fault in refused("fn x -> x |> #{receiver}.#{name}(#{rest}) end")
       end
+    end
+  end
+
+  @tag verifies: "derived-attacks"
+  test "a map read of a table never reaches its internals: it raises" do
+    table = Macaw.Data.Table.new!([{"v", :number, [1]}])
+
+    for field <- ~w(chunks names types origin size) do
+      assert {:error, :raised, ArgumentError} = call("fn t -> t.#{field} end", [table])
     end
   end
 
@@ -315,7 +347,8 @@ defmodule Macaw.Data.Derived.SandboxAttackTest do
 
   defp sources do
     Enum.map(
-      @atoms ++ @calls ++ @processes ++ @code ++ @structs ++ @collectables ++ @operations,
+      @atoms ++
+        @calls ++ @processes ++ @code ++ @structs ++ @collectables ++ @columns ++ @operations,
       &elem(&1, 0)
     ) ++ @strings
   end

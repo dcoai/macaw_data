@@ -28,7 +28,19 @@ defmodule Macaw.Data.Derived.Sandbox.Names do
   @pool for n <- 1..@pool_size, do: :"sandbox_v#{n}"
   @under for n <- 1..@pool_size, do: :"_sandbox_v#{n}"
 
-  @modules [Enum, Map, Keyword, String, Integer, Float, :math, Access, Kernel, Macaw.Data.Ops]
+  @modules [
+    Enum,
+    Map,
+    Keyword,
+    String,
+    Integer,
+    Float,
+    :math,
+    Access,
+    Kernel,
+    Macaw.Data.Ops,
+    Macaw.Data.Derived.Columns
+  ]
   @alias_parts [
     :Enum,
     :Map,
@@ -40,7 +52,9 @@ defmodule Macaw.Data.Derived.Sandbox.Names do
     :Kernel,
     :Macaw,
     :Data,
-    :Ops
+    :Ops,
+    :Derived,
+    :Columns
   ]
 
   # Words an allowed function takes, the tuples and control words a function writes, and the
