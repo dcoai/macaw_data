@@ -691,7 +691,30 @@ defmodule Macaw.Data.Table do
     {a, b} = {ready(a), ready(b)}
 
     a.size == b.size and header(a) == header(b) and
-      (a.chunks == b.chunks or Enum.all?(a.names, &(column(a, &1) === column(b, &1))))
+      (a.chunks == b.chunks or same_contents?(a, b))
+  end
+
+  # Two tables of whole hashed chunks laid out alike, each chunk's columns in the table's
+  # order, are equal exactly when their chunks' content digests are (spec/01 §1.1.2):
+  # nothing is decoded. Any other pair compares its columns.
+  defp same_contents?(a, b) do
+    case {digests(a), digests(b)} do
+      {{:ok, {counts, digests}}, {:ok, {counts, others}}} -> digests == others
+      _other -> Enum.all?(a.names, &(column(a, &1) === column(b, &1)))
+    end
+  end
+
+  defp digests(%__MODULE__{chunks: views} = table) do
+    header = header(table)
+
+    Enum.reduce_while(views, {:ok, {[], []}}, fn {chunk, first, count}, {:ok, {counts, acc}} ->
+      digest = Chunk.digest(chunk)
+
+      if first == 0 and count == Chunk.size(chunk) and not Chunk.delta?(chunk) and
+           is_binary(digest) and Chunk.header(chunk) == header,
+         do: {:cont, {:ok, {[count | counts], [digest | acc]}}},
+         else: {:halt, :general}
+    end)
   end
 
   @doc """

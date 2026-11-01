@@ -308,8 +308,8 @@ defmodule Macaw.Data.Derived.EngineTest do
         |> Engine.run(0)
 
       assert Delivery.rows(Engine.outputs(engine)[["health"]]) == [
-               %{"host" => "h1", "n" => 3, "state" => :error},
-               %{"host" => "h0", "n" => 2, "state" => :ok}
+               %{"host" => "h1", "n" => 3, "state" => "error"},
+               %{"host" => "h0", "n" => 2, "state" => "ok"}
              ]
     end
 
@@ -322,8 +322,8 @@ defmodule Macaw.Data.Derived.EngineTest do
 
       # h1: cpu 10, 30, 50 → the newest two, 30 + 50; h0: 20 + 40. In the window h0 comes first.
       assert Delivery.rows(Engine.outputs(engine)[["health"]]) == [
-               %{"host" => "h0", "n" => 60},
-               %{"host" => "h1", "n" => 80}
+               %{"host" => "h0", "n" => 60, "state" => nil},
+               %{"host" => "h1", "n" => 80, "state" => nil}
              ]
     end
 
@@ -345,8 +345,8 @@ defmodule Macaw.Data.Derived.EngineTest do
         |> Engine.run(0)
 
       assert Delivery.rows(Engine.outputs(engine)[["health"]]) == [
-               %{"host" => "h0", "n" => 1},
-               %{"host" => "h1", "n" => 1}
+               %{"host" => "h0", "n" => 1, "state" => nil},
+               %{"host" => "h1", "n" => 1, "state" => nil}
              ]
     end
   end

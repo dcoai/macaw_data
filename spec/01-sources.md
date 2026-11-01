@@ -159,7 +159,11 @@ appending and trimming give the contents a fresh build of the same rows would ha
 **A table's identity is its contents, not its layout** (macaw_data#9; an amendment to macaw#188 D5, recorded there): its names in order, each column's type, and each column's values in order as `column/2` reads them back. The same rows chunked two ways are one value.
 
 - **`Table.t()` is opaque,** and `==` on the struct is not a table's equality: two equal tables may hold different chunks.
-- **`equal?/2`** is whether two tables have the same contents. Values compare strictly, as the kernel's digest tells them apart, so `1` and `1.0` differ, and so do `0.0` and `-0.0`.
+- **`equal?/2`** is whether two tables have the same contents. Values compare strictly, as the kernel's digest tells them apart, so `1` and `1.0` differ, and so do `0.0` and `-0.0`. **Two tables of whole hashed chunks laid out alike** compare their chunks' digests (below) and decode nothing. Each chunk must be read whole, carry no delta, and hold its columns in the table's order, and the two tables' chunks must hold the same counts of rows. Any other pair compares its columns. A derived source's change check (02 §8.2) is this.
+
+```test:table-equal-digests
+equal? by chunk digests agrees with comparing the columns, for tables chunked alike or not, and with the digests; equal? of two canonical tables of 50,000 rows reads their digests and decodes no column
+```
 - **`digest/1`** is the table's content digest: 64 lowercase hex characters, a SHA-256 over the table's **canonical form**. It is over the values, never the buffers: a dictionary built again in another order, a column held in another form, and another chunking all keep it. Two tables are `equal?/2` exactly when their digests are equal.
 - **The canonical form.** Each value has one canonical form whatever storage holds it: a tag byte naming its kind, an 8-byte little-endian word, and bytes of its own.
 

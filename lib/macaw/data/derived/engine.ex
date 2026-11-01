@@ -479,15 +479,18 @@ defmodule Macaw.Data.Derived.Engine do
   defp answered(engine, path, source, rows, watermark, now) do
     case Derived.conform(source, rows) do
       {:ok, rows} ->
+        table = output(source.schema, rows)
         previous = engine.outputs[path]
 
-        # A change of the watermark alone is a changed answer (spec/02 §8.6).
+        # The answer's identity is its table's (spec/01 §1.1.2): two canonical tables
+        # compare their chunks' digests. A change of the watermark alone is a changed
+        # answer (spec/02 §8.6).
         changed? =
-          previous == nil or Delivery.rows(previous) != rows or
+          previous == nil or not Table.equal?(previous.rows, table) or
             previous.served.complete_until != watermark
 
         delivery =
-          Delivery.new(rows,
+          Delivery.new(table,
             schema: Schema.version(source.schema),
             served: [complete_until: watermark]
           )
@@ -503,6 +506,18 @@ defmodule Macaw.Data.Derived.Engine do
       {:error, detail} ->
         fault(engine, path, :nonconforming, detail)
     end
+  end
+
+  # An answer packed once, under its schema: a column a field, by its name's string, of
+  # its type, in name order, `nil` where a row lacks it (spec/02 §8.4). The rows
+  # conformed, so they pack.
+  defp output(%Schema{fields: fields}, rows) do
+    columns =
+      for {name, %{type: type}} <- Enum.sort(fields),
+          do: {name, type, Enum.map(rows, &Map.get(&1, name))}
+
+    {:ok, table} = Table.new(columns)
+    table
   end
 
   # -- watermarks (spec/02 §8.6) -----------------------------------------------------------
@@ -563,7 +578,8 @@ defmodule Macaw.Data.Derived.Engine do
 
   @doc """
   Every derived source's last good output by path, a `%Macaw.Data.Delivery{}` naming its
-  output schema's version.
+  output schema's version, its rows a `Macaw.Data.Table` packed once under that schema
+  (spec/02 §8.2).
   """
   @spec outputs(t()) :: %{path() => Delivery.t()}
   def outputs(%__MODULE__{outputs: outputs}), do: outputs

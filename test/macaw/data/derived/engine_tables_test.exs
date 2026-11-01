@@ -12,7 +12,13 @@ defmodule Macaw.Data.Derived.EngineTablesTest do
     use Macaw.Data.Derived.Functions
 
     defsource(seen(inputs),
-      do: [%{n: length(inputs["hosts"]), first: hd(inputs["hosts"])[:host]}]
+      do: [
+        %{
+          n: length(inputs["hosts"]),
+          first: hd(inputs["hosts"])[:host],
+          kind: if(is_atom(hd(inputs["hosts"])[:host]), do: "atom", else: "string")
+        }
+      ]
     )
   end
 
@@ -78,17 +84,20 @@ defmodule Macaw.Data.Derived.EngineTablesTest do
       Derived.new!(
         id: :a,
         from: [hosts: %{last: 1}],
-        schema: %{n: %{type: :number}, first: %{type: :category}},
+        schema: %{n: %{type: :number}, first: %{type: :category}, kind: %{type: :text}},
         function: :seen
       )
 
     functions = Macaw.Data.Derived.Functions.registry([Host])
     table = readings(12, 3)
 
-    assert answer(engine(source, functions: functions), table) == [%{"n" => 3, "first" => "h0"}]
+    assert answer(engine(source, functions: functions), table) ==
+             [%{"n" => 3, "first" => "h0", "kind" => "string"}]
 
     given = [%{t: @base, host: :h9, cpu: 1.0}]
-    assert answer(engine(source, functions: functions), given) == [%{"n" => 1, "first" => :h9}]
+
+    assert answer(engine(source, functions: functions), given) ==
+             [%{"n" => 1, "first" => "h9", "kind" => "atom"}]
   end
 
   # One recompute of a `last: 20` source over 50,000 rows of 50 hosts, pushed as a table:
@@ -116,5 +125,32 @@ defmodule Macaw.Data.Derived.EngineTablesTest do
     assert faults == %{}
     assert reductions < 1_100_000
     assert reductions < transpose
+  end
+
+  # One recompute of an expression over the whole of a 50,000-row table input, answering
+  # the 5,000 rows it keeps: the input transposed once at the call, the answer conformed,
+  # then packed once into the output table (245,278 of it) and compared with the last by
+  # its chunks' digests. It counted 5,944,162 when this was written; 5,701,833 before the
+  # answer was packed, which each reader that wanted columns paid again (381,292 for
+  # `Delivery.table/2` of those rows).
+  @tag verifies: "derived-engine-change"
+  test "one recompute of an expression over a 50k-row table input stays under its bound" do
+    keep =
+      Derived.new!(
+        id: :a,
+        from: [hosts: nil],
+        schema: %{t: %{type: :time}, host: %{type: :category}, cpu: %{type: :number}},
+        elixir:
+          "fn %{hosts: rows} -> for r <- rows, r.cpu >= 90.0, do: %{t: r.t, host: r.host, cpu: r.cpu} end"
+      )
+
+    {first, second} = {readings(50_000, 50), readings(50_000, 50, 1)}
+    engine = engine(keep) |> pushed(first, 0) |> Engine.run(0) |> pushed(second, 1)
+
+    {reductions, engine} = Work.reductions(fn -> Engine.run(engine, 1) end)
+
+    assert Engine.faults(engine) == %{}
+    assert Table.size(Engine.outputs(engine)[["a"]].rows) == 5_000
+    assert reductions < 6_500_000
   end
 end

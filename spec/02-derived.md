@@ -548,12 +548,18 @@ a set of derived sources is defined with every input resolved and ranks assigned
 
 **A pulse is the unit of recompute** (visualize#643, settled questions 4 and 11). `Engine.push(engine, deliveries, schemas, now)` shows the engine its sources' latest deliveries and schemas, by name. A source whose delivery is not the one the engine last saw has **changed**, and every derived source that reads it is marked. The first mark after a pulse makes the next pulse **due** `debounce:` milliseconds after `now` (`0`: due at once), so changes within it, from any number of pushes and sources, are one pulse. `now` is the owner's monotonic milliseconds: the engine never reads a clock. `Engine.run(engine, now)` runs a due pulse:
 
-- **In rank order, each source at most once.** The marked sources run from the lowest rank to the highest. A source whose answer differs from its last one marks the sources that read it, which run later in the same pulse, after every input they have; a source whose answer is unchanged marks nothing, and an unmarked source does not run. A source with two inputs that changed in one pulse runs once, with both: no glitches.
+- **In rank order, each source at most once.** The marked sources run from the lowest rank to the highest. A source whose answer differs from its last one (see **The answer is a table**, below) marks the sources that read it, which run later in the same pulse, after every input they have; a source whose answer is unchanged marks nothing, and an unmarked source does not run. A source with two inputs that changed in one pulse runs once, with both: no glitches.
 - **Whole windows.** A source is called with each input's whole current window (§2.2), not with what changed.
 - **Tables until the call.** Each input is windowed in the form its delivery holds (§2.2): a source's table (a pushed source's `Push.held/1`, [01 §4.5](01-sources.md#sources-model-storage)) is windowed as a table. Its rows are made **once, at the call** (`Table.rows/1` of the windowed table; a request window's, before it is finished, §2.2), because a function reads rows (§1.2, §2.2). They are made in the engine's process, so the call's bounds (§6.4) count the function alone. Rows that came as rows are handed over as given. A column map or a tensor is read as rows, as before.
 - **Every input present.** A source with an input that has no delivery yet (a source loading, a derived source not yet computed) does not run; it stays `:loading`.
 - **In context.** Before a source first runs, and again when an input's schema version changes, it is validated given its inputs' schemas and the registry (§1.1). A source that fails is the fault `:restricted`, its detail the faults.
 - A function of two arguments is given its context (§2.3), which the engine builds from what it was shown.
+- **The answer is a table.** A conforming answer (§1.2) is packed **once** into a table under the source's output schema ([01 §1.1](01-sources.md#sources-table)). Each field is a column named by its string, of its type, in name order, and `nil` where a row lacks it. That table is the output a reader reads (§8.4, §8.5), so no reader packs it again, and a downstream source windows it on its columns (§2.2). It reads back as any table does: every field present, a category's atom as its string.
+- **A change is told by the table's identity** ([01 §1.1.2](01-sources.md#sources-table-identity)): the new table is `Table.equal?/2` to the last one or it is a change. Two canonical tables compare their chunks' digests, decoding nothing. So `1` and `1.0` differ, and so do `0.0` and `-0.0`. A category's atom and its string, and an absent field and a `nil`, are one value. The row comparison this replaced (`!=` over the conformed rows) told the last two apart and missed the first. A change of the watermark alone is a change too (§8.6).
+
+```test:derived-engine-change
+the output is a table under the output schema, a category's atom read as its string; an answer changed exactly when its rows, read as its table reads them, differ (property); 1 and 1.0 are a change, a category's atom and its string and an absent field and nil are not; one recompute of an expression over a 50k-row table input stays under its reductions bound
+```
 
 The engine is unchanged when no pulse is due. A test sets `debounce: 0`, so a pulse is in the same `run/2` as the change, and nothing waits on a clock.
 
@@ -593,7 +599,7 @@ a failing source keeps its last good output, is down with its kind, and does not
 | `Engine.source/2`, `source/3` | `source(engine, path, opts)`: the derived source at `path` as a `Macaw.Data.Source` (§8.5) |
 | `Engine.resolve/3` | `resolve(engine, scope, name)`: `{:derived, path}`, `{:source, name}` or `:error`, what a name read from a scope names |
 | `Engine.sources_read/1` | the sources some derived source reads, sorted |
-| `Engine.outputs/1` | every derived source's last good output, a `%Macaw.Data.Delivery{}` naming its output schema's version, by path |
+| `Engine.outputs/1` | every derived source's last good output, a `%Macaw.Data.Delivery{}` naming its output schema's version, its rows a table under that schema (§8.2), by path |
 | `Engine.schemas/1` | every derived source's output schema, by path |
 | `Engine.status/1` | every derived source's state by path: `:loading`, `:live` or `{:down, {:derived, id, kind}}` |
 | `Engine.faults/1` | every failing source's fault by path, `%{kind: kind, detail: detail}` |
