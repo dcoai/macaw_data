@@ -9,14 +9,15 @@ defmodule Macaw.Data.Source.Order do
 
   **Rows compare by their field's type, never by term order** (term order puts a
   `%DateTime{}` by its day before its year): a `:time` by its instant
-  (`Macaw.Data.Window.position/1`), a `:number` by its value, a `:text` by its string, a
+  (`instant/1`), a `:number` by its value, a `:text` by its string, a
   `:category` by its place in the field's declared `order` and then by its spelling. A
   `nil`, and a value of no reading for its type, sorts **last in either direction**:
   absence is no value, and a reader's first rows are rows that have one. The sort is
-  stable, so rows the order cannot tell apart keep their order.
+  stable, so rows the order cannot tell apart keep their order. `filter`'s orderings
+  (spec/04 §4.1) compare by the same keys (`key/2`), so a filter and a sort never disagree.
   """
 
-  alias Macaw.Data.{Schema, Table, Window}
+  alias Macaw.Data.{Schema, Table}
 
   @typedoc "A direction of one key."
   @type direction :: :asc | :desc
@@ -25,6 +26,10 @@ defmodule Macaw.Data.Source.Order do
   @type t :: [{Schema.name(), direction()}]
 
   @ordered [:time, :number, :category, :text]
+  @epoch ~N[1970-01-01 00:00:00]
+  @day 86_400_000_000
+  # 1970-01-01's Gregorian day.
+  @epoch_days 719_528
 
   @doc """
   The faults of an order's shape, with no schema: `{[:order, i], {:type, :order}}` for a
@@ -221,7 +226,7 @@ defmodule Macaw.Data.Source.Order do
 
   @doc """
   A value's sort key under a type, so keys compare in term order exactly as the type
-  orders, and `nil` for no reading: a `:time`'s instant (`Macaw.Data.Window.position/1`),
+  orders, and `nil` for no reading: a `:time`'s instant (`instant/1`),
   a `:number`'s value, a `:text`'s string, and a `:category`'s place in `states` (its
   declared `order`, spec/01 §1.2) and then its spelling, a state `states` does not list
   following them. **A type with no order of its own** (`:color`, `:point`, `:term`) keys a
@@ -238,7 +243,7 @@ defmodule Macaw.Data.Source.Order do
   @spec key(atom(), [term()]) :: (term() -> term())
   def key(type, states \\ [])
 
-  def key(:time, _states), do: &Window.position/1
+  def key(:time, _states), do: &instant/1
   def key(:number, _states), do: fn value -> if is_number(value), do: value end
   def key(:text, _states), do: fn value -> if is_binary(value), do: value end
 
@@ -253,6 +258,29 @@ defmodule Macaw.Data.Source.Order do
   end
 
   def key(_type, _states), do: & &1
+
+  @doc """
+  A time's instant on one scale, Unix microseconds, so times of every kind compare: a
+  `DateTime`'s UTC instant, a `NaiveDateTime`'s wall clock and a `Date` at midnight, as
+  the edge reads them into a time column (spec/01 §1.1) and as the packed
+  `:utc`, `:zoned` and `:naive` forms hold them. Anything else, a number included (a
+  `:time` holds instants, never numbers, spec/01 §3), is `nil`, no reading.
+
+      iex> alias Macaw.Data.Source.Order
+      iex> Order.instant(~U[1970-01-01 00:00:01Z])
+      1_000_000
+      iex> Order.instant(~N[1970-01-01 00:00:01]) == Order.instant(~U[1970-01-01 00:00:01Z])
+      true
+      iex> Order.instant(~D[1970-01-02])
+      86_400_000_000
+      iex> Order.instant(5)
+      nil
+  """
+  @spec instant(term()) :: integer() | nil
+  def instant(%DateTime{} = t), do: DateTime.to_unix(t, :microsecond)
+  def instant(%NaiveDateTime{} = t), do: NaiveDateTime.diff(t, @epoch, :microsecond)
+  def instant(%Date{} = d), do: (Date.to_gregorian_days(d) - @epoch_days) * @day
+  def instant(_value), do: nil
 
   defp category_key(value, places, last)
        when is_atom(value) or is_binary(value) or is_number(value) do

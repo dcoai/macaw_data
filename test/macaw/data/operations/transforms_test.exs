@@ -9,8 +9,9 @@ defmodule Macaw.Data.Operations.TransformsTest do
   # - a bad option is a validation fault before any step runs (`apply!/4` raises its
   #   words), where visualize's step raised; a bad reading still raises from the step.
   use ExUnit.Case, async: true
+  use ExUnitProperties
 
-  alias Macaw.Data.{Operations, Reduce, Schema, Table}
+  alias Macaw.Data.{Native, Operations, Reduce, Schema, Table}
   alias Macaw.Data.Operations.Transforms
 
   @registry Operations.registry()
@@ -68,6 +69,118 @@ defmodule Macaw.Data.Operations.TransformsTest do
       assert run(%{op: "filter", field: "s", test: :ne, value: :ok}, rows) == Enum.drop(rows, 2)
       assert Operations.same?(:ok, "ok") and Operations.same?(2, 2.0)
       refute Operations.same?(nil, "nil") or Operations.same?(true, "true")
+    end
+
+    # The rows of a one-column table an ordering keeps, chunked `size` rows a chunk.
+    defp ordered(type, readings, test, value, size \\ :one) do
+      table = Table.new!([{"t", type, readings}]) |> Macaw.Data.Test.Storage.chunked(size)
+
+      @registry
+      |> Operations.apply!([%{op: "filter", field: "t", test: test, value: value}], table)
+      |> Table.column("t")
+    end
+
+    @tag verifies: "operations-filter-typed"
+    test "a time compares by its instant against a DateTime, a Date or an ISO string, never as a map" do
+      # #96's reproduction: under term order `lt` 2026-01-01 kept none and `gt` all four.
+      times = [
+        ~U[2026-10-02 00:00:00Z],
+        ~U[2026-09-30 00:00:00Z],
+        ~U[2026-10-01 00:00:00Z],
+        ~U[2025-12-31 00:00:00Z],
+        nil
+      ]
+
+      for value <- [~U[2026-01-01 00:00:00Z], ~D[2026-01-01], "2026-01-01T00:00:00Z"],
+          size <- [:one, 1, 2] do
+        assert ordered(:time, times, :lt, value, size) == [~U[2025-12-31 00:00:00Z]]
+        assert ordered(:time, times, :gte, value, size) == Enum.take(times, 3)
+      end
+
+      # Equal instants: lte and gte keep the reading, whatever its zone or precision.
+      at = ~U[2026-09-30 00:00:00.000000Z]
+
+      assert ordered(:time, times, :lte, at) == [
+               ~U[2026-09-30 00:00:00Z],
+               ~U[2025-12-31 00:00:00Z]
+             ]
+
+      assert ordered(:time, times, :gt, "2026-09-30T02:00:00+02:00") ==
+               [~U[2026-10-02 00:00:00Z], ~U[2026-10-01 00:00:00Z]]
+
+      # Naive and date columns, and a mix, by instant: a wall clock and a midnight.
+      naive = [~N[2030-01-01 00:00:00], ~N[2025-01-01 00:00:00]]
+      assert ordered(:time, naive, :gt, ~U[2026-01-01 00:00:00Z]) == [~N[2030-01-01 00:00:00]]
+      dates = [~D[2026-01-02], ~D[2025-12-31], ~D[2026-01-01]]
+      assert ordered(:time, dates, :gte, "2026-01-01") == [~D[2026-01-02], ~D[2026-01-01]]
+      mixed = [~N[2030-01-01 00:00:00], ~D[2020-01-01], ~U[2026-06-01 00:00:00Z]]
+      assert ordered(:time, mixed, :lt, ~D[2027-01-01]) == Enum.drop(mixed, 1)
+    end
+
+    @tag verifies: "operations-filter-typed"
+    property "over generated instants, an ordering keeps exactly the rows DateTime.compare/2 says" do
+      check all(
+              kind <- member_of([DateTime, NaiveDateTime, Date]),
+              seconds <-
+                list_of(one_of([constant(nil), integer(-4_000_000_000..4_000_000_000)]),
+                  min_length: 1,
+                  max_length: 80
+                ),
+              at <-
+                one_of([
+                  integer(-4_000_000_000..4_000_000_000),
+                  map(integer(-46_000..46_000), &(&1 * 86_400))
+                ]),
+              test <- member_of([:lt, :lte, :gt, :gte]),
+              size <- member_of([:one, 1, 5, 32])
+            ) do
+        # A UTC, a naive (wall clock) or a date (midnight) column, gaps among it.
+        as = fn t ->
+          case kind do
+            DateTime -> t
+            NaiveDateTime -> DateTime.to_naive(t)
+            Date -> DateTime.to_date(t)
+          end
+        end
+
+        times = Enum.map(seconds, &(&1 && as.(DateTime.from_unix!(&1))))
+        value = DateTime.from_unix!(at)
+        wanted = %{lt: [:lt], lte: [:lt, :eq], gt: [:gt], gte: [:gt, :eq]}[test]
+
+        expected =
+          Enum.filter(times, &(&1 && DateTime.compare(Table.at_edge(:time, &1), value) in wanted))
+
+        assert ordered(:time, times, test, value, size) == expected
+        assert Native.elixir(fn -> ordered(:time, times, test, value, size) end) == expected
+      end
+    end
+
+    @tag verifies: "operations-filter-typed"
+    test "numbers by value, text and a category by spelling; a reading of no value for its type never passes" do
+      assert ordered(:number, [3, 2.5, nil, -1, 10], :gte, 2.5) == [3, 2.5, 10]
+      assert ordered(:text, ["b", "a", nil, 7, "c"], :gt, "a") == ["b", "c"]
+      assert ordered(:category, [:ok, "bad", nil, "warn"], :lt, :ok) == ["bad"]
+      assert ordered(:category, [:ok, "bad", "warn"], :gte, "ok") == ["ok", "warn"]
+    end
+
+    @tag verifies: "operations-filter-typed"
+    test "a value of another kind is refused before any row is read; a column the rows lack keeps none" do
+      for {type, readings, value} <- [
+            {:time, [~U[2026-01-01 00:00:00Z]], 1_767_225_600},
+            {:time, [~U[2026-01-01 00:00:00Z]], "yesterday"},
+            {:number, [1, 2], "2"},
+            {:number, [1, 2], ~U[2026-01-01 00:00:00Z]},
+            {:text, ["a"], :a},
+            {:number, [1], nil}
+          ] do
+        message =
+          "filter, value: :lt compares the #{inspect(type)} field \"t\" with a value of its " <>
+            "type, and #{inspect(value)} is none (spec/04 §4.1)"
+
+        assert_raise ArgumentError, message, fn -> ordered(type, readings, :lt, value) end
+      end
+
+      assert run(%{op: "filter", field: :nope, test: :lt, value: nil}, @rows) == []
     end
   end
 

@@ -52,6 +52,8 @@ defmodule Macaw.Data.Operations.StepsTest do
   defp passes?(:eq, r, v), do: Operations.same?(r, v)
   defp passes?(:ne, r, v), do: not Operations.same?(r, v)
   defp passes?(_ordering, nil, _v), do: false
+  # An ordering compares by the column's type (spec/04 §4.1): a category by its spelling.
+  defp passes?(test, r, v) when is_atom(v), do: passes?(test, r, Atom.to_string(v))
   defp passes?(:lt, r, v), do: r < v
   defp passes?(:lte, r, v), do: r <= v
   defp passes?(:gt, r, v), do: r > v
@@ -113,8 +115,18 @@ defmodule Macaw.Data.Operations.StepsTest do
       gen all(
             field <- member_of(["v", "k", "nope"]),
             test <- member_of([:eq, :ne, :lt, :lte, :gt, :gte, :present, :absent]),
-            value <- one_of([integer(-3..3), member_of(["a", :c])])
+            number <- integer(-3..3),
+            name <- member_of(["a", :c]),
+            any <- one_of([integer(-3..3), member_of(["a", :c])])
           ) do
+        # An ordering's value is of its column's kind; any other is refused (spec/04 §4.1).
+        value =
+          case {test in [:lt, :lte, :gt, :gte], field} do
+            {true, "v"} -> number
+            {true, "k"} -> name
+            _ -> any
+          end
+
         %{op: "filter", field: field, test: test, value: value}
       end,
       gen all(n <- integer(0..100), side <- member_of([:end, :start])) do
@@ -431,11 +443,12 @@ defmodule Macaw.Data.Operations.StepsTest do
       identity = Operations.step_digest(@registry, node)
 
       [part | _] = Step.parts(Filter, node, table, %{})
-      assert part.key == {identity, "v", nil}
+      # A filter resolves to its column, the column's type and an ordering's key.
+      assert part.key == {identity, {"v", :number, 3}, nil}
 
       # A view that reads part of its chunk names its run in the key.
       [cut | _] = Step.parts(Filter, node, Table.slice(table, 3, 10), %{})
-      assert cut.key == {identity, "v", {3, 10}}
+      assert cut.key == {identity, {"v", :number, 3}, {3, 10}}
     end
 
     @tag verifies: "operations-step-keys"

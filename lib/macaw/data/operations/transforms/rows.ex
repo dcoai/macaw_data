@@ -3,20 +3,32 @@ defmodule Macaw.Data.Operations.Transforms.Filter do
   `filter` (spec/04 §4.1): the rows, in order, whose reading of `field` passes `test`
   against `value`. `present` and `absent` test `nil`; `eq` and `ne` compare with a
   category one value whichever spelling it has (`Macaw.Data.Operations.same?/2`); the
-  orderings compare under term order, and a `nil` reading never passes one.
+  orderings compare the reading and `value` by the column's type, by the keys `sort`
+  orders by (`Macaw.Data.Source.Order.key/2`), the value read as the column reads it at
+  the edge. A `nil` reading, and one of no reading for its type, never passes an
+  ordering; a value of no reading for the column's type (`nil` included) is a fault,
+  raised before any row is read.
   """
   @behaviour Macaw.Data.Transform
 
   alias Macaw.Data.{Native, Operations, Table}
   alias Macaw.Data.Native.Kernels
   alias Macaw.Data.Operations.{Option, Step, Transforms}
+  alias Macaw.Data.Source.Order
   alias Macaw.Data.Table.{Bitmap, Chunk, Column}
 
   @tests [:eq, :ne, :lt, :lte, :gt, :gte, :present, :absent]
+  @orderings [:lt, :lte, :gt, :gte]
   # The kernel's code of each comparison.
   @codes %{eq: 0, ne: 1, lt: 2, lte: 3, gt: 4, gte: 5}
   @s64_min -0x8000000000000000
   @s64_max 0x7FFFFFFFFFFFFFFF
+
+  @typedoc """
+  What a chunk is tested with: the column's name (`nil` for a column the rows lack), its
+  type, and for an ordering the value's key under that type (else `nil`).
+  """
+  @type bound :: {Table.name() | nil, Table.type() | nil, term()}
 
   @impl true
   def name, do: "filter"
@@ -47,33 +59,64 @@ defmodule Macaw.Data.Operations.Transforms.Filter do
   @impl true
   def reads, do: []
 
+  # The column and, for an ordering, the value's key under its type, once over the input:
+  # a value of no reading for the column's type is the caller's fault, raised here, before
+  # any row is read (spec/04 §3.1). A column the rows lack has no type: every reading is
+  # `nil`, and no row passes.
   @impl true
-  def bind(%{"field" => field}, table, _context),
-    do: %{name: Transforms.name_in(Table.names(table), field)}
+  def bind(%{"field" => field, "test" => test, "value" => value}, table, _context) do
+    name = Transforms.name_in(Table.names(table), field)
+    type = if name, do: Table.column_type(table, name)
+    %{bound: {name, type, at(test, type, value, field)}}
+  end
+
+  defp at(test, type, value, field) when test in @orderings and type != nil do
+    case Order.key(type).(Table.at_edge(type, value)) do
+      nil ->
+        raise ArgumentError,
+              "filter, value: #{inspect(test)} compares the #{inspect(type)} field " <>
+                "#{inspect(field)} with a value of its type, and #{inspect(value)} is none " <>
+                "(spec/04 §4.1)"
+
+      key ->
+        key
+    end
+  end
+
+  defp at(_test, _type, _value, _field), do: nil
 
   @impl true
-  def resolve(_node, _view, %{name: name}), do: name
+  def resolve(_node, _view, %{bound: bound}), do: bound
 
   @impl true
-  def chunk(node, view, name) do
-    case native(node, view, name) do
-      :fallback -> chunk_elixir(node, view, name)
+  def chunk(node, view, bound) do
+    case native(node, view, bound) do
+      :fallback -> chunk_elixir(node, view, bound)
       selection -> selection
     end
   end
 
   @doc false
+  # What a chunk is tested with, for a node and its input: `bind/3` then `resolve/3`, so a
+  # test drives `native/3` and `chunk_elixir/3` as the step does.
+  @spec bound(map(), Table.t()) :: bound()
+  def bound(node, table), do: bind(node, table, %{}).bound
+
+  @doc false
   # The selection by the native kernel (spec/04 §4.1.1), reading `name`'s buffers in place,
   # where the kernels are loaded and the column and test are ones it reads; else, or where
   # the kernel hands the view back, `:fallback`.
-  def native(%{"test" => test, "value" => value}, {chunk, first, count}, name) when name != nil do
+  def native(%{"test" => test} = node, {chunk, first, count}, {name, _type, _at} = bound)
+      when name != nil do
+    passes? = tester(node, bound)
+    x = against(node, bound)
+
     with true <- Native.active?(),
          {mode, data, validity, present, pass, ncodes} <-
-           buffers(Chunk.packed(chunk, name), test, value) do
-      missing = passes?(test, nil, value)
+           buffers(Chunk.packed(chunk, name), test, x, passes?) do
       code = Map.get(@codes, test, 0)
-      x = if is_number(value), do: value, else: 0
-      args = [mode, data, validity, first, count, code, x, present, missing, pass, ncodes]
+      x = if is_number(x), do: x, else: 0
+      args = [mode, data, validity, first, count, code, x, present, passes?.(nil), pass, ncodes]
 
       case Native.scheduler(count) do
         :normal -> apply(Kernels, :filter_mask, args)
@@ -84,42 +127,64 @@ defmodule Macaw.Data.Operations.Transforms.Filter do
     end
   end
 
-  def native(_node, _view, _name), do: :fallback
+  def native(_node, _view, _bound), do: :fallback
+
+  # What a reading is compared with: an ordering's, the value's key; any other test's, the
+  # value as given.
+  defp against(%{"test" => test}, {_name, _type, at}) when test in @orderings, do: at
+  defp against(%{"value" => value}, _bound), do: value
 
   # What the kernel reads of a column, `{mode, data, validity, present, pass, ncodes}`:
   # `present` and `absent` of any column whose validity bitmap says which rows are `nil`
   # (mode 0, the bitmap alone); a number column against a number within int64 or a float
-  # (1, 2: the values compared); against any other value (0: every number stands so to a
-  # term of another type, so one answer holds for every reading); a dictionary of strings
-  # (3: each code's answer, decided once over the dictionary by the Elixir path's own test).
-  # Any other column (a union, an integral, a list) or test is the Elixir path's.
-  defp buffers(column, test, _value) when test in [:present, :absent] do
+  # (1, 2: the values compared); against any other value (0: no number equals a term of
+  # another type, so one answer holds for every reading; an ordering's value is always a
+  # number here, `bind/3` refusing any other); a time column's instants, Unix
+  # microseconds in an int64 buffer, under an ordering against its value's instant (1); a
+  # dictionary of strings (3: each code's answer, decided once over the dictionary by the
+  # Elixir path's own test). Any other column (a union, an integral, a date, a list) or
+  # test is the Elixir path's.
+  defp buffers(column, test, _x, _passes?) when test in [:present, :absent] do
     case validity(column) do
       nil -> :elixir
       validity -> {0, <<>>, validity, test == :present, <<>>, 0}
     end
   end
 
-  defp buffers({form, data, validity}, test, value) when form in [:int64, :float64] do
+  defp buffers({form, data, validity}, _test, x, passes?) when form in [:int64, :float64] do
     cond do
-      is_float(value) or (is_integer(value) and value >= @s64_min and value <= @s64_max) ->
+      int64?(x) or is_float(x) ->
         {if(form == :int64, do: 1, else: 2), data, validity, false, <<>>, 0}
 
-      is_number(value) ->
+      is_number(x) ->
         :elixir
 
       true ->
-        {0, <<>>, validity, passes?(test, 0, value), <<>>, 0}
+        {0, <<>>, validity, passes?.(0), <<>>, 0}
     end
   end
 
-  defp buffers({:dictionary, codes, validity, dictionary, nil}, test, value) do
+  defp buffers({form, us, validity, _precision}, test, x, _passes?)
+       when form in [:utc, :naive] and test in @orderings,
+       do: instants(us, validity, x)
+
+  defp buffers({:zoned, us, validity, _precision, _zones, _codes}, test, x, _passes?)
+       when test in @orderings,
+       do: instants(us, validity, x)
+
+  defp buffers({:dictionary, codes, validity, dictionary, nil}, _test, _x, passes?) do
     strings = Column.dictionary_strings(dictionary)
-    pass = Bitmap.from(strings, &passes?(test, &1, value))
+    pass = Bitmap.from(strings, passes?)
     {3, codes, validity, false, pass, length(strings)}
   end
 
-  defp buffers(_column, _test, _value), do: :elixir
+  defp buffers(_column, _test, _x, _passes?), do: :elixir
+
+  defp instants(us, validity, x) do
+    if int64?(x), do: {1, us, validity, false, <<>>, 0}, else: :elixir
+  end
+
+  defp int64?(x), do: is_integer(x) and x >= @s64_min and x <= @s64_max
 
   # A column's validity bitmap, where it alone says which rows are `nil`.
   defp validity({form, _data, validity}) when form in [:int64, :float64, :date, :bool],
@@ -135,26 +200,33 @@ defmodule Macaw.Data.Operations.Transforms.Filter do
   @doc false
   # The selection by the Elixir path alone, whatever the kernels: the path a build without
   # them runs, and the reference the native kernel is held equal to.
-  def chunk_elixir(%{"test" => test, "value" => value}, {chunk, first, count} = view, name) do
+  def chunk_elixir(%{"test" => test} = node, {chunk, first, count} = view, {name, _, _} = bound) do
     packed =
-      if name, do: Column.where(Chunk.storage(chunk, name, first, count), count, test, value)
+      if name,
+        do:
+          Column.where(
+            Chunk.storage(chunk, name, first, count),
+            count,
+            test,
+            against(node, bound)
+          )
 
     kept =
       case packed do
         {:ok, kept} -> kept
-        _general -> view |> Transforms.view_values(name) |> kept(test, value, 0, [])
+        _general -> view |> Transforms.view_values(name) |> kept(tester(node, bound), 0, [])
       end
 
     selected(kept, count)
   end
 
   # The rows whose readings pass, ascending: one pass, no index list built beside them.
-  defp kept([reading | readings], test, value, i, acc) do
-    acc = if passes?(test, reading, value), do: [i | acc], else: acc
-    kept(readings, test, value, i + 1, acc)
+  defp kept([reading | readings], passes?, i, acc) do
+    acc = if passes?.(reading), do: [i | acc], else: acc
+    kept(readings, passes?, i + 1, acc)
   end
 
-  defp kept([], _test, _value, _i, acc), do: :lists.reverse(acc)
+  defp kept([], _passes?, _i, acc), do: :lists.reverse(acc)
 
   # The rows kept as a selection: every row, none, one run of them, cut without copying,
   # or the rows gathered.
@@ -166,15 +238,51 @@ defmodule Macaw.Data.Operations.Transforms.Filter do
     if List.last(kept) == a + n - 1, do: {:run, a, n}, else: {:rows, kept}
   end
 
-  defp passes?(:present, reading, _value), do: reading != nil
-  defp passes?(:absent, reading, _value), do: reading == nil
-  defp passes?(:eq, reading, value), do: Operations.same?(reading, value)
-  defp passes?(:ne, reading, value), do: not Operations.same?(reading, value)
-  defp passes?(_ordering, nil, _value), do: false
-  defp passes?(:lt, reading, value), do: reading < value
-  defp passes?(:lte, reading, value), do: reading <= value
-  defp passes?(:gt, reading, value), do: reading > value
-  defp passes?(:gte, reading, value), do: reading >= value
+  # A reading's test, built once a chunk. An ordering keys the reading under the column's
+  # type, as `sort` does, and compares the key with the value's: a reading with no key
+  # (`nil`, or no reading for its type) never passes, nor does any reading of a column the
+  # rows lack. A number's key is the number itself, and a text's its string, so they are
+  # compared directly.
+  defp tester(%{"test" => :present}, _bound), do: &(&1 != nil)
+  defp tester(%{"test" => :absent}, _bound), do: &(&1 == nil)
+  defp tester(%{"test" => :eq, "value" => value}, _bound), do: &Operations.same?(&1, value)
+  defp tester(%{"test" => :ne, "value" => value}, _bound), do: &(not Operations.same?(&1, value))
+  defp tester(%{"test" => _ordering}, {_name, nil, _at}), do: fn _reading -> false end
+
+  defp tester(%{"test" => test}, {_name, :number, x}) do
+    case test do
+      :lt -> &(is_number(&1) and &1 < x)
+      :lte -> &(is_number(&1) and &1 <= x)
+      :gt -> &(is_number(&1) and &1 > x)
+      :gte -> &(is_number(&1) and &1 >= x)
+    end
+  end
+
+  defp tester(%{"test" => test}, {_name, :text, x}) do
+    case test do
+      :lt -> &(is_binary(&1) and &1 < x)
+      :lte -> &(is_binary(&1) and &1 <= x)
+      :gt -> &(is_binary(&1) and &1 > x)
+      :gte -> &(is_binary(&1) and &1 >= x)
+    end
+  end
+
+  defp tester(%{"test" => test}, {_name, type, x}) do
+    key = Order.key(type)
+
+    case test do
+      :lt -> &holds?(key.(&1), x, :lt)
+      :lte -> &holds?(key.(&1), x, :lte)
+      :gt -> &holds?(key.(&1), x, :gt)
+      :gte -> &holds?(key.(&1), x, :gte)
+    end
+  end
+
+  defp holds?(nil, _x, _test), do: false
+  defp holds?(k, x, :lt), do: k < x
+  defp holds?(k, x, :lte), do: k <= x
+  defp holds?(k, x, :gt), do: k > x
+  defp holds?(k, x, :gte), do: k >= x
 end
 
 defmodule Macaw.Data.Operations.Transforms.Take do

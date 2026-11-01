@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+- **Fixed:** `filter`'s orderings compare by the column's type, as `sort` orders (#96, #100, spec/04 §4.1). `lt`, `lte`, `gt` and `gte` compared a reading with `value` by term order, so a time column compared each `%DateTime{}` as a map, by day of month before year. `lt 2026-01-01` kept none of `2026-10-02, 2026-09-30, 2026-10-01, 2025-12-31`, and `gt` kept all four. A naive or date time column against a `DateTime` kept nothing. The reading and the value are now keyed by `Macaw.Data.Source.Order.key/2`, the comparator of `sort` and a request's order, so the three cannot drift: a time by its instant, a number by its value, text and a category by spelling. The value is read as the column reads it at the edge, so against a time column a `DateTime`, a `NaiveDateTime`, a `Date` and an ISO 8601 string are each an instant. A `nil` reading, and one that is no value of its column's type, never passes.
+- **Breaking (behavior):** an ordering whose `value` is no value of the column's type raises `ArgumentError` once over the input, before any row is read. The message names the step, `value`, the test, the field and its type. That covers a number against a time column, a string against a number column, an unparsable string against a time column, and `nil` against any column. Under term order these answered silently: every number stood below every string and atom. A column the rows lack still keeps no row and raises nothing. Where a node compared across kinds on purpose, give it a value of the column's type.
+- **Changed:** `Order.key(:time)` keys every kind of time on one scale (`Order.instant/1`, new): Unix microseconds, a `NaiveDateTime` by its wall clock, a `Date` at midnight. It was `Window.position/1`, which keys the three on three scales, so a naive, date or mixed time column sorted wrongly beside `DateTime`s. A number in a time field is no instant and sorts last.
+- **Faster:** a time ordering runs in the native kernel on the `:utc`, `:zoned` and `:naive` forms, comparing the column's int64 instants with the value's. No kernel changed: this is the number mode. Without the kernels, the Elixir path scans the same buffer (and a date column's days), gaps or none, and builds no `DateTime`. Measured over one 8,192-row chunk (`apply!/3`, `gt`, the least of 7 runs in reductions and of 21 in ms, on a host at load 25 to 30):
+
+  | column | native, 0.9.0 | native, now | Elixir path, 0.9.0 | Elixir path, now |
+  |---|---|---|---|---|
+  | UTC time | 120,068 r, 3.7 ms | 3,502 r, 0.17 ms | 124,987 r, 3.2 ms | 23,191 r, 0.77 ms |
+  | UTC time, a tenth missing | 148,710 r, 4.3 ms | 3,390 r, 0.21 ms | 177,926 r, 4.6 ms | 47,898 r, 0.39 ms |
+  | naive time | 129,004 r, 1.7 ms (wrong rows) | 3,502 r, 0.17 ms | 129,008 r, 2.2 ms (wrong rows) | 23,191 r, 0.77 ms |
+  | date | 90,802 r, 0.87 ms (wrong rows) | 33,280 r, 0.26 ms | 90,806 r, 0.79 ms (wrong rows) | 38,339 r, 0.24 ms |
+
+  Number and text orderings cost what they did: within 3% in reductions, and in ms within the host's noise.
+
 ## v0.9.0 (2026-11-01)
 
 **On macaw_layers 0.4.0, and a request carries a row order** (#92, #94). A capped or budgeted delivery now holds the first rows in the order a reader asked for, where it used to hold a sorted sample. The schema's JSON document carries a version stamp and is read through the kernel's gates (#95). A derived source can hold no URL. `sort` orders a time column by its instant (#93). A raise in a stored function or a conformance callback is answered without logging an `[error]` (#83). This release is breaking for an adopter that pins macaw_layers `~> 0.3`, matches the fault shapes below, or reads `Schema.to_json/1`'s output itself. The guide below lists what to change, and the entries after it give the detail.

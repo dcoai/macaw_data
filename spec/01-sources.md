@@ -631,14 +631,14 @@ given values are checked by name, every fault at once, defaults filled in; a val
 
 - **Its shape is the request's:** `new/1` refuses a key that is no `{field, :asc | :desc}` with a name for its field as `{[:order, i], {:type, :order}}`, a field named twice (by either spelling) as `{[:order, i], {:duplicate, field}}`, and an order that is no list as `{[:order], {:type, :order}}`.
 - **Its fields are the schema's**, checked against the description as parameters are: `Window.check/2` gives `{[:order, i], {:unknown_field, name}}` for a field the schema does not describe and `{[:order, i], {:invalid_for, type}}` for a `:point` or `:color` field, which have no order. `Source.fetch/3` refuses such an order before calling the source, `{:error, {:order, faults}}`, as it refuses parameters (§2.2).
-- **Rows compare by their field's type, never by term order:** a `:time` by its instant (`Window.position/1`; term order would put a `%DateTime{}` by its day before its year), a `:number` by its value, a `:text` by its string, a `:category` by its place in the field's declared `order` (§1.2) and then by its spelling, its atom and its string alike. A `nil`, and a value with no reading for its type, sorts **last in either direction**: absence is no value, and a reader's first rows are rows that have one. The sort is stable, so rows the order cannot tell apart keep their order (`Order.sort/3`).
+- **Rows compare by their field's type, never by term order:** a `:time` by its instant, one scale for every kind of time (`Order.instant/1`: a `DateTime`'s UTC instant, a `NaiveDateTime`'s wall clock, a `Date` at midnight, in Unix microseconds; term order would put a `%DateTime{}` by its day before its year), a `:number` by its value, a `:text` by its string, a `:category` by its place in the field's declared `order` (§1.2) and then by its spelling, its atom and its string alike. A `nil`, and a value with no reading for its type, sorts **last in either direction**: absence is no value, and a reader's first rows are rows that have one. The sort is stable, so rows the order cannot tell apart keep their order (`Order.sort/3`). `filter`'s orderings compare by the same keys (04 §4.1).
 
 ```test:request-order
 a request's order defaults to [], its shape faults are reported with every other fault (a bad key, a field twice, a non-list), its fields are checked against the schema by Window.check/2 (unknown, point, color) and fetch/3 refuses such an order without calling the source
 ```
 
 ```test:order-compare
-rows sort by their field's type: times by instant across days, months and years, never DateTime's term order; numbers by value; text by string; a category by its declared order, then by spelling; a missing reading last in either direction; keys decide in turn; the sort is stable; for generated instants and gaps, ascending and descending
+rows sort by their field's type: times by instant across days, months and years, never DateTime's term order, a NaiveDateTime by its wall clock and a Date at midnight on the one scale; numbers by value; text by string; a category by its declared order, then by spelling; a missing reading last in either direction; keys decide in turn; the sort is stable; for generated instants and gaps, ascending and descending
 ```
 
 ```test:contract-request

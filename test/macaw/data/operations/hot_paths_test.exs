@@ -77,7 +77,9 @@ defmodule Macaw.Data.Operations.HotPathsTest do
 
         for {_chunk, first, count} = view <- views(table, from, length(values) - from) do
           readings = Enum.slice(values, first, count)
-          assert Filter.chunk(node, view, "v") == expected(readings, test, value)
+
+          assert Filter.chunk(node, view, Filter.bound(node, table)) ==
+                   expected(readings, test, value)
         end
       end
     end
@@ -88,12 +90,52 @@ defmodule Macaw.Data.Operations.HotPathsTest do
       table = Table.new!([{"v", :number, for(i <- 1..n, do: :math.sin(i / 50) * 100)}])
       [view] = Table.chunks(table)
       node = checked(%{op: "filter", field: "v", test: :gt, value: 0.0})
+      bound = Filter.bound(node, table)
 
       {reductions, {:rows, kept}} =
-        Work.reductions(fn -> Native.elixir(fn -> Filter.chunk(node, view, "v") end) end)
+        Work.reductions(fn -> Native.elixir(fn -> Filter.chunk(node, view, bound) end) end)
 
       assert length(kept) == Enum.count(Table.column(table, "v"), &(&1 > 0.0))
       assert reductions <= 3 * n, "#{reductions} reductions for #{n} rows"
+    end
+
+    @tag verifies: "operations-filter-scan"
+    test "an ordering over a packed time column with gaps scans its instants: at most 4 reductions a row" do
+      n = Table.chunk_rows()
+      at = ~U[2026-01-01 00:00:00Z]
+
+      # UTC, zoned, naive and date columns, every tenth reading missing, against a Date.
+      for shift <- [
+            &DateTime.add(at, &1),
+            &east(DateTime.add(at, &1)),
+            &NaiveDateTime.add(~N[2026-01-01 00:00:00], &1),
+            &Date.add(~D[2026-01-01], div(&1, 86_400))
+          ] do
+        times =
+          for i <- 1..n, do: if(rem(i, 10) == 0, do: nil, else: shift.(rem(i * 7919, n) * 3600))
+
+        table = Table.new!([{"v", :time, times}])
+        [view] = Table.chunks(table)
+        node = checked(%{op: "filter", field: "v", test: :gte, value: ~D[2026-06-01]})
+        bound = Filter.bound(node, table)
+
+        {reductions, {:rows, kept}} =
+          Work.reductions(fn -> Native.elixir(fn -> Filter.chunk(node, view, bound) end) end)
+
+        june = DateTime.new!(~D[2026-06-01], ~T[00:00:00])
+
+        expected =
+          for {t, i} <- Enum.with_index(times),
+              t != nil and DateTime.compare(Macaw.Data.Table.at_edge(:time, t), june) != :lt,
+              do: i
+
+        assert kept == expected
+        assert reductions <= 4 * n, "#{reductions} reductions for #{n} rows"
+      end
+    end
+
+    defp east(utc) do
+      %{DateTime.add(utc, 3600) | utc_offset: 3600, time_zone: "Etc/GMT-1", zone_abbr: "+01"}
     end
   end
 

@@ -14,6 +14,7 @@ defmodule Macaw.Data.Operations.FilterNativeTest do
 
   @registry Operations.registry()
   @tests [:eq, :ne, :lt, :lte, :gt, :gte, :present, :absent]
+  @orderings [:lt, :lte, :gt, :gte]
   @big 0x7FFF_FFFF_FFFF_FF00
   @epoch ~U[2026-01-01 00:00:00.000000Z]
 
@@ -44,14 +45,63 @@ defmodule Macaw.Data.Operations.FilterNativeTest do
   defp column(:text, is), do: {:text, Enum.map(is, &(&1 && "t#{&1}"))}
   defp column(:time, is), do: {:time, Enum.map(is, &(&1 && DateTime.add(@epoch, &1, :second)))}
 
+  # The same instants in a zone an hour east (`macaw.zoned`), as wall clocks (`:naive`),
+  # and as days (`:date`).
+  defp column(:zoned, is),
+    do: {:time, Enum.map(is, &(&1 && east(DateTime.add(@epoch, &1, :second))))}
+
+  defp column(:naive, is),
+    do: {:time, Enum.map(is, &(&1 && NaiveDateTime.add(~N[2026-01-01 00:00:00], &1, :second)))}
+
+  defp column(:date, is), do: {:time, Enum.map(is, &(&1 && Date.add(~D[2026-01-01], &1)))}
+
+  defp east(utc) do
+    %{DateTime.add(utc, 3600) | utc_offset: 3600, time_zone: "Etc/GMT-1", zone_abbr: "+01"}
+  end
+
+  # The kind of value an ordering compares a form's readings with (spec/04 §4.1).
+  defp kind(form) when form in [:int, :wide, :float, :integral, :union], do: :number
+  defp kind(form) when form in [:time, :zoned, :naive, :date], do: :time
+  defp kind(form) when form in [:category, :atoms], do: :category
+  defp kind(:text), do: :text
+
   # The values a node tests against: numbers of every size, strings, atoms, nil and a time.
   defp value_gen do
     one_of([
-      integer(-20..60),
-      Gen.float(min: -20.0, max: 60.0),
-      member_of([@big - 7, @big - 7.0, 2 ** 70, -(2 ** 70), 9.3e18, -9.3e18, 0.5]),
+      number_gen(),
       member_of(["a", "c", :b, "t7", nil, true, @epoch])
     ])
+  end
+
+  defp number_gen do
+    one_of([
+      integer(-20..60),
+      Gen.float(min: -20.0, max: 60.0),
+      member_of([@big - 7, @big - 7.0, 2 ** 70, -(2 ** 70), 9.3e18, -9.3e18, 0.5])
+    ])
+  end
+
+  # A value of each kind an ordering reads: a time as a DateTime (UTC or zoned), a Date, a
+  # NaiveDateTime or an ISO 8601 string, each near the generated readings.
+  defp kind_gen(:number), do: number_gen()
+  defp kind_gen(:text), do: member_of(["t1", "t15", "t7", "t", "u", ""])
+  defp kind_gen(:category), do: member_of(["a", "c", :b, "bb", 3])
+
+  defp kind_gen(:time) do
+    bind(integer(-15..25), fn s ->
+      t = DateTime.add(@epoch, s, :second)
+      d = DateTime.add(@epoch, s * 86_400, :second)
+
+      member_of([
+        t,
+        east(t),
+        DateTime.add(t, 1, :microsecond),
+        DateTime.to_naive(t),
+        DateTime.to_date(d),
+        DateTime.to_iso8601(t),
+        d
+      ])
+    end)
   end
 
   describe "the native mask against the Elixir path" do
@@ -68,7 +118,10 @@ defmodule Macaw.Data.Operations.FilterNativeTest do
                   :category,
                   :atoms,
                   :text,
-                  :time
+                  :time,
+                  :zoned,
+                  :naive,
+                  :date
                 ]),
               is <-
                 list_of(frequency([{8, integer(-10..20)}, {1, constant(nil)}]),
@@ -76,28 +129,34 @@ defmodule Macaw.Data.Operations.FilterNativeTest do
                   max_length: 400
                 ),
               test <- member_of(@tests),
-              value <- value_gen(),
+              any <- value_gen(),
+              of_kind <- kind_gen(kind(form)),
               size <- member_of([:one, 7, 64]),
               offset <- integer(0..3),
-              max_runs: 150
+              max_runs: 200
             ) do
+        # An ordering's value is of the column's kind (any other is refused, below).
+        value = if test in @orderings, do: of_kind, else: any
         {type, readings} = column(form, is)
         table = Table.new!([{"v", type, readings}]) |> Storage.chunked(size)
         raw = %{op: "filter", field: "v", test: test, value: value}
         node = checked(raw)
+        bound = Filter.bound(node, table)
 
         for {chunk, first, count} <- Table.chunks(table), offset < count do
           view = {chunk, first + offset, count - offset}
-          native = Filter.native(node, view, "v")
-          elixir = Filter.chunk_elixir(node, view, "v")
+          native = Filter.native(node, view, bound)
+          elixir = Filter.chunk_elixir(node, view, bound)
           if native != :fallback, do: assert(native == elixir)
-          assert Filter.chunk(node, view, "v") == elixir
+          assert Filter.chunk(node, view, bound) == elixir
 
-          # The forms the kernel reads, it answers.
+          # The forms the kernel reads, it answers: a time's instants under an ordering
+          # among them (#96), but for a date column's days.
           reads? =
             (test in [:present, :absent] and form not in [:union]) or
               (form in [:int, :wide, :float, :category] and
-                 (not is_integer(value) or abs(value) < 2 ** 63))
+                 (not is_integer(value) or abs(value) < 2 ** 63)) or
+              (form in [:time, :zoned, :naive] and test in @orderings)
 
           if Native.loaded?() and reads?, do: assert(native != :fallback)
         end
@@ -116,9 +175,45 @@ defmodule Macaw.Data.Operations.FilterNativeTest do
       for test <- @tests,
           value <- [2.0 ** 53, 9.223372036854775e18, -(2.0 ** 53), 0.0, -0.0, 1.5, 2 ** 53 + 1] do
         node = checked(%{op: "filter", field: "v", test: test, value: value})
-        native = Filter.native(node, view, "v")
+        bound = Filter.bound(node, table)
+        native = Filter.native(node, view, bound)
         if Native.loaded?(), do: assert(native != :fallback)
-        if native != :fallback, do: assert(native == Filter.chunk_elixir(node, view, "v"))
+        if native != :fallback, do: assert(native == Filter.chunk_elixir(node, view, bound))
+      end
+    end
+  end
+
+  describe "an ordering against a value of another kind" do
+    @tag verifies: "operations-filter-native-identical"
+    test "is refused alike with and without the kernels, naming the field and its type" do
+      for {form, value} <- [
+            {:int, @epoch},
+            {:float, "3"},
+            {:int, nil},
+            {:time, 5},
+            {:naive, "not a time"},
+            {:zoned, nil},
+            {:date, 2.5},
+            {:text, 7},
+            {:text, :t1},
+            {:category, nil}
+          ],
+          test <- @orderings do
+        {type, readings} = column(form, [1, nil, 2])
+        table = Table.new!([{"v", type, readings}])
+
+        run = fn ->
+          Operations.apply!(
+            @registry,
+            [%{op: "filter", field: "v", test: test, value: value}],
+            table
+          )
+        end
+
+        message = ~r/the #{inspect(type)} field "v" with a value of its type/
+
+        assert_raise ArgumentError, message, run
+        assert_raise ArgumentError, message, fn -> Native.elixir(run) end
       end
     end
   end
@@ -161,10 +256,11 @@ defmodule Macaw.Data.Operations.FilterNativeTest do
 
       [{chunk, 0, _}] = Table.chunks(table)
       node = checked(%{op: "filter", field: "v", test: :gt, value: 0.0})
+      bound = Filter.bound(node, table)
 
       for count <- [n, 3 * n] do
         view = {chunk, 0, count}
-        assert Filter.chunk(node, view, "v") == Filter.chunk_elixir(node, view, "v")
+        assert Filter.chunk(node, view, bound) == Filter.chunk_elixir(node, view, bound)
       end
 
       assert Native.scheduler(3 * n) == :dirty

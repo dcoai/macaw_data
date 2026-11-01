@@ -630,15 +630,63 @@ defmodule Macaw.Data.Table.Column do
   @doc false
   # The rows of a packed number column with no value missing whose value compares with
   # the number `value` as `test` says (`:lt`, `:lte`, `:gt`, `:gte`), ascending, the values
-  # buffer scanned as it lies: `{:ok, rows}`. `:general` for any other column, test or
-  # value, which a caller reads value by value.
+  # buffer scanned as it lies: `{:ok, rows}`. A packed time column (`:utc`, `:zoned`,
+  # `:naive`, `:date`) is compared the same way against an instant in Unix microseconds
+  # (`Macaw.Data.Source.Order.instant/1`), its buffer holding exactly those (a naive
+  # column's by its wall clock) or days since 1970 (a date's midnight), a missing value
+  # passing none. `:general` for any other column, test or value, which a caller reads
+  # value by value.
   @spec where(t(), non_neg_integer(), atom(), term()) :: {:ok, [non_neg_integer()]} | :general
   def where({form, data, validity}, n, test, value)
       when form in [:int64, :float64] and test in [:lt, :lte, :gt, :gte] and is_number(value) do
     if Bitmap.all?(validity, n), do: {:ok, where(form, test, data, value, 0, [])}, else: :general
   end
 
+  def where({form, us, validity, _precision}, n, test, instant)
+      when form in [:utc, :naive] and test in [:lt, :lte, :gt, :gte] and is_integer(instant),
+      do: {:ok, instants(us, valid(validity, n), test, instant)}
+
+  def where({:zoned, us, validity, _precision, _zones, _codes}, n, test, instant)
+      when test in [:lt, :lte, :gt, :gte] and is_integer(instant),
+      do: {:ok, instants(us, valid(validity, n), test, instant)}
+
+  def where({:date, days, validity}, n, test, instant)
+      when test in [:lt, :lte, :gt, :gte] and is_integer(instant),
+      do: {:ok, days(test, days, valid(validity, n), instant, 0, [])}
+
   def where(_column, _n, _test, _value), do: :general
+
+  defp instants(us, :all, test, x), do: where(:int64, test, us, x, 0, [])
+  defp instants(us, bits, test, x), do: present(test, us, bits, x, 0, [])
+
+  # An int64 buffer's slots compared where the validity bit is set.
+  for {test, op} <- [lt: :<, lte: :<=, gt: :>, gte: :>=] do
+    defp present(unquote(test), <<v::signed-little-64, rest::binary>>, [1 | bits], x, i, acc)
+         when unquote(op)(v, x),
+         do: present(unquote(test), rest, bits, x, i + 1, [i | acc])
+  end
+
+  defp present(test, <<_::64, rest::binary>>, [_ | bits], x, i, acc),
+    do: present(test, rest, bits, x, i + 1, acc)
+
+  defp present(_test, _rest, [], _x, _i, acc), do: :lists.reverse(acc)
+
+  # A date32 buffer's days, each at its midnight in Unix microseconds, compared where the
+  # validity bit is set (`:all`, every slot).
+  @day_us 86_400_000_000
+  for {test, op} <- [lt: :<, lte: :<=, gt: :>, gte: :>=] do
+    defp days(unquote(test), <<d::signed-little-32, rest::binary>>, bits, x, i, acc)
+         when (bits == :all or hd(bits) == 1) and unquote(op)(d * @day_us, x),
+         do: days(unquote(test), rest, tail(bits), x, i + 1, [i | acc])
+  end
+
+  defp days(test, <<_::32, rest::binary>>, bits, x, i, acc),
+    do: days(test, rest, tail(bits), x, i + 1, acc)
+
+  defp days(_test, <<>>, _bits, _x, _i, acc), do: :lists.reverse(acc)
+
+  defp tail(:all), do: :all
+  defp tail([_ | bits]), do: bits
 
   for {test, op} <- [lt: :<, lte: :<=, gt: :>, gte: :>=] do
     defp where(:float64, unquote(test), <<v::float-little-64, rest::binary>>, x, i, acc)

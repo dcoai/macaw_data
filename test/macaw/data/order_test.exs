@@ -103,6 +103,13 @@ defmodule Macaw.Data.OrderTest do
     assert rows |> Order.sort([{"t", :asc}], @schema) |> Enum.map(& &1["i"]) == [2, 1, 3, 0]
     assert rows |> Order.sort([{:t, :desc}], @schema) |> Enum.map(& &1["i"]) == [0, 3, 1, 2]
 
+    # Every kind of time on one scale: a NaiveDateTime by its wall clock, a Date at
+    # midnight, so a naive 2030 sorts after a UTC 2026, and a number is no instant.
+    mixed = [~N[2030-01-01 00:00:00], ~U[2026-01-01 00:00:00Z], ~D[2026-01-01], 5]
+    rows = for {t, i} <- Enum.with_index(mixed), do: %{"t" => t, "i" => i}
+    assert rows |> Order.sort([{"t", :asc}], @schema) |> Enum.map(& &1["i"]) == [1, 2, 0, 3]
+    assert rows |> Order.sort([{"t", :desc}], @schema) |> Enum.map(& &1["i"]) == [0, 1, 2, 3]
+
     # Numbers by value, integers and floats alike; text by its string.
     nums = for v <- [10, 2.5, -1, 3], do: %{"p50" => v}
 
