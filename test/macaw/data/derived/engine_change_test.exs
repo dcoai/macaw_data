@@ -41,8 +41,8 @@ defmodule Macaw.Data.Derived.EngineChangeTest do
     engine
   end
 
-  # Each push names its moment in a served fact, so `push/4` marks `a` every time:
-  # it tells deliveries apart by `==`, which takes 1 for 1.0 (macaw_data#106).
+  # Each push names its moment in a served fact, so `push/4` marks `a` every time and the
+  # property judges the answer check alone, whatever the rows (macaw_data#106).
   defp answered(engine, rows, now) do
     engine =
       engine

@@ -299,7 +299,7 @@ defmodule Macaw.Data.Derived.Engine do
         | source_schemas: put_present(engine.source_schemas, name, by_name(schemas, name))
       }
 
-      if delivery == Map.get(engine.seen, name) do
+      if same_delivery?(delivery, Map.get(engine.seen, name)) do
         engine
       else
         %{
@@ -311,6 +311,17 @@ defmodule Macaw.Data.Derived.Engine do
       end
     end)
   end
+
+  # A delivery is new when it is not, value for value, the one last seen (spec/02 §8.2):
+  # everything but its rows exactly (`===`, so `1` and `1.0` differ, in a served fact or
+  # a retracted row alike), and its rows by the table's identity (spec/01 §1.1.2), the
+  # comparison that tells an answer's change (`answered/6`). Two tables are
+  # `Table.equal?/2`, their chunks' digests where both are canonical, however they are
+  # chunked; any other rows are `===`. A table and a list are two forms, so a change.
+  defp same_delivery?(%Delivery{rows: %Table{} = a} = x, %Delivery{rows: %Table{} = b} = y),
+    do: %{x | rows: nil} === %{y | rows: nil} and Table.equal?(a, b)
+
+  defp same_delivery?(x, y), do: x === y
 
   # An owner keys its deliveries and schemas by atom or string.
   defp by_name(map, name) do
@@ -487,7 +498,7 @@ defmodule Macaw.Data.Derived.Engine do
         # answer (spec/02 §8.6).
         changed? =
           previous == nil or not Table.equal?(previous.rows, table) or
-            previous.served.complete_until != watermark
+            previous.served.complete_until !== watermark
 
         delivery =
           Delivery.new(table,

@@ -546,7 +546,7 @@ a set of derived sources is defined with every input resolved and ranks assigned
 
 ### 8.2 Pulses {#derived-engine-pulse}
 
-**A pulse is the unit of recompute** (visualize#643, settled questions 4 and 11). `Engine.push(engine, deliveries, schemas, now)` shows the engine its sources' latest deliveries and schemas, by name. A source whose delivery is not the one the engine last saw has **changed**, and every derived source that reads it is marked. The first mark after a pulse makes the next pulse **due** `debounce:` milliseconds after `now` (`0`: due at once), so changes within it, from any number of pushes and sources, are one pulse. `now` is the owner's monotonic milliseconds: the engine never reads a clock. `Engine.run(engine, now)` runs a due pulse:
+**A pulse is the unit of recompute** (visualize#643, settled questions 4 and 11). `Engine.push(engine, deliveries, schemas, now)` shows the engine its sources' latest deliveries and schemas, by name. A source whose delivery is not, value for value, the one the engine last saw has **changed**, and every derived source that reads it is marked (see **A delivery is new**, below). The first mark after a pulse makes the next pulse **due** `debounce:` milliseconds after `now` (`0`: due at once), so changes within it, from any number of pushes and sources, are one pulse. `now` is the owner's monotonic milliseconds: the engine never reads a clock. `Engine.run(engine, now)` runs a due pulse:
 
 - **In rank order, each source at most once.** The marked sources run from the lowest rank to the highest. A source whose answer differs from its last one (see **The answer is a table**, below) marks the sources that read it, which run later in the same pulse, after every input they have; a source whose answer is unchanged marks nothing, and an unmarked source does not run. A source with two inputs that changed in one pulse runs once, with both: no glitches.
 - **Whole windows.** A source is called with each input's whole current window (§2.2), not with what changed.
@@ -562,6 +562,12 @@ the output is a table under the output schema, a category's atom read as its str
 ```
 
 The engine is unchanged when no pulse is due. A test sets `debounce: 0`, so a pulse is in the same `run/2` as the change, and nothing waits on a clock.
+
+**A delivery is new when it is not, value for value, the one last seen** (macaw_data#106). Its rows are compared by the table's identity, as an answer's are: two tables are `Table.equal?/2`, by their chunks' digests where both are canonical, so one table chunked two ways is no change. Any other rows, and everything else a delivery carries (its served facts, schema version, origin, names, types, retractions and replacements), compare exactly (`===`), so `1` and `1.0` differ, in a row, a retracted row or a watermark alike. A table and the same rows as a list are two forms, so a change: the readers recompute an equal answer rather than miss a changed one. The comparison this replaced (`==` over the whole delivery) took `1` for `1.0`, so a re-delivered `1.0` marked nothing, and told two chunkings of one table apart. The answer's watermark is compared exactly too (§8.6).
+
+```test:derived-engine-push
+a push marks the readers exactly when the rows differ by identity (rows as given by ===, tables by their columns) or a served fact differs (property, across chunkings); 1 then 1.0 marks the readers and changes the answer downstream; one table chunked two ways marks nothing, and its rows as a list are another form; a retracted row's 1 then 1.0 marks; a watermark of 1 then 1.0 is a change to the push and to the answer
+```
 
 ```test:derived-engine-tables
 a table input answers what its rows answer, under last n and a request; a host's function reads a table input as its rows and a row input as given; one recompute of a last n source over a 50k-row table input stays under its reductions bound and below a transpose of its input
