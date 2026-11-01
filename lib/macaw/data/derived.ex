@@ -31,9 +31,9 @@ defmodule Macaw.Data.Derived do
   """
 
   alias Macaw.Data.{Delivery, Schema, Table, Window}
-  alias Macaw.Data.Derived.{Form, Sandbox}
+  alias Macaw.Data.Derived.{Form, Last, Sandbox}
   alias Macaw.Data.Derived.Sandbox.Names, as: Spelling
-  alias Macaw.Data.Source.{Description, Finish, Request}
+  alias Macaw.Data.Source.{Description, Finish, Order, Request}
   alias Macaw.Layers.Names
 
   @keys [:id, :from, :schema, :elixir, :function, :per]
@@ -75,7 +75,7 @@ defmodule Macaw.Data.Derived do
   """
   @type input :: %{
           required(:name) => name(),
-          required(:rows) => [map()],
+          required(:rows) => [map()] | Table.t(),
           required(:schema) => Schema.t(),
           optional(:delivery) => Delivery.t()
         }
@@ -471,9 +471,17 @@ defmodule Macaw.Data.Derived do
   def identity_input(%__MODULE__{per: {:identity, name}}), do: name
 
   @doc """
-  An input's rows in its window (spec/02 §2.2): `nil` every row; `%{last: n}` each
-  identity's newest `n` rows by the window field, else the newest `n`; a request the rows
-  its window, box, region and latest select, finished by `Macaw.Data.Source.Finish`.
+  An input in its window (spec/02 §2.2), a table or a list of rows: `nil` every row and
+  `%{last: n}` each identity's newest `n` rows by the window field, else the newest `n`,
+  each in the input's form; a request the rows its window, box, region and latest select,
+  finished by `Macaw.Data.Source.Finish`, as rows (a table's transposed first, until
+  finishing works on columns, macaw_data#105).
+
+  The window field orders by its type's key (`order_key/2`): a `:time` by its instant
+  (`Macaw.Data.Source.Order.instant/1`, every kind of time on one scale), a `:number` by
+  its value, stably; when a row has no key, the rows are left as they came. A table is
+  windowed on its columns, and no row is made: the kept rows are views of its chunks or
+  gathered from them.
 
       iex> schema = Macaw.Data.Schema.new!(%{t: %{type: :number, window: true}, v: %{type: :number}})
       iex> rows = for t <- 1..5, do: %{t: t, v: t * 10}
@@ -481,12 +489,17 @@ defmodule Macaw.Data.Derived do
       [%{t: 4, v: 40}, %{t: 5, v: 50}]
       iex> Macaw.Data.Derived.window(rows, %{window: [2, 3]}, schema)
       [%{t: 2, v: 20}, %{t: 3, v: 30}]
+      iex> table = Macaw.Data.Table.from(rows) |> elem(1)
+      iex> Macaw.Data.Derived.window(table, %{last: 2}, schema) |> Macaw.Data.Table.column(:v)
+      [40, 50]
   """
-  @spec window([map()], window(), Schema.t()) :: [map()]
-  def window(rows, nil, _schema), do: rows
+  @spec window(Table.t() | [map()], window(), Schema.t()) :: Table.t() | [map()]
+  def window(subject, nil, _schema), do: subject
 
-  def window(rows, %{last: n}, schema) do
-    rows = in_time_order(rows, schema)
+  def window(%Table{} = table, %{last: n}, schema), do: Last.window(table, n, schema)
+
+  def window(rows, %{last: n}, schema) when is_list(rows) do
+    rows = in_order(rows, schema)
 
     case Schema.identity(schema) do
       [] ->
@@ -505,27 +518,45 @@ defmodule Macaw.Data.Derived do
     end
   end
 
-  def window(rows, %{} = window, schema) do
+  # A request finishes rows. Finishing a table transposes it and repacks the rows it keeps
+  # (spec/01 §2.4), so a table is finished over its rows, transposed once, until finishing
+  # works on columns (macaw_data#105).
+  def window(%Table{} = table, %{} = window, schema),
+    do: window(Table.rows(table), window, schema)
+
+  def window(rows, %{} = window, schema) when is_list(rows) do
     {:ok, request} = request(window)
     description = %Description{schema: schema}
-
+    %Delivery{rows: rows} = Finish.finish(Delivery.new(rows), description, request)
     rows
-    |> Delivery.new()
-    |> Finish.finish(description, request)
-    |> Delivery.rows()
   end
 
-  # In the window field's order, ties kept where they stand; rows with a time missing are
-  # left as they came.
-  defp in_time_order(rows, schema) do
-    case Schema.window_field(schema) do
-      nil ->
-        rows
+  @doc """
+  The type a window field orders by under `last: n` (spec/02 §2.2): `{:ok, :time}` or
+  `{:ok, :number}`, keyed by `Macaw.Data.Source.Order.key/2`; `:error` for a field of
+  another type, or none, whose rows keep their order.
+  """
+  @spec order_key(Schema.t(), name() | atom()) :: {:ok, :time | :number} | :error
+  def order_key(%Schema{} = schema, field) do
+    case Schema.fetch(schema, field, :type) do
+      {:ok, type} when type in [:time, :number] -> {:ok, type}
+      _other -> :error
+    end
+  end
 
-      field ->
-        if Enum.all?(rows, &(Window.position(Table.get(&1, field)) != nil)),
-          do: Enum.sort_by(rows, &Window.position(Table.get(&1, field))),
-          else: rows
+  # In the window field's order by its key, ties kept where they stand; rows with a key
+  # missing are left as they came.
+  defp in_order(rows, schema) do
+    with field when field != nil <- Schema.window_field(schema),
+         {:ok, type} <- order_key(schema, field) do
+      key = Order.key(type)
+      keyed = Enum.map(rows, &{key.(Table.get(&1, field)), &1})
+
+      if Enum.any?(keyed, &(elem(&1, 0) == nil)),
+        do: rows,
+        else: keyed |> then(&:lists.keysort(1, &1)) |> Enum.map(&elem(&1, 1))
+    else
+      _none -> rows
     end
   end
 

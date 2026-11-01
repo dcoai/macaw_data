@@ -30,7 +30,7 @@ defmodule Macaw.Data.Derived.Engine do
   variable is an input, spec/02 §2.3) and with sources in place of feeds.
   """
 
-  alias Macaw.Data.{Delivery, Derived, Operations, Schema, Window}
+  alias Macaw.Data.{Delivery, Derived, Operations, Schema, Table, Window}
   alias Macaw.Data.Derived.{Context, Output, Sandbox}
   alias Macaw.Data.Derived.Sandbox.Cache
   alias Macaw.Data.Derived.Sandbox.Names, as: Spelling
@@ -374,13 +374,14 @@ defmodule Macaw.Data.Derived.Engine do
     end
   end
 
-  # Every input's rows in its window, its schema and its delivery, or `:waiting` while
-  # one has none (spec/02 §8.2).
+  # Every input in its window, its schema and its delivery, or `:waiting` while one has
+  # none (spec/02 §8.2). A table is windowed as a table, on its columns, and rows as rows:
+  # its rows are made at the call (`rows/1`), never here.
   defp gather(engine, path) do
     Enum.reduce_while(engine.inputs[path], {:ok, []}, fn {key, name, ref, window}, {:ok, acc} ->
       case input(engine, ref) do
         {%Delivery{} = delivery, %Schema{} = schema} ->
-          rows = delivery |> Delivery.rows() |> Derived.window(window, schema)
+          rows = delivery |> subject() |> Derived.window(window, schema)
           input = %{key: key, name: name, rows: rows, schema: schema, delivery: delivery}
           {:cont, {:ok, acc ++ [input]}}
 
@@ -389,6 +390,12 @@ defmodule Macaw.Data.Derived.Engine do
       end
     end)
   end
+
+  # What a window reads of a delivery: its table, or its rows as they came. A column map
+  # or a tensor is read as rows, as a source's rows of those shapes always were.
+  defp subject(%Delivery{rows: %Table{} = table}), do: table
+  defp subject(%Delivery{rows: rows}) when is_list(rows), do: rows
+  defp subject(%Delivery{} = delivery), do: Delivery.rows(delivery)
 
   defp input(engine, {:source, name}), do: {engine.seen[name], engine.source_schemas[name]}
 
@@ -446,10 +453,13 @@ defmodule Macaw.Data.Derived.Engine do
   end
 
   # One bounded call: the whole inputs, or per identity every entity's call in one batch.
+  # Here, and only here, a windowed table becomes the rows a function reads (spec/02
+  # §2.2), once, in the engine's process, so the call's bounds count the function alone.
   defp call(%{per: nil} = source, fun, inputs, context, opts),
-    do: Sandbox.run(fun, [Derived.argument(source, inputs) | context], opts)
+    do: Sandbox.run(fun, [Derived.argument(source, rows(inputs)) | context], opts)
 
   defp call(source, fun, inputs, context, opts) do
+    inputs = rows(inputs)
     batch = fn -> Derived.per(source, inputs, &apply(fun, [&1 | context])) end
 
     case Sandbox.run(batch, [], opts) do
@@ -458,6 +468,11 @@ defmodule Macaw.Data.Derived.Engine do
       {:error, kind, detail} -> {:error, kind, detail}
     end
   end
+
+  defp rows(inputs), do: Enum.map(inputs, &%{&1 | rows: input_rows(&1.rows)})
+
+  defp input_rows(%Table{} = table), do: Table.rows(table)
+  defp input_rows(rows) when is_list(rows), do: rows
 
   # -- answers and faults (spec/02 §8.3) ---------------------------------------------------
 

@@ -22,6 +22,7 @@ defmodule Macaw.Data.Table.Chunk do
   alias Macaw.Data.Table.Delta
   alias Macaw.Data.Table.Digest
   alias Macaw.Layers.Document
+  alias Macaw.Data.Source.Order
 
   @enforce_keys [:size, :columns, :id, :digest, :derivation]
   defstruct [
@@ -369,6 +370,18 @@ defmodule Macaw.Data.Table.Chunk do
 
   def values(%__MODULE__{} = chunk, name, first, count),
     do: chunk |> storage(name, first, count) |> Column.values(count)
+
+  @doc false
+  # The instants of time column `name` in the run of `count` rows from `first`
+  # (`Macaw.Data.Source.Order.instant/1` of each value, `nil` where one is missing), read
+  # from a packed form's buffer, else value by value.
+  @spec instants(t(), term(), non_neg_integer(), non_neg_integer()) :: [integer() | nil]
+  def instants(%__MODULE__{} = chunk, name, first, count) do
+    case chunk |> storage(name, first, count) |> Column.instants(count) do
+      :general -> chunk |> values(name, first, count) |> Enum.map(&Order.instant/1)
+      instants -> instants
+    end
+  end
 
   @doc """
   The value of column `name` at row `i` of the chunk, as read: one slot of its storage,

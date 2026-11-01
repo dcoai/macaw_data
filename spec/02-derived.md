@@ -191,10 +191,19 @@ a short id, a source name and a path each read under their key's string; an atom
 **The window** says how much history the function needs (visualize#643, D-168):
 
 - `nil`: everything the owner holds of the input;
-- `%{last: n}`, `n` a positive integer: **each identity's newest `n` rows** by the input's window field when its schema declares identity, else the newest `n` rows;
+- `%{last: n}`, `n` a positive integer: **each identity's newest `n` rows** by the input's window field when its schema declares identity, else the newest `n` rows. **Newest is by the window field's type** (`Macaw.Data.Source.Order.key/2`, [01 §2.3](01-sources.md#sources-request)): a `:time` by its instant, so a `DateTime`, a `NaiveDateTime` (its wall clock) and a `Date` (its midnight) order on one scale to the microsecond, and a `:number` by its value. The order is stable. A window field of another type, or a row with no reading for it, leaves the rows in the order they came (macaw_data#47: this used to be `Window.position/1`, which keyed the three kinds of time on three scales);
 - a **request**: a map of any of `window`, `box`, `region` and `latest`, the request fields of [01 §2.3](01-sources.md#sources-request), the rows they select, **finished** as the runtime finishes a delivery (`Macaw.Data.Source.Finish`, [01 §2.4](01-sources.md#sources-finishing)) and checked against its input's schema in context (§1.1).
 
-The function **gets what is there** (visualize#643, settled question 3): a window of `last: 20` over an entity with three rows hands it three, and its clauses can match on the length (`[a, b, c | _]`). `Macaw.Data.Derived.window(rows, window, schema)` is the window applied to rows.
+The function **gets what is there** (visualize#643, settled question 3): a window of `last: 20` over an entity with three rows hands it three, and its clauses can match on the length (`[a, b, c | _]`). `Macaw.Data.Derived.window(input, window, schema)` is the window applied to an input. Under `nil` and `last:` its answer has the input's form.
+
+- **A table stays a table** ([01 §1.1](01-sources.md#sources-table)). `last: n` works on its columns and makes no row. It reads the window field as keys (a packed time column's instants straight from its buffer) and the identity fields as values. It skips the sort when the table is known to be sorted by its window field (`Table.sorted/1`). The kept rows are views of the input's chunks, or gathered from them by their slots (`Chunk.gather/5`). A request is finished over the table's rows, transposed once, and answers rows: finishing a table ([01 §2.4](01-sources.md#sources-finishing)) transposes it and repacks what it keeps, so it would cost more, until finishing works on columns (macaw_data#105).
+- **Rows stay the rows they came as.**
+
+Over a table and over that table's rows, the window keeps the same rows in the same order (`Table.equal?/2`).
+
+```test:derived-input-columns
+last n over a table is Table.equal? to the row window over its rows, over generated inputs of every kind of time, mixed kinds, a number field, nils, one, two or no identity fields and several chunks read through views; a time orders by its instant whatever its kind, to the microsecond; a sorted table without identity is a slice of its chunks
+```
 
 **Nothing is aligned** (visualize#643, settled question 13): each input's rows are its current window, and a function over inputs that arrive at different rates aligns them itself.
 
@@ -541,11 +550,16 @@ a set of derived sources is defined with every input resolved and ranks assigned
 
 - **In rank order, each source at most once.** The marked sources run from the lowest rank to the highest. A source whose answer differs from its last one marks the sources that read it, which run later in the same pulse, after every input they have; a source whose answer is unchanged marks nothing, and an unmarked source does not run. A source with two inputs that changed in one pulse runs once, with both: no glitches.
 - **Whole windows.** A source is called with each input's whole current window (§2.2), not with what changed.
+- **Tables until the call.** Each input is windowed in the form its delivery holds (§2.2): a source's table (a pushed source's `Push.held/1`, [01 §4.5](01-sources.md#sources-model-storage)) is windowed as a table. Its rows are made **once, at the call** (`Table.rows/1` of the windowed table; a request window's, before it is finished, §2.2), because a function reads rows (§1.2, §2.2). They are made in the engine's process, so the call's bounds (§6.4) count the function alone. Rows that came as rows are handed over as given. A column map or a tensor is read as rows, as before.
 - **Every input present.** A source with an input that has no delivery yet (a source loading, a derived source not yet computed) does not run; it stays `:loading`.
 - **In context.** Before a source first runs, and again when an input's schema version changes, it is validated given its inputs' schemas and the registry (§1.1). A source that fails is the fault `:restricted`, its detail the faults.
 - A function of two arguments is given its context (§2.3), which the engine builds from what it was shown.
 
 The engine is unchanged when no pulse is due. A test sets `debounce: 0`, so a pulse is in the same `run/2` as the change, and nothing waits on a clock.
+
+```test:derived-engine-tables
+a table input answers what its rows answer, under last n and a request; a host's function reads a table input as its rows and a row input as given; one recompute of a last n source over a 50k-row table input stays under its reductions bound and below a transpose of its input
+```
 
 ```test:derived-engine-pulses
 a changed input marks its readers and a pulse is due after the debounce; a pulse runs marked sources in rank order, each once, a downstream source only when its input's answer changed; a source whose input has no delivery stays loading; nothing runs when no pulse is due

@@ -704,6 +704,24 @@ defmodule Macaw.Data.Table.Column do
   defp where(_form, _test, <<>>, _x, _i, acc), do: :lists.reverse(acc)
 
   @doc false
+  # The `n` instants of a packed time column (`:utc`, `:zoned`, `:naive`, `:date`), in
+  # order, `nil` where a value is missing: each `Macaw.Data.Source.Order.instant/1` of its
+  # value, read from the buffer as it lies (UTC microseconds, a naive column's wall clock,
+  # a date's midnight), building no time. `:general` for any other column, which a caller
+  # reads value by value.
+  @spec instants(t(), non_neg_integer()) :: [integer() | nil] | :general
+  def instants({form, us, validity, _precision}, n) when form in [:utc, :naive],
+    do: gaps(for(<<v::signed-little-64 <- us>>, do: v), valid(validity, n))
+
+  def instants({:zoned, us, validity, _precision, _zones, _codes}, n),
+    do: gaps(for(<<v::signed-little-64 <- us>>, do: v), valid(validity, n))
+
+  def instants({:date, days, validity}, n),
+    do: gaps(for(<<d::signed-little-32 <- days>>, do: d * @day_us), valid(validity, n))
+
+  def instants(_column, _n), do: :general
+
+  @doc false
   # A dictionary column's codes, `nil` where a value is missing, and its strings by code:
   # a grouping reads the codes and names a group once (spec/04 §4.10).
   @spec codes(t(), non_neg_integer()) :: {[non_neg_integer() | nil], tuple()}
