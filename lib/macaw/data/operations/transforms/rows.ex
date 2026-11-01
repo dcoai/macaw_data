@@ -233,13 +233,16 @@ end
 
 defmodule Macaw.Data.Operations.Transforms.Sort do
   @moduledoc """
-  `sort` (spec/04 §4.6): the rows stably sorted by the reading of `field` under term
-  order, ascending or descending.
+  `sort` (spec/04 §4.6): the rows stably sorted by the reading of `field` under the
+  column's type, ascending or descending, `nil` last either way: a time by its instant, a
+  number by its value, text and a category by spelling, any other type by term order. The
+  comparison is `Macaw.Data.Source.Order`'s, so the step and a request's row order agree.
   """
   @behaviour Macaw.Data.Transform
 
   alias Macaw.Data.{Operations, Table}
   alias Macaw.Data.Operations.{Option, Step, Transforms}
+  alias Macaw.Data.Source.Order
 
   @impl true
   def name, do: "sort"
@@ -284,9 +287,12 @@ defmodule Macaw.Data.Operations.Transforms.Sort do
   @impl true
   def chunk(_node, view, name), do: Transforms.view_values(view, name)
 
+  # Every reading keyed by the column's type (a column the rows lack reads `nil`
+  # throughout, which keeps the rows' order) and sorted stably across the chunks.
   @impl true
-  def finish(%{"order" => order} = node, partials, %{input: input, key: key}) do
+  def finish(%{"order" => order, "field" => field} = node, partials, %{input: input, key: key}) do
     direction = if order == :descending, do: :desc, else: :asc
+    type = Table.column_type(input, Transforms.name_in(Table.names(input), field))
 
     picks =
       partials
@@ -294,7 +300,7 @@ defmodule Macaw.Data.Operations.Transforms.Sort do
       |> Enum.flat_map(fn {readings, v} ->
         readings |> Enum.with_index() |> Enum.map(fn {reading, i} -> {reading, {v, i}} end)
       end)
-      |> Enum.sort_by(&elem(&1, 0), direction)
+      |> Order.sort_by([{direction, Order.key(type), &elem(&1, 0)}])
       |> Enum.map(&elem(&1, 1))
 
     columns = outputs(node, Operations.columns(input))

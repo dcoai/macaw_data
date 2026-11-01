@@ -395,6 +395,11 @@ defmodule Macaw.Data.Operations.TransformsTest do
       ascending = run(%{op: "sort", field: "v"}, @rows)
       assert ts(ascending) == [0, 5, 3, 1, 4, 2]
       agrees(%{op: "sort", field: :v, order: "descending"}, @rows)
+
+      # A nil reading sorts last in either direction, in its input order.
+      gappy = [%{t: 0}, %{t: 1, v: 2}, %{t: 2}, %{t: 3, v: 1}]
+      assert ts(run(%{op: "sort", field: :v}, gappy)) == [3, 1, 0, 2]
+      assert ts(run(%{op: "sort", field: :v, order: :descending}, gappy)) == [1, 3, 0, 2]
     end
   end
 

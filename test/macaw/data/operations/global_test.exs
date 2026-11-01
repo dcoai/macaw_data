@@ -82,8 +82,12 @@ defmodule Macaw.Data.Operations.GlobalTest do
 
   # -- the rows' answers, each step as it was written over rows ---------------------------
 
-  defp oracle(rows, %{op: "sort", field: f, order: o}),
-    do: Enum.sort_by(rows, & &1[f], if(o == :descending, do: :desc, else: :asc))
+  # Numbers by value and strings by spelling are term order within their kind; a nil
+  # follows every reading in either direction.
+  defp oracle(rows, %{op: "sort", field: f, order: o}) do
+    {absent, present} = Enum.split_with(rows, &(&1[f] == nil))
+    Enum.sort_by(present, & &1[f], if(o == :descending, do: :desc, else: :asc)) ++ absent
+  end
 
   defp oracle(rows, %{op: "fold"}) do
     for row <- rows, f <- ["v", "w"], row[f] != nil do
@@ -290,11 +294,103 @@ defmodule Macaw.Data.Operations.GlobalTest do
       assert length(Table.chunks(table)) == 2
 
       sorted = run(table, %{op: "sort", field: "k"})
-      # Term order: nil, an atom, before every string.
-      assert Table.column(sorted, "k") == [nil, "apple", "apple", "fig", "fig", "kiwi", "pear"]
+      # By spelling, an atom's as its string's, and nil last either way.
+      assert Table.column(sorted, "k") == ["apple", "apple", "fig", "fig", "kiwi", "pear", nil]
 
       assert Table.column(run(table, %{op: "sort", field: "k", order: :descending}), "k") ==
                ["pear", "kiwi", "fig", "fig", "apple", "apple", nil]
+    end
+  end
+
+  describe "sort compares by the column's type (spec/04 §4.6)" do
+    # Instants from 1990 to 2040 at second resolution, so day, month and year all vary and
+    # the struct's field order (day first) disagrees with time's.
+    defp instant_gen do
+      map(integer(631_152_000..2_208_988_800), &DateTime.from_unix!/1)
+    end
+
+    defp typed_rows_gen do
+      list_of(
+        gen all(
+              i <- integer(),
+              t <- one_of([instant_gen(), constant(nil)]),
+              n <- one_of([integer(-50..50), float(min: -50.0, max: 50.0), constant(nil)]),
+              k <- one_of([member_of(["b", "a", "ca", :c, :ab, "B"]), constant(nil)])
+            ) do
+          %{"i" => i, "t" => t, "n" => n, "k" => k}
+        end,
+        max_length: 60
+      )
+    end
+
+    @typed [{"i", :number}, {"t", :time}, {"n", :number}, {"k", :category}]
+
+    # The type's own comparison, independent of `Source.Order`: `DateTime.compare/2` for a
+    # time, numeric for a number, a string's for a category's spelling; nil last.
+    defp by_type("t"), do: &(DateTime.compare(&1, &2) != :gt)
+    defp by_type("n"), do: &(&1 <= &2)
+    defp by_type("k"), do: &(to_string(&1) <= to_string(&2))
+
+    defp typed_oracle(rows, field, order) do
+      {absent, present} = Enum.split_with(rows, &(&1[field] == nil))
+      before? = by_type(field)
+
+      sorter =
+        if order == :descending,
+          do: fn a, b -> before?.(b[field], a[field]) end,
+          else: fn a, b -> before?.(a[field], b[field]) end
+
+      Enum.sort(present, sorter) ++ absent
+    end
+
+    @tag verifies: "operations-sort-type"
+    property "sort agrees with each type's comparison, DateTime.compare/2 for a time, stably" do
+      check all(
+              rows <- typed_rows_gen(),
+              field <- member_of(["t", "n", "k"]),
+              order <- member_of([:ascending, :descending]),
+              max_runs: 60
+            ) do
+        table = table_of(rows, @typed)
+        expected = Enum.map(typed_oracle(Table.rows(table), field, order), & &1["i"])
+        node = %{op: "sort", field: field, order: order}
+
+        for size <- [1, 7, :one] do
+          sorted = run(Storage.chunked(table, size), node)
+          assert Table.column(sorted, "i") == expected
+        end
+
+        assert Table.column(run(table, node), "i") == expected
+      end
+    end
+
+    @tag verifies: "operations-sort-type"
+    test "a time column sorts by instant across years, months and days, nil last" do
+      times = [
+        ~U[2026-10-02 00:00:00Z],
+        nil,
+        ~U[2026-09-30 00:00:00Z],
+        ~U[2026-10-01 00:00:00Z],
+        ~U[2025-12-31 00:00:00Z]
+      ]
+
+      table = Storage.chunked(Table.new!([{"t", :time, times}]), 2)
+
+      assert Table.column(run(table, %{op: "sort", field: "t"}), "t") == [
+               ~U[2025-12-31 00:00:00Z],
+               ~U[2026-09-30 00:00:00Z],
+               ~U[2026-10-01 00:00:00Z],
+               ~U[2026-10-02 00:00:00Z],
+               nil
+             ]
+
+      assert Table.column(run(table, %{op: "sort", field: "t", order: :descending}), "t") == [
+               ~U[2026-10-02 00:00:00Z],
+               ~U[2026-10-01 00:00:00Z],
+               ~U[2026-09-30 00:00:00Z],
+               ~U[2025-12-31 00:00:00Z],
+               nil
+             ]
     end
   end
 

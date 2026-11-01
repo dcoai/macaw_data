@@ -123,24 +123,57 @@ defmodule Macaw.Data.Source.Order do
   def sort(rows, [], _schema), do: rows
 
   def sort(rows, order, %Schema{} = schema) do
-    readers = Enum.map(order, fn {field, direction} -> reader(schema, field, direction) end)
+    keys =
+      Enum.map(order, fn {field, direction} ->
+        {direction, schema_key(schema, field), &Table.get(&1, field)}
+      end)
 
-    rows
-    |> Enum.map(fn row -> {Enum.map(readers, & &1.(row)), row} end)
+    sort_by(rows, keys)
+  end
+
+  @doc """
+  The items sorted stably by keys, each `{direction, key, read}`: `read` takes an item to
+  its value, `key` (from `key/2`) the value to its sort key, `nil` for no reading, which
+  sorts **last in either direction**. The first key decides first; items no key tells
+  apart keep their order. `sort/3` is this over a schema's fields, and the `sort` step
+  (spec/04 §4.6) over one column's readings, so the two order alike.
+
+      iex> alias Macaw.Data.Source.Order
+      iex> times = [~U[2026-10-02 00:00:00Z], nil, ~U[2025-12-31 00:00:00Z]]
+      iex> Order.sort_by(times, [{:asc, Order.key(:time), & &1}])
+      [~U[2025-12-31 00:00:00Z], ~U[2026-10-02 00:00:00Z], nil]
+  """
+  @spec sort_by([item], [{direction(), (term() -> term()), (item -> term())}]) :: [item]
+        when item: term()
+  def sort_by(items, []), do: items
+
+  # One key: the keys are terms that compare as the type orders, so a stable sort of them
+  # in its direction, the items without a reading after, in their order.
+  def sort_by(items, [{direction, key, read}]) do
+    {present, absent} =
+      items
+      |> Enum.map(fn item -> {key.(read.(item)), item} end)
+      |> Enum.split_with(&(elem(&1, 0) != nil))
+
+    present
+    |> Enum.sort_by(&elem(&1, 0), direction)
+    |> Enum.concat(absent)
+    |> Enum.map(&elem(&1, 1))
+  end
+
+  def sort_by(items, keys) do
+    items
+    |> Enum.map(fn item -> {Enum.map(keys, &reading(&1, item)), item} end)
     |> Enum.sort_by(&elem(&1, 0), &before?/2)
     |> Enum.map(&elem(&1, 1))
   end
 
-  # Each key's reading of a row: `{0, key}` with a value, `{1, nil}` without, so every
+  # Each key's reading of an item: `{0, key}` with a value, `{1, nil}` without, so every
   # value comes first in either direction; a descending key negates its comparison.
-  defp reader(schema, field, direction) do
-    key = key(schema, field)
-
-    fn row ->
-      case key.(Table.get(row, field)) do
-        nil -> {1, nil}
-        k -> {0, {direction, k}}
-      end
+  defp reading({direction, key, read}, item) do
+    case key.(read.(item)) do
+      nil -> {1, nil}
+      k -> {0, {direction, k}}
     end
   end
 
@@ -166,27 +199,17 @@ defmodule Macaw.Data.Source.Order do
   defp compare_keys(a, b) when a > b, do: :gt
   defp compare_keys(_a, _b), do: :eq
 
-  # A value's sort key under its field's type, a number, a string or a tuple of them, so
-  # keys compare in term order exactly as the type orders; `nil` for no reading.
-  defp key(schema, field) do
+  # A schema field's sort key: its type's, a category's under its declared `order`.
+  defp schema_key(schema, field) do
     case Schema.fetch(schema, field, :type) do
-      {:ok, :time} ->
-        &Window.position/1
+      {:ok, type} when type in @ordered ->
+        states =
+          case Schema.fetch(schema, field, :order) do
+            {:ok, states} when type == :category -> states
+            _none -> []
+          end
 
-      {:ok, :number} ->
-        fn value -> if is_number(value), do: value end
-
-      {:ok, :text} ->
-        fn value -> if is_binary(value), do: value end
-
-      {:ok, :category} ->
-        places = category_places(schema, field)
-        last = map_size(places)
-
-        fn
-          nil -> nil
-          value -> category_key(value, places, last)
-        end
+        key(type, states)
 
       {:ok, type} ->
         raise ArgumentError, "a #{inspect(type)} field has no order: #{inspect(field)}"
@@ -196,14 +219,40 @@ defmodule Macaw.Data.Source.Order do
     end
   end
 
-  # A category's declared `order` (spec/01 §1.2) gives its states' places; a state it does
-  # not list follows them, by spelling.
-  defp category_places(schema, field) do
-    case Schema.fetch(schema, field, :order) do
-      {:ok, states} -> states |> Enum.with_index() |> Map.new(fn {s, i} -> {spelling(s), i} end)
-      :error -> %{}
+  @doc """
+  A value's sort key under a type, so keys compare in term order exactly as the type
+  orders, and `nil` for no reading: a `:time`'s instant (`Macaw.Data.Window.position/1`),
+  a `:number`'s value, a `:text`'s string, and a `:category`'s place in `states` (its
+  declared `order`, spec/01 §1.2) and then its spelling, a state `states` does not list
+  following them. **A type with no order of its own** (`:color`, `:point`, `:term`) keys a
+  value by itself, so it sorts by term order; only `nil` is no reading.
+
+      iex> alias Macaw.Data.Source.Order
+      iex> Order.key(:time).(~U[2026-10-02 00:00:00Z]) > Order.key(:time).(~U[2025-12-31 00:00:00Z])
+      true
+      iex> Order.key(:category, ["ok", "warn"]).(:warn)
+      {1, "warn"}
+      iex> Order.key(:number).("7")
+      nil
+  """
+  @spec key(atom(), [term()]) :: (term() -> term())
+  def key(type, states \\ [])
+
+  def key(:time, _states), do: &Window.position/1
+  def key(:number, _states), do: fn value -> if is_number(value), do: value end
+  def key(:text, _states), do: fn value -> if is_binary(value), do: value end
+
+  def key(:category, states) do
+    places = states |> Enum.with_index() |> Map.new(fn {s, i} -> {spelling(s), i} end)
+    last = map_size(places)
+
+    fn
+      nil -> nil
+      value -> category_key(value, places, last)
     end
   end
+
+  def key(_type, _states), do: & &1
 
   defp category_key(value, places, last)
        when is_atom(value) or is_binary(value) or is_number(value) do

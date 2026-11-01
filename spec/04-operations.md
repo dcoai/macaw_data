@@ -388,7 +388,7 @@ the table operations are macaw_data's transforms, in the table's order, each nee
 `field` (`:field`, required); `test` (`{:enum, [:eq, :ne, :lt, :lte, :gt, :gte, :present, :absent]}`, `:present`); `value` (`:term`, `nil`). The rows, in order, whose reading of `field` passes the test against `value`:
 - `present` keeps a reading that is not `nil`, and `absent` one that is;
 - `eq` keeps a reading equal to `value` and `ne` one that is not. A category is one value whichever spelling a row or the node gives it, so `:ok` equals `"ok"` (an atom and a string are equal when the atom's string is the string; `Macaw.Data.Operations.same?/2`);
-- `lt`, `lte`, `gt` and `gte` keep a reading that is not `nil` and stands so to `value` under Elixir's term ordering, as `sort` orders. **A `nil` reading never passes an ordering.**
+- `lt`, `lte`, `gt` and `gte` keep a reading that is not `nil` and stands so to `value` under Elixir's term ordering. That is not yet `sort`'s comparison by type (§4.6): a time against a time compares as a map, and macaw_data#96 restates the orderings by type. **A `nil` reading never passes an ordering.**
 
 The test is `test`, not `op`, because `op` names the step. A column the rows lack reads `nil`, so `filter(field: "height", test: :eq, value: 0)` after a hierarchy keeps its leaves. **Outputs:** the input's columns. **Class:** per row (§1.4), each chunk decided from `field`'s column alone: a chunk every row of which passes is passed through, one none of which passes is dropped, one whose passing rows are one run is cut to that run without copying, and any other gathers the rows that pass. **A packed number column with no value missing** is tested by an ordering against a number by scanning its values buffer as it lies, nothing decoded (macaw_data#41); any other column or test reads the values one by one, in one pass.
 
@@ -574,11 +574,20 @@ a finish over finish_buckets/0 buckets, 2,048, each giving lttb two candidates, 
 
 ### 4.6 sort {#operations-sort}
 
+`field` (`:field`, required); `order` (`{:enum, [:ascending, :descending]}`, `:ascending`). The rows **stably** sorted by the reading of `field`, in that direction. **Readings compare by the column's type, never by term order** (term order compares a `%DateTime{}` as a map, field by field, so by its day before its year; macaw_data#93):
+- a `:time` by its instant (`Macaw.Data.Window.position/1`), as `DateTime.compare/2` orders it;
+- a `:number` by its value;
+- a `:text` by its string, and a `:category` by its spelling (a table holds no declared `order`);
+- a type with no order of its own (`:color`, `:point`, `:term`) by term order.
 
-`field` (`:field`, required); `order` (`{:enum, [:ascending, :descending]}`, `:ascending`). The rows **stably** sorted by the reading of `field` under `Enum.sort_by/3`'s term ordering, in that direction. **Outputs:** the input's columns. **Class:** global (§1.4): each chunk's readings of `field`, then every row sorted and gathered across the chunks.
+**A `nil`, and a reading of no value for its type, sorts last in either direction.** The comparison is `Macaw.Data.Source.Order`'s (`key/2`, `sort_by/2`), so a step's `sort` and a request's row order (spec/01 §2.3) order a field alike. A column the rows lack reads `nil` throughout, so the rows keep their order. **Outputs:** the input's columns. **Class:** global (§1.4): each chunk's readings of `field`, then every row sorted and gathered across the chunks.
 
 ```test:operations-sort-stable
-sort orders rows by the field ascending or descending under term order, keeping equal readings in their input order
+sort orders rows by the field ascending or descending, keeping equal readings in their input order and a nil reading last either way
+```
+
+```test:operations-sort-type
+for generated time, number and category columns with gaps, across chunkings, sort in either direction agrees with sorting by the type's comparison (DateTime.compare/2 for a time, the value for a number, the spelling for a category), stably, nil last
 ```
 
 ### 4.7 fold {#operations-fold}
