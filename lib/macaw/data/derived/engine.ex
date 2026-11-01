@@ -464,13 +464,21 @@ defmodule Macaw.Data.Derived.Engine do
   end
 
   # One bounded call: the whole inputs, or per identity every entity's call in one batch.
-  # Here, and only here, a windowed table becomes the rows a function reads (spec/02
-  # §2.2), once, in the engine's process, so the call's bounds count the function alone.
-  defp call(%{per: nil} = source, fun, inputs, context, opts),
-    do: Sandbox.run(fun, [Derived.argument(source, rows(inputs)) | context], opts)
-
+  # Here, and only here, the inputs take the form the function reads (spec/02 §2.2), once,
+  # in the engine's process, so the call's bounds count the function alone: under
+  # `input: :rows` a windowed table becomes its rows; under `input: :columns` rows become
+  # a table, and a stored function's tables are detached from their origin.
   defp call(source, fun, inputs, context, opts) do
-    inputs = rows(inputs)
+    case read_as(source, inputs) do
+      {:ok, inputs} -> bounded(source, fun, inputs, context, opts)
+      {:error, kind, detail} -> {:error, kind, detail}
+    end
+  end
+
+  defp bounded(%{per: nil} = source, fun, inputs, context, opts),
+    do: Sandbox.run(fun, [Derived.argument(source, inputs) | context], opts)
+
+  defp bounded(source, fun, inputs, context, opts) do
     batch = fn -> Derived.per(source, inputs, &apply(fun, [&1 | context])) end
 
     case Sandbox.run(batch, [], opts) do
@@ -478,6 +486,36 @@ defmodule Macaw.Data.Derived.Engine do
       {:ok, {:error, kind, detail}} -> {:error, kind, detail}
       {:error, kind, detail} -> {:error, kind, detail}
     end
+  end
+
+  defp read_as(%{input: :rows}, inputs), do: {:ok, rows(inputs)}
+
+  defp read_as(%{input: :columns} = source, inputs) do
+    Enum.reduce_while(inputs, {:ok, []}, fn input, {:ok, acc} ->
+      case input_table(input.rows, input.schema) do
+        {:ok, table} ->
+          table = if stored?(source), do: Table.detached(table), else: table
+          {:cont, {:ok, acc ++ [%{input | rows: table}]}}
+
+        {:error, faults} ->
+          {:halt, {:error, :nonconforming, {:input, input.key, faults}}}
+      end
+    end)
+  end
+
+  defp stored?(%{elixir: elixir}), do: is_binary(elixir)
+
+  # An input's rows as a table: a table as it is; rows (a list delivery, or a request
+  # window's finished rows) packed under the input's schema, a column a field, named by
+  # its string, in name order, each read by either spelling. Rows that do not pack are
+  # `Table.new/2`'s faults, each at a field and an index, never a value.
+  defp input_table(%Table{} = table, _schema), do: {:ok, table}
+
+  defp input_table(rows, %Schema{fields: fields}) when is_list(rows) do
+    Table.new(
+      for {name, %{type: type}} <- Enum.sort(fields),
+          do: {name, type, Enum.map(rows, &Table.get(&1, name))}
+    )
   end
 
   defp rows(inputs), do: Enum.map(inputs, &%{&1 | rows: input_rows(&1.rows)})

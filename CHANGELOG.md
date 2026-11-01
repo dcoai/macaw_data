@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+- **Added:** a derived source may read its inputs as columns: `input: :rows | :columns` on `Macaw.Data.Derived` (#107, #112, spec/02 §1.1, §2.2, §7, §8.2). It is `:rows` by default, and a `:rows` source runs exactly as before.
+  - Under `:columns`, `Macaw.Data.Derived.Engine` hands the function each input as a `Macaw.Data.Table`, read with `Macaw.Data.Derived.Columns`, and makes no row.
+  - A table delivery is handed over as windowed. A list delivery, or a request window's finished rows, is packed under the input's schema. Rows that don't pack are the fault `:nonconforming`, with detail `{:input, key, faults}` and no value.
+  - A stored function's tables are detached (no origin, no chunk identity, no fetch closure), so they hold only their values.
+  - Under `per`, each entity gets a table of its rows, gathered from the input's chunks.
+  - The option applies to stored and host functions alike: the source that names a host function says how it is called.
+  - `new/1` refuses any other value with `{[:input], {:enum, [:rows, :columns]}}`.
+- **Changed:** the derived source's map and JSON form is version 2 (#112, spec/02 §1.5). It writes `"input": {"$atom": "columns"}` for a columnar source and nothing for `:rows`. A version 1 document reads as a rows source. A reader of version 1 refuses a version 2 document by name (`{:newer_schema, 2, 1}`).
+- **Faster:** one recompute of a source summing one field of a 50,000-row, four-column table input, counting the engine's process and the function:
+
+  | Source | Reductions | ms, default heap | ms, 4M-word heap |
+  |---|---:|---:|---:|
+  | host `:rows` | 2,406,074 | 225.3 | 81.8 |
+  | host `:columns`, kernels | 2,375 | 0.9 | 0.4 |
+  | host `:columns`, Elixir path | 152,407 | n/a | n/a |
+  | stored `:rows` | 11,757,116 | 487.7 | 233.3 |
+  | stored `:columns`, kernels | 3,684 | 0.5 | 0.5 |
+  | stored `:columns`, Elixir path | 153,716 | n/a | n/a |
+
+  The `:rows` rows are unchanged from before. On the Elixir path, only the function's reductions were measured without the kernels.
 - **Added:** a stored function may read columns: `Macaw.Data.Derived.Columns` is on the sandbox's allowlist with every accessor, its `!` variant and `format_error/1` (#107, #111, #115, spec/02 §6.1–§6.3). It is written by its full name, as `Macaw.Data.Ops` is.
   - The checker holds a literal column name, a string or an atom, to `fields:` as it holds `row.field`, so `Columns.sum(t, "w")` over inputs without `w` is `{:unknown_field, "w"}` at its line.
   - Every accessor compiles to a twin in the sandbox's runtime that spells its names, values and reasons by the function's literals' rule. So a stored function's `:ok` matches a category's `"ok"`, as it does in rows, and `{:error, {:unknown_column, _}}` matches the reason a missing column answers.

@@ -21,7 +21,7 @@ defmodule Macaw.Data.Derived.Form do
   alias Macaw.Layers.{Fault, Url, Version, Vocabulary}
   alias Macaw.Layers.Form, as: Adapter
 
-  @keys ~w(id from schema elixir function per last window box region latest west south east north)a
+  @keys ~w(id from schema elixir function per input last window box region latest west south east north)a
 
   @doc false
   # The source's map form: `{:ok, map}`, or every value without a form, by path.
@@ -30,7 +30,7 @@ defmodule Macaw.Data.Derived.Form do
       source
       |> Map.from_struct()
       |> Map.delete(:schema)
-      |> Map.reject(fn {_key, value} -> value == nil end)
+      |> Map.reject(fn {key, value} -> value == nil or {key, value} == {:input, :rows} end)
 
     with {:ok, map} <- Adapter.to_map(value, __MODULE__),
          do: {:ok, Map.put(map, "schema", Schema.to_map(source.schema))}
@@ -94,19 +94,20 @@ defmodule Macaw.Data.Derived.Form do
 
   # -- the behaviors -----------------------------------------------------------------------
 
+  # 2 (macaw_data#107): a source may read its inputs as columns, `"input"`, written only
+  # when it is `:columns`. A version 1 document reads its inputs as rows, so it steps as it is.
   @impl Version
-  def current, do: 1
+  def current, do: 2
 
-  # The line starts at 1: no document is older.
   @impl Version
-  def step(document, _from), do: {:ok, document}
+  def step(document, 1), do: {:ok, document}
 
   @impl Adapter
   def tags, do: Macaw.Data.Derived.Form.Tags
   @impl Adapter
   def keys, do: Vocabulary.table(@keys)
   @impl Adapter
-  def atoms, do: Vocabulary.table([:identity])
+  def atoms, do: Vocabulary.table([:identity, :rows, :columns])
 
   # An input `{name, window}` as `{"$input": [name, window]}`, a source's name
   # `{"$source": name}`, and `{:identity, input}` as `{"$identity": input}`, each part in

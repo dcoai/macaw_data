@@ -160,6 +160,26 @@ defmodule Macaw.Data.DerivedTest do
     end
   end
 
+  describe "new/1: input" do
+    @tag verifies: "derived-new"
+    test "input: is :rows by default, or :columns; anything else is refused at [:input]" do
+      assert Derived.new!(health()).input == :rows
+      assert Derived.new!(health(input: :rows)).input == :rows
+      assert Derived.new!(health(input: :columns)).input == :columns
+      assert Derived.new!(health(function: :f, elixir: nil, input: :columns)).input == :columns
+
+      assert Derived.new!(health(input: nil)).input == :rows
+
+      for bad <- [:both, "columns", 1] do
+        assert {:error, [{[:input], {:enum, [:rows, :columns]}}]} =
+                 Derived.new(health(input: bad))
+      end
+
+      assert Derived.format_error({[:input], {:enum, [:rows, :columns]}}) ==
+               "input: must be :rows or :columns"
+    end
+  end
+
   describe "validate/2: in context" do
     setup do
       {:ok, source: Derived.new!(health(elixir: "fn rows -> %{state: :ok} end"))}
@@ -518,7 +538,30 @@ defmodule Macaw.Data.DerivedTest do
       assert request["box"] == %{"west" => 175, "south" => -20, "east" => -175, "north" => -15}
 
       {:ok, json} = Derived.to_json(health)
-      assert %{"$version" => 1} = JSON.decode!(json)
+      assert %{"$version" => 2} = JSON.decode!(json)
+    end
+
+    @tag verifies: "derived-forms-inverse"
+    test "input: :columns is written as \"input\", :rows not at all; a version 1 document reads as rows" do
+      columns = Derived.new!(health(input: :columns))
+      rows = Derived.new!(health())
+
+      assert {:ok, %{"input" => %{"$atom" => "columns"}} = map} = Derived.to_map(columns)
+      assert Derived.from_map(map) == {:ok, columns}
+      assert {:ok, json} = Derived.to_json(columns)
+      assert Derived.from_json(json) == {:ok, columns}
+
+      assert {:ok, map} = Derived.to_map(rows)
+      refute Map.has_key?(map, "input")
+      assert Derived.from_map(Map.put(map, "input", %{"$atom" => "rows"})) == {:ok, rows}
+
+      # Version 1 had no input: its sources read rows, and step to version 2 as they are.
+      {:ok, json} = Derived.to_json(rows)
+      old = json |> JSON.decode!() |> Map.put("$version", 1) |> JSON.encode!()
+      assert Derived.from_json(old) == {:ok, rows}
+
+      newer = json |> JSON.decode!() |> Map.put("$version", 3) |> JSON.encode!()
+      assert {:error, [{[], {:newer_schema, 3, 2}}]} = Derived.from_json(newer)
     end
 
     @tag verifies: "derived-forms-inverse"
@@ -554,9 +597,9 @@ defmodule Macaw.Data.DerivedTest do
       assert {:error, [{["from", 0, "$input"], {:limit, :depth, 3, _}}]} =
                Derived.from_json(json, limits: [depth: 3])
 
-      newer = json |> JSON.decode!() |> Map.put("$version", 2)
-      assert {:error, [{[], {:newer_schema, 2, 1}}]} = Derived.from_map(newer)
-      assert {:error, [{[], {:newer_schema, 2, 1}}]} = Derived.from_json(JSON.encode!(newer))
+      newer = json |> JSON.decode!() |> Map.put("$version", 3)
+      assert {:error, [{[], {:newer_schema, 3, 2}}]} = Derived.from_map(newer)
+      assert {:error, [{[], {:newer_schema, 3, 2}}]} = Derived.from_json(JSON.encode!(newer))
     end
 
     @tag verifies: "derived-forms-gates"

@@ -1,6 +1,6 @@
 # 02 — Derived sources {#derived}
 
-A **derived source** (visualize's *virtual source*) is a source computed from other sources by a function: rows in, rows out. Macaw adopts visualize's design whole; it is the most developed part of the three projects (visualize.md C2). This file is visualize's spec/08 §10.5 and spec/15 §14 (visualize#643, D-194, D-195, D-220, D-228), adapted to Macaw's contracts (macaw_compose#82):
+A **derived source** (visualize's *virtual source*) is a source computed from other sources by a function: rows in, rows out, by default, or a function that reads its inputs as columns (`input: :columns`, §2.2). Macaw adopts visualize's design whole; it is the most developed part of the three projects (visualize.md C2). This file is visualize's spec/08 §10.5 and spec/15 §14 (visualize#643, D-194, D-195, D-220, D-228), adapted to Macaw's contracts (macaw_compose#82):
 
 - **inputs are sources** ([01 §2](01-sources.md#sources-contract)), by name, and their answers are `Macaw.Data.Delivery`s;
 - **a derived source is itself a source**, so it is another's input and a slot's source, held to the conformance kit ([01 §9](01-sources.md#sources-conformance));
@@ -35,6 +35,7 @@ A derived source is **data**: a struct with no function in it, its function a na
 | `elixir` | the function as source text: one `fn` of one argument, its inputs, or two, its inputs and its context (§2.3), checked by the sandbox (§6.1) | one of `elixir` and `function` |
 | `function` | the name of a host's function, defined with `defsource` (§7), held as its string and found in the registry by spelling | one of `elixir` and `function` |
 | `per` | `nil`, `:identity` or `{:identity, input}` (§1.3) | `nil` |
+| `input` | how the function reads its inputs (§2.2): `:rows`, each input a list of rows, or `:columns`, each input a `Macaw.Data.Table` read through `Macaw.Data.Derived.Columns`; `nil` is `:rows` | `:rows` |
 
 `Macaw.Data.Derived.new/1` takes the **value**, a keyword list or a map of the fields above as terms (atom keys; names atoms or strings, held as strings), and answers `{:ok, derived}` or `{:error, faults}` with **every** fault, each `{path, reason}`, the path from the source to the value, ordered by path. `new!/1` answers the source or raises `ArgumentError` naming every fault.
 
@@ -57,6 +58,7 @@ The engine validates every source in context before it first runs, and again whe
 | `{:check, line, reason}` | at `[:elixir]`: a fault of the sandbox's checker, `{line, reason}` of §6.1 |
 | `{:undeclared, :function, name}` | at `[:function]`, in context: no registered host module defines it (§7) |
 | `{:enum, [:identity]}` | at `[:per]`: a `per` that is neither `nil`, `:identity` nor `{:identity, input}` |
+| `{:enum, [:rows, :columns]}` | at `[:input]`: an `input` that is neither `nil`, `:rows` nor `:columns` |
 | `{:per, :ambiguous}` | at `[:per]`: `:identity` over several inputs, which must name the one whose entities it is per |
 | `{:per, {:unknown_input, name}}` | at `[:per]`: `{:identity, name}` naming no input |
 | `{:per, :no_identity}` | at `[:per]`, in context: the identity input's schema declares no identity ([01 §1.4](01-sources.md#sources-schema-identity)) |
@@ -104,7 +106,7 @@ no fault of conform ever holds a value of the rows (property over rows carrying 
 
 With `per`, the function is called **once per entity** of one input, its **identity input**: the only input under `:identity`, the one named under `{:identity, input}`. Its schema must declare identity (`{:per, :no_identity}`).
 
-- **Each call** is given that entity's rows of the identity input, its history in the input's window (§2.2): the rows alone when the source has one input (`fn rows -> … end`), else the inputs' map with the identity input's key holding the entity's rows and every other input whole. A function of two arguments is given the source's context beside them, the same for every entity. It answers one row, a map, or a list of rows.
+- **Each call** is given that entity's rows of the identity input, its history in the input's window (§2.2), as rows, or under `input: :columns` as a table of those rows gathered from the input's chunks: the rows alone when the source has one input (`fn rows -> … end`), else the inputs' map with the identity input's key holding the entity's rows and every other input whole. A function of two arguments is given the source's context beside them, the same for every entity. It answers one row, a map, or a list of rows.
 - **Entities** are grouped by the input's declared identity (`Macaw.Data.Schema.identity/2`), in their order of first appearance; a row with no identity is dropped.
 - **The output's identity is the input's:** its schema must declare as identity exactly the input's identity fields, of the same types (`{:per, {:identity, …}}`, `{:per, {:identity_type, …}}`). Each answered row is given the entity's identity values, and a row that names another value for an identity field does not conform (`:identity`).
 - **Joined back by identity:** the output holds every entity's rows, entity by entity, in the input's order of first appearance.
@@ -140,9 +142,10 @@ The value (§1.1) is the one true form: it is what `new/1` judges and what is bu
 | `{:source, name}` | `{"$source": name}` |
 | a window | `null`, `{"last": n}`, or a request object of the keys it has: `"window"` `[from, to]`, `"box"` `{"west", "south", "east", "north"}`, `"region"` an object keyed by its fields' names, `"latest"` a boolean, each time `{"$time": …}` |
 | `per` | `{"$atom": "identity"}`, or `{"$identity": input}` |
+| `input` | `{"$atom": "columns"}` for `:columns`; absent for `:rows`, which a reader also takes as `{"$atom": "rows"}` |
 | `schema` | `Macaw.Data.Schema.to_map/1` of it, the schema's own adapter ([01 §1.11](01-sources.md#sources-schema-json)), its colors in the colors' form (`Macaw.Layers.Color.Form`) |
 
-A region is a **name map**: its keys are field names, never the form's keys, written as the names they are and escaped when they start with `$` (`Macaw.Layers.Tags.escape/1`). `to_json/1` is the map form encoded, stamped `"$version"` with the form's version, 1.
+A region is a **name map**: its keys are field names, never the form's keys, written as the names they are and escaped when they start with `$` (`Macaw.Layers.Tags.escape/1`). `to_json/1` is the map form encoded, stamped `"$version"` with the form's version, 2. **Version 2** (macaw_data#107) added `"input"`. A version 1 document has none, so its source reads rows, and it steps to version 2 as it is.
 
 **Reading** is the adapter's, and judging is `new/1`'s. `from_map(map, opts)` and `from_json(json, opts)` take a map form or a JSON document through the gates (`Macaw.Layers.Form.gates/3`: a JSON document's bytes, then its nesting and counts within `Macaw.Layers.Limits`, `limits:` tightening them; the version, a newer stamp refused by name; the migration), read the value from the map form by the tag table and the form's keys (an unknown tag is `{:unknown_tag, tag}` at its path, a key the form does not have stays its string, which `new/1` refuses as `:unknown_key`, a `$atom` other than `identity` is `{:unknown_atom, spelling}`, naming the spelling), read the schema by `Macaw.Data.Schema.from_map/1`, its faults at `[:schema | path]`, and then judge the value by `new/1`. Reading makes no atom: every atom it gives is one of the form's closed tables (`Macaw.Layers.Vocabulary`).
 
@@ -254,10 +257,11 @@ with the native kernels loaded, every accessor answers term for term what its El
 
 **Nothing is aligned** (visualize#643, settled question 13): each input's rows are its current window, and a function over inputs that arrive at different rates aligns them itself.
 
-**How a function reads its inputs.** The function receives the inputs as one map from key to rows: `fn %{hosts: rows} -> … end`.
+**How a function reads its inputs.** The function receives the inputs as one map from key to rows: `fn %{hosts: rows} -> … end`. Under **`input: :columns`** each key holds a table instead (macaw_data#107): `fn %{hosts: t} -> [%{mean: Columns.mean!(t, "cpu")}] end`, read through `Macaw.Data.Derived.Columns`, and no row is made for it. Rows remain the default. A `:rows` function that could have been columnar answers the same, only slower. A `:columns` function that treats its input as a list fails loudly, as `:raised` (§6.4).
 
 - **A stored function reads a name as it reads its own literals** (§6.1): an input's key, a row's field and a row's category value is the atom of a word an allowed function takes (`:ok`, `:error`, `:day`, `:first`, …), else its string. So a row's `:ok` is the function's `:ok`, a row's `:warning` and the function's `:warning` are both `"warning"`, and `row.field` reads either spelling (§6.3). Any other value is the term it is: a number, a time, and a color, literal (`%Macaw.Layers.Color{}`) or typed (`{:color, "good"}`), whole, its tags never respelled.
 - **A host's function** (§7) receives the inputs keyed by their strings (`inputs["hosts"]`) and each row as its source gave it.
+- **Under `input: :columns`**, an input that came as a table is handed over as that table. Rows (a source's list delivery, or a request window's finished rows) are packed under the input's schema first: a column a field, named by its string, in name order, each value read by either spelling of its field, a category's atom as its string. A stored function's tables are **detached** (`Table.detached/1`): the same names, types, rows and sort, each chunk's run of rows its columns' buffers, with no origin, no chunk identity and no function, so nothing the function can reach in a table is anything but its values.
 
 Whichever function answers, its rows are keyed by their fields' strings in the output (§1.2). `Macaw.Data.Derived.argument(derived, inputs)` is that first argument, each input `%{name, rows, schema}` as its owner read it.
 
@@ -490,7 +494,7 @@ a checked source compiles once into a closure that reads row.field by either spe
 | `:hung` | the call did not answer within `timeout`: it is blocked, not slow | the bound, milliseconds |
 | `:memory` | the process's heap passed `max_heap` and the VM killed it | the limit, words |
 | `:raised` | the function raised | the exception's module |
-| `:nonconforming` | the function answered rows that are not its schema's (§1.2) | the index and field, never a value |
+| `:nonconforming` | the function answered rows that are not its schema's (§1.2), or, under `input: :columns`, an input's rows do not pack under its schema (§8.2) | the index and field, or `{:input, key, faults}`, never a value |
 
 `:restricted` and `:nonconforming` are not the runner's, but a derived source's fault (§8.3) is one of the six.
 
@@ -567,6 +571,7 @@ end
 ```
 
 - **`use Macaw.Data.Derived.Functions`** imports `defsource/2` and compiles `__derived__/0`: each function's name, its **arity** and its **source text**, `[{name, arity, source}]` in definition order. `defsource name(inputs) do … end` is a public `def` of one argument, and `defsource name(inputs, context) do … end` one of two, which takes the context (§2.3). One name has one arity: clauses of one name and two arities are a `CompileError`, as a head of any other arity is; a function of several clauses is defined clause by clause and listed once, its source the clauses together. The text is captured **when the module compiles** (`Macro.to_string/1` of each clause as an `fn` clause), because a release strips the debug information a later reading would need.
+- **Rows or columns.** The source that names a host function says how it is called (`input:`, §1.1, §2.2): under `:columns` the function receives tables and reads them with `Macaw.Data.Derived.Columns`, as a stored one does, or with anything else a host may call.
 - **Trusted, and bounded.** A host's function is the host's code: the checker does not read it, and it may call anything. It still runs through the bounded runner (§6.4), so a runaway in it ends as `:memory` or `:reductions` like a stored one, and one that blocks ends as `:hung`.
 - **Registered explicitly, default closed.** `Macaw.Data.Derived.Functions.registry(modules)` is the given modules' functions, `%{name => {module, arity}}`, keyed by the name's string; a module without `__derived__/0`, or a name two modules define, is an `ArgumentError`. **No application environment is read:** a function is callable only when its module is passed to the engine (`functions:`, §8.4). A source names its function by its string and finds it by spelling; one naming a function the registry does not hold is `{:undeclared, :function, name}` in context (§1.1).
 - **Versioning is git's** (visualize#643's review). A document names a host function; the code that runs is the host's current code, and its history is the host's repository's. A stored function travels with its document.
@@ -603,7 +608,7 @@ a set of derived sources is defined with every input resolved and ranks assigned
 
 - **In rank order, each source at most once.** The marked sources run from the lowest rank to the highest. A source whose answer differs from its last one (see **The answer is a table**, below) marks the sources that read it, which run later in the same pulse, after every input they have; a source whose answer is unchanged marks nothing, and an unmarked source does not run. A source with two inputs that changed in one pulse runs once, with both: no glitches.
 - **Whole windows.** A source is called with each input's whole current window (§2.2), not with what changed.
-- **Tables until the call.** Each input is windowed in the form its delivery holds (§2.2): a source's table (a pushed source's `Push.held/1`, [01 §4.5](01-sources.md#sources-model-storage)) is windowed as a table. Its rows are made **once, at the call** (`Table.rows/1` of the windowed table; a request window's, before it is finished, §2.2), because a function reads rows (§1.2, §2.2). They are made in the engine's process, so the call's bounds (§6.4) count the function alone. Rows that came as rows are handed over as given. A column map or a tensor is read as rows, as before.
+- **Tables until the call.** Each input is windowed in the form its delivery holds (§2.2): a source's table (a pushed source's `Push.held/1`, [01 §4.5](01-sources.md#sources-model-storage)) is windowed as a table. For a source that reads rows (`input: :rows`), its rows are made **once, at the call** (`Table.rows/1` of the windowed table; a request window's, before it is finished, §2.2). They are made in the engine's process, so the call's bounds (§6.4) count the function alone. Rows that came as rows are handed over as given. A column map or a tensor is read as rows, as before. **For a source that reads columns** (`input: :columns`), no row is made: the windowed table is handed over, rows are packed under the input's schema at the call, and a stored function's tables are detached (§2.2). Rows that do not pack (a value not of its field's type) are the fault `:nonconforming`, its detail `{:input, key, faults}`: the input's key and `Table.new/2`'s faults, each `{[field, index], reason}`, no value among them.
 - **Every input present.** A source with an input that has no delivery yet (a source loading, a derived source not yet computed) does not run; it stays `:loading`.
 - **In context.** Before a source first runs, and again when an input's schema version changes, it is validated given its inputs' schemas and the registry (§1.1). A source that fails is the fault `:restricted`, its detail the faults.
 - A function of two arguments is given its context (§2.3), which the engine builds from what it was shown.
@@ -622,6 +627,14 @@ The engine is unchanged when no pulse is due. A test sets `debounce: 0`, so a pu
 a push marks the readers exactly when the rows differ by identity (rows as given by ===, tables by their columns) or a served fact differs (property, across chunkings); 1 then 1.0 marks the readers and changes the answer downstream; one table chunked two ways marks nothing, and its rows as a list are another form; a retracted row's 1 then 1.0 marks; a watermark of 1 then 1.0 is a change to the push and to the answer
 ```
 
+```test:derived-engine-columns
+a :columns source and its :rows twin, host, stored and per identity, under nil, last n and a request window, give Table.equal? outputs with the same served facts, states and fault kinds through pulses of table and row deliveries, faults and watermarks (property); a host's function receives its table as delivered, a list delivery packed; a stored one's table is detached, holding no origin, chunk identity or function; rows that do not pack are :nonconforming at their input with no value
+```
+
+```test:derived-engine-columns-cost
+one recompute of a :columns source summing one field of a 50k-row input of four columns costs at least 10x fewer reductions than its :rows twin, host and stored, engine and function counted, under a pinned bound with the kernels and without
+```
+
 ```test:derived-engine-tables
 a table input answers what its rows answer, under last n and a request; a host's function reads a table input as its rows and a row input as given; one recompute of a last n source over a 50k-row table input stays under its reductions bound and below a transpose of its input
 ```
@@ -632,7 +645,7 @@ a changed input marks its readers and a pulse is due after the debounce; a pulse
 
 ### 8.3 Faults {#derived-engine-faults}
 
-A source's call is one bounded call (§6.4), with the engine's bounds. **When it fails, the source keeps its last good output, and the pulse does not propagate past it**: the sources that read it are not marked by it (visualize#643, settled question 4). Its state is `{:down, {:derived, id, kind}}`, `kind` one of §6.4's six. Its readers draw its last output as `stale`, worded with the kind ([macaw_compose 05](https://github.com/dcoai/macaw/blob/main/spec/05-components.md#components-states)). The fault's **detail** (the checker's faults, the limit, the exception's module, the index and field of a nonconforming answer) never holds a value of the rows nor of a context. The next pulse that marks the source runs it again; a good answer clears the fault.
+A source's call is one bounded call (§6.4), with the engine's bounds. **When it fails, the source keeps its last good output, and the pulse does not propagate past it**: the sources that read it are not marked by it (visualize#643, settled question 4). Its state is `{:down, {:derived, id, kind}}`, `kind` one of §6.4's six. Its readers draw its last output as `stale`, worded with the kind ([macaw_compose 05](https://github.com/dcoai/macaw/blob/main/spec/05-components.md#components-states)). The fault's **detail** (the checker's faults, the limit, the exception's module, the index and field of a nonconforming answer, the key and faults of an input that does not pack) never holds a value of the rows nor of a context. The next pulse that marks the source runs it again; a good answer clears the fault.
 
 ```test:derived-engine-fault-kept
 a failing source keeps its last good output, is down with its kind, and does not mark its readers; its detail holds no value; the next good answer clears it

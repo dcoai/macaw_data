@@ -678,6 +678,29 @@ defmodule Macaw.Data.Table do
       not Chunk.delta?(chunk) and is_binary(Chunk.digest(chunk)) and
         Chunk.id(chunk) == Chunk.digest(chunk)
 
+  @doc false
+  # The table's data alone (spec/02 §6.2, macaw_data#107): the same names, types, rows and
+  # sort, each chunk's run of rows its columns' storage as read, under no origin and no
+  # chunk identity, every cold chunk fetched, so the table holds no source, no id and no
+  # function, only its values' buffers. What a stored function is handed.
+  @spec detached(t()) :: t()
+  def detached(%__MODULE__{} = table) do
+    table = warm(table)
+    header = header(table)
+
+    chunks =
+      for {chunk, first, count} <- table.chunks,
+          do: {Chunk.detached(chunk, header, first, count), 0, count}
+
+    %__MODULE__{
+      names: table.names,
+      types: table.types,
+      chunks: chunks,
+      size: table.size,
+      sorted: table.sorted
+    }
+  end
+
   # -- identity ---------------------------------------------------------------------------
 
   @doc """

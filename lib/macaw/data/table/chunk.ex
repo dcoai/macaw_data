@@ -476,6 +476,25 @@ defmodule Macaw.Data.Table.Chunk do
   defp as_read(%__MODULE__{read: %{columns: columns}}), do: columns
   defp as_read(%__MODULE__{} = chunk), do: chunk |> warm() |> as_read()
 
+  # A run of the chunk's rows as a chunk of its own: each column's storage as read, sliced,
+  # under `header`, with no id, digest, derivation, delta or fetch (`Table.detached/1`).
+  @doc false
+  @spec detached(t(), [{term(), atom()}], non_neg_integer(), non_neg_integer()) :: t()
+  def detached(%__MODULE__{} = chunk, header, first, count) do
+    columns = Map.new(header, fn {name, _type} -> {name, storage(chunk, name, first, count)} end)
+
+    %__MODULE__{
+      size: count,
+      columns: columns,
+      id: nil,
+      digest: nil,
+      derivation: nil,
+      base_rows: count,
+      base_digest: nil,
+      header: header
+    }
+  end
+
   # The storage of column `name` as read, whole: its buffers for a kernel to read in place,
   # a view's rows counted from the view's first (spec/04 §1.7). A cold chunk is fetched.
   @doc false

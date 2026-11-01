@@ -1,7 +1,7 @@
 defmodule Macaw.Data.Derived do
   @moduledoc """
   A derived source: a source computed from other sources by a function, rows in and rows
-  out (spec/02). Ported from visualize's `Visualize.VirtualSource` (visualize#643, D-194).
+  out by default, or read as columns under `input: :columns` (spec/02 §2.2). Ported from visualize's `Visualize.VirtualSource` (visualize#643, D-194).
 
   It is **data**: `id`, its inputs (`from`), its output's `schema`, and its function as
   source text (`elixir`, checked by `Macaw.Data.Derived.Sandbox`) or a host function's
@@ -36,12 +36,12 @@ defmodule Macaw.Data.Derived do
   alias Macaw.Data.Source.{Description, Finish, Order, Request}
   alias Macaw.Layers.Names
 
-  @keys [:id, :from, :schema, :elixir, :function, :per]
+  @keys [:id, :from, :schema, :elixir, :function, :per, :input]
   @request_keys [:window, :box, :region, :latest]
   @not_names [nil, true, false]
 
   @enforce_keys [:id, :from, :schema]
-  defstruct [:id, :from, :schema, elixir: nil, function: nil, per: nil]
+  defstruct [:id, :from, :schema, elixir: nil, function: nil, per: nil, input: :rows]
 
   @typedoc "What an input names (spec/02 §2.1): a short id, a source, or a path."
   @type name :: String.t() | {:source, String.t()} | [String.t(), ...]
@@ -63,7 +63,8 @@ defmodule Macaw.Data.Derived do
           schema: Schema.t(),
           elixir: String.t() | nil,
           function: String.t() | nil,
-          per: nil | :identity | {:identity, name()}
+          per: nil | :identity | {:identity, name()},
+          input: :rows | :columns
         }
 
   @typedoc "A fault: the path from the source to the value, and why (spec/02 §1.1)."
@@ -108,7 +109,8 @@ defmodule Macaw.Data.Derived do
         from(Map.get(source, :from)) ++
         schema(source) ++
         function(source) ++
-        per(Map.get(source, :per), Map.get(source, :from))
+        per(Map.get(source, :per), Map.get(source, :from)) ++
+        input_mode(Map.get(source, :input) || :rows)
 
     case Enum.sort_by(errors, &elem(&1, 0)) do
       [] ->
@@ -119,7 +121,8 @@ defmodule Macaw.Data.Derived do
            schema: source.schema,
            elixir: Map.get(source, :elixir),
            function: Map.get(source, :function),
-           per: Map.get(source, :per)
+           per: Map.get(source, :per),
+           input: Map.get(source, :input) || :rows
          }}
 
       errors ->
@@ -320,6 +323,10 @@ defmodule Macaw.Data.Derived do
 
   defp per({:identity, _name}, _from), do: []
   defp per(_other, _from), do: [{[:per], {:enum, [:identity]}}]
+
+  # How the function reads its inputs (spec/02 §2.2): as rows, the default, or as tables.
+  defp input_mode(mode) when mode in [:rows, :columns], do: []
+  defp input_mode(_other), do: [{[:input], {:enum, [:rows, :columns]}}]
 
   # -- in context (spec/02 §1.1) -----------------------------------------------------------
 
@@ -564,7 +571,8 @@ defmodule Macaw.Data.Derived do
   The first argument a function is called with (spec/02 §2.2): the inputs as one map from
   key to rows. A stored function reads a key, a row's field and a row's category value as
   it reads its own literals, a word's atom, else the string; a host's function reads each
-  key as its string and each row as its source gave it.
+  key as its string and each row as its source gave it. Under `input: :columns` each key
+  holds the input's table, as the engine hands it (spec/02 §8.2).
   """
   @spec argument(t(), [input()]) :: map()
   def argument(%__MODULE__{} = source, inputs) when is_list(inputs),
@@ -700,6 +708,44 @@ defmodule Macaw.Data.Derived do
     join_answers(answers, Schema.identity(source.schema))
   end
 
+  # A table's entities (`input: :columns`): each row's identity read from the identity
+  # columns alone, as `Schema.identity/2` reads it from a row, and each entity's rows
+  # gathered from the table's chunks as a table of their own (`Last.rows_at/2`).
+  defp entities(%Table{} = table, schema) do
+    fields = Schema.identity(schema)
+    names = Table.names(table)
+
+    values =
+      Enum.map(fields, fn field ->
+        case Enum.find(names, &Names.same?(&1, field)) do
+          nil -> List.duplicate(nil, Table.size(table))
+          name -> Table.column(table, name)
+        end
+      end)
+
+    ids =
+      case {fields, values} do
+        {[_one], [column]} -> column
+        _several -> Enum.zip_with(values, &composite_identity(fields, &1))
+      end
+
+    {order, groups} =
+      ids
+      |> Enum.with_index()
+      |> Enum.reduce({[], %{}}, fn
+        {nil, _i}, acc ->
+          acc
+
+        {id, i}, {order, groups} ->
+          if Map.has_key?(groups, id),
+            do: {order, Map.update!(groups, id, &[i | &1])},
+            else: {[id | order], Map.put(groups, id, [i])}
+      end)
+
+    for id <- Enum.reverse(order),
+        do: {id, Last.rows_at(table, Enum.reverse(groups[id]))}
+  end
+
   defp entities(rows, schema) do
     {order, groups} =
       Enum.reduce(rows, {[], %{}}, fn row, {order, groups} ->
@@ -715,6 +761,14 @@ defmodule Macaw.Data.Derived do
       end)
 
     for identity <- Enum.reverse(order), do: {identity, Enum.reverse(groups[identity])}
+  end
+
+  # `Schema.identity/2`'s composite identity: a map of the fields to their values, `nil`
+  # when one is missing.
+  defp composite_identity(fields, values) do
+    if nil in values,
+      do: nil,
+      else: fields |> Enum.zip(values) |> Map.new()
   end
 
   defp join_answers(answers, fields) do
@@ -932,6 +986,7 @@ defmodule Macaw.Data.Derived do
     do: "names #{inspect(name)}, which no registered host module defines"
 
   defp words({:enum, [:identity]}), do: "must be nil, :identity or {:identity, input}"
+  defp words({:enum, [:rows, :columns]}), do: "must be :rows or :columns"
 
   defp words({:per, :ambiguous}),
     do: "is :identity over several inputs: name the input, {:identity, input}"

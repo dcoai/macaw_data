@@ -37,6 +37,16 @@ defmodule Macaw.Data.Derived.Last do
     end
   end
 
+  @doc false
+  # The rows at `indexes`, ascending, as a table of the input's columns: runs of its
+  # chunks as views, any other row gathered by its slots (`Chunk.gather/5`). Nothing is
+  # decoded. A `per` source's entity reads its rows so (spec/02 §1.3).
+  @spec rows_at(Table.t(), [non_neg_integer()]) :: Table.t()
+  def rows_at(table, indexes) do
+    table = if pending?(table), do: Table.warm(table), else: table
+    take(table, Table.chunks(table), indexes, Table.sorted(table))
+  end
+
   # A table some chunk of which is cold with its count pending (spec/01 §1.1.4).
   defp pending?(table), do: Enum.any?(Table.chunks(table), fn {_c, _f, count} -> count == nil end)
 
