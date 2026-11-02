@@ -115,7 +115,8 @@ defmodule Macaw.Data.FinishColumnsCostTest do
 
   # A region reads its ranged columns, a scan of each packed buffer, intersected: 718,109
   # when this was written, 3,697,471 by rows. An order with a budget sorts the row indexes
-  # by the order's columns and gathers its head alone: 1,569,977, 7,851,916 by rows. A
+  # by the order's columns and gathers its head alone: 1,569,977, 7,851,916 by rows, and
+  # 816,397 once one field's sort read its column's keys (macaw_data#140). A
   # budget reduces each host's series from its columns and gathers the kept rows:
   # 5,685,119, 10,263,925 by rows; most of it is the reducer's own work, which the rows
   # paid too.
@@ -134,7 +135,7 @@ defmodule Macaw.Data.FinishColumnsCostTest do
 
     assert Table.size(head.rows) == 1_000
     assert Enum.all?(Table.column(head.rows, :cpu), &(&1 >= 98.0))
-    assert top < 2_000_000
+    assert top < 1_000_000
 
     {budget, {:ok, reduced}} = Work.reductions(fn -> finish(table, budget: 1_000) end)
     assert Table.size(reduced.rows) <= 1_000
@@ -159,16 +160,22 @@ defmodule Macaw.Data.FinishColumnsCostTest do
 
   # Rows in another order across chunks are gathered by their slots, each fixed-width column
   # joined across the chunks (macaw_data#128): a random permutation of 50k rows of an int64,
-  # a float64 and a UTC column cost 1,228,251 reductions on the Elixir path when this was
-  # written (448,160 with the kernels), against 4,088,217 when every column was decoded and
-  # packed again. A full order by cpu: 2,856,710 (2,076,736 with the kernels; its sort
-  # 1,471,715), against 5,316,721, its category column's codes joined too (macaw_data#138).
-  # A reorder of a text and a category column: 1,156,091 (896,060), against 2,064,177.
-  # Counted on the Elixir path, which every job runs alike.
+  # a float64 and a UTC column cost 1,228,251 reductions on the Elixir path (448,160 with the
+  # kernels), against 4,088,217 when every column was decoded and packed again, and 588,159
+  # once a gather copied a slot a step rather than listing its runs first (macaw_data#140).
+  # A reorder of a text and a category column: 940,059 (896,060), against 2,064,177.
+  #
+  # A full order of the table costs less than one transpose (macaw_data#128, #140): by cpu,
+  # 1,500,713 (1,356,709 with the kernels), against 5,316,721 when it repacked its rows and
+  # 2,856,710 when its sort read each index through closures (`Order.sort_with/4`, 1,471,715
+  # of it; the column's keys sorted, 754,291). By time, descending: 1,228,659 (1,084,694),
+  # against 3,908,922, the time buffer's instants sorted as they lie. Counted on the Elixir
+  # path, which every job runs alike.
   @tag verifies: "finish-columns-cost"
   test "rows in another order across chunks are gathered by their slots, a full order too" do
     n = 50_000
     table = readings()
+    {transpose, _rows} = Work.reductions(fn -> Table.rows(table) end)
 
     fixed =
       Table.new!([
@@ -184,7 +191,7 @@ defmodule Macaw.Data.FinishColumnsCostTest do
       Work.reductions(fn -> Native.elixir(fn -> Subset.at(fixed, shuffled) end) end)
 
     assert Table.column(taken, :a) == Enum.map(shuffled, &(&1 + 1))
-    assert gather < 1_400_000
+    assert gather < 700_000
 
     {order, {:ok, ordered}} =
       Work.reductions(fn ->
@@ -192,7 +199,17 @@ defmodule Macaw.Data.FinishColumnsCostTest do
       end)
 
     assert Table.size(ordered.rows) == n
-    assert order < 3_000_000
+    assert order < 1_650_000
+    assert order < transpose
+
+    {by_time, {:ok, latest_first}} =
+      Work.reductions(fn ->
+        Native.elixir(fn -> finish(table, order: [{:t, :desc}]) end)
+      end)
+
+    assert hd(Table.column(latest_first.rows, :t)) == List.last(Table.column(table, :t))
+    assert by_time < 1_400_000
+    assert by_time < transpose
 
     named =
       Table.new!([
@@ -204,6 +221,6 @@ defmodule Macaw.Data.FinishColumnsCostTest do
       Work.reductions(fn -> Native.elixir(fn -> Subset.at(named, shuffled) end) end)
 
     assert Table.column(taken, :s) == Enum.map(shuffled, &"row-#{&1 + 1}")
-    assert strings < 1_500_000
+    assert strings < 1_100_000
   end
 end

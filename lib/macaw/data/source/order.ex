@@ -136,7 +136,7 @@ defmodule Macaw.Data.Source.Order do
   The items sorted by the order under the schema's types, stably, as `sort/3` sorts rows:
   `read` takes an item and a field of the order, as the order names it, to the item's
   value of that field. `{:ok, items}`, or `sort/3`'s faults. `sort/3` is this over rows,
-  each read by name; finishing a table (spec/01 §2.4) sorts its row indexes so, each
+  each read by name; finishing a table (spec/01 §2.4) sorts its row indexes so by several
   field read from its column, and makes no row.
 
       iex> alias Macaw.Data.{Schema, Source.Order}
@@ -193,23 +193,11 @@ defmodule Macaw.Data.Source.Order do
         when item: term()
   def sort_by(items, []), do: items
 
-  # One key: the keys are terms that compare as the type orders, so a stable sort of them
-  # in its direction, the items without a reading after, in their order. `:lists.keysort/2`
-  # is stable ascending; descending, it sorts the items reversed and reverses the result,
-  # so items of one key keep their order either way.
+  # One key: each item keyed, sorted by `keysorted/3`, which finishing's one-field order
+  # sorts a column's keys by too (macaw_data#140), so the two order alike.
   def sort_by(items, [{direction, key, read}]) do
-    {present, absent} =
-      items
-      |> Enum.map(fn item -> {key.(read.(item)), item} end)
-      |> Enum.split_with(&(elem(&1, 0) != nil))
-
-    sorted =
-      case direction do
-        :asc -> :lists.keysort(1, present)
-        :desc -> present |> :lists.reverse() |> then(&:lists.keysort(1, &1)) |> :lists.reverse()
-      end
-
-    Enum.map(sorted ++ absent, &elem(&1, 1))
+    {present, absent} = split(items, key, read, [], [])
+    keysorted(present, absent, direction)
   end
 
   def sort_by(items, keys) do
@@ -218,6 +206,36 @@ defmodule Macaw.Data.Source.Order do
     |> Enum.sort_by(&elem(&1, 0), &before?/2)
     |> Enum.map(&elem(&1, 1))
   end
+
+  # The items keyed, `{key, item}`, those with a reading in reverse order, and those
+  # without in their order.
+  defp split([item | items], key, read, present, absent) do
+    case key.(read.(item)) do
+      nil -> split(items, key, read, present, [item | absent])
+      k -> split(items, key, read, [{k, item} | present], absent)
+    end
+  end
+
+  defp split([], _key, _read, present, absent), do: {present, :lists.reverse(absent)}
+
+  @doc false
+  # One key's sort: `present`, `{key, item}` pairs **in reverse order** of the items, keys
+  # that compare as the type orders and none `nil`, sorted stably in `direction`, then
+  # `absent`, the items without a reading, in their order: the items alone.
+  # `:lists.keysort/2` is stable ascending, so sorting the reversed pairs and reversing the
+  # result as the items are taken out of it sorts them descending with items of one key
+  # in their order; ascending, the pairs are put back in order first.
+  @spec keysorted([{term(), item}], [item], direction()) :: [item] when item: term()
+  def keysorted(present, absent, :desc), do: present |> keysort() |> unkey(absent)
+
+  def keysorted(present, absent, :asc),
+    do: present |> :lists.reverse() |> keysort() |> :lists.reverse() |> unkey(absent)
+
+  defp keysort(pairs), do: :lists.keysort(1, pairs)
+
+  # The items of the pairs in reverse order, before `acc`.
+  defp unkey([{_key, item} | pairs], acc), do: unkey(pairs, [item | acc])
+  defp unkey([], acc), do: acc
 
   # Each key's reading of an item: `{0, key}` with a value, `{1, nil}` without, so every
   # value comes first in either direction; a descending key negates its comparison.
@@ -250,9 +268,11 @@ defmodule Macaw.Data.Source.Order do
   defp compare_keys(a, b) when a > b, do: :gt
   defp compare_keys(_a, _b), do: :eq
 
+  @doc false
   # A schema field's sort key: its type's, a category's under its declared `order`. The
   # field is one `faults/2` passed: described, of a type with an order.
-  defp schema_key(schema, field) do
+  @spec schema_key(Schema.t(), Schema.name()) :: (term() -> term())
+  def schema_key(schema, field) do
     {:ok, type} = Schema.fetch(schema, field, :type)
 
     states =

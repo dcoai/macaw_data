@@ -342,4 +342,62 @@ defmodule Macaw.Data.FinishColumnsTest do
     assert Table.size(finished(table, schema, window: [0, 9]).rows) == 0
     assert Table.size(finished(table, schema, latest: true).rows) == 0
   end
+
+  # A value of each sortable type, `nil` often, few distinct so ties are common: every
+  # kind of time in one generator, so a column mixes them (and keeps the list form).
+  defp sort_value(:number),
+    do: one_of([constant(nil), integer(-3..3), member_of([0.5, 2.0, -1.5, 1.0])])
+
+  defp sort_value(:text), do: one_of([constant(nil), member_of(["a", "b", "B", "ab", ""])])
+
+  defp sort_value(:category),
+    do: one_of([constant(nil), member_of(["ok", "warn", "bad", "new"])])
+
+  defp sort_value(:time) do
+    one_of([
+      constant(nil)
+      | for(kind <- [:utc, :micro, :zoned, :naive, :date], do: map(integer(-3..3), &at(kind, &1)))
+    ])
+  end
+
+  # Values of one kind of time only, so the column packs to its buffer; of mixed kinds,
+  # so it keeps the list form; any other type's values.
+  defp sort_values(:time, n, true) do
+    bind(member_of([:utc, :micro, :zoned, :naive, :date]), fn kind ->
+      list_of(one_of([constant(nil), map(integer(-3..3), &at(kind, &1))]), length: n)
+    end)
+  end
+
+  defp sort_values(type, n, _one_kind?), do: list_of(sort_value(type), length: n)
+
+  @tag verifies: "finish-columns"
+  property "a one-field order sorts its column's keys as Order.sort/3 sorts the rows" do
+    alias Macaw.Data.Source.{Finish.Columns, Order}
+
+    check all(
+            type <- member_of([:number, :text, :category, :time]),
+            declared? <- boolean(),
+            n <- integer(0..60),
+            one_kind? <- boolean(),
+            values <- sort_values(type, n, one_kind?),
+            cuts <- list_of(integer(0..20), max_length: 4),
+            direction <- member_of([:asc, :desc]),
+            field <- member_of(["f", :f, "missing"])
+          ) do
+      described =
+        if type == :category and declared?,
+          do: %{type: :category, order: ["bad", "warn", "ok"]},
+          else: %{type: type}
+
+      schema =
+        Schema.new!(%{"f" => described, "missing" => %{type: :number}, "i" => %{type: :number}})
+
+      rows = for {v, i} <- Enum.with_index(values), do: %{f: v, i: i}
+      table = table_of([{:f, type}, {:i, :number}], rows, cuts, nil)
+      order = [{field, direction}]
+
+      {:ok, sorted} = Order.sort(Table.rows(table), order, schema)
+      assert Columns.ordered(table, order, schema) == {:ok, Enum.map(sorted, &Table.get(&1, :i))}
+    end
+  end
 end

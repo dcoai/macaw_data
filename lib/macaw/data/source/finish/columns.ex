@@ -190,10 +190,25 @@ defmodule Macaw.Data.Source.Finish.Columns do
   # -- :order ------------------------------------------------------------------------------
 
   @doc false
-  # The row indexes in the order (`Order.sort_with/4`), each field read from its column as
-  # `Order.sort/3` reads it of a row: `{:ok, indexes}`, or the order's faults.
+  # The row indexes in the order, each field read from its column as `Order.sort/3` reads
+  # it of a row: `{:ok, indexes}`, or the order's faults. One field sorts its column's keys
+  # (macaw_data#140), a time buffer's instants read as they lie and any other column's
+  # values keyed by the field's `Order.schema_key/2`, each paired with its index and
+  # sorted by `Order.keysorted/3`, the sort `Order.sort_by/2` gives one key. Several
+  # fields sort the indexes by `Order.sort_with/4`, each read from its column.
   @spec ordered(Table.t(), Order.t(), Schema.t()) ::
           {:ok, [non_neg_integer()]} | {:error, [{list(), term()}, ...]}
+  def ordered(table, [{field, direction}] = order, schema) do
+    case Order.faults(order, schema) do
+      [] ->
+        {present, absent} = keyed(table, field, schema)
+        {:ok, Order.keysorted(present, absent, direction)}
+
+      faults ->
+        {:error, faults}
+    end
+  end
+
   def ordered(table, order, schema) do
     columns =
       Map.new(order, fn {field, _direction} -> {field, List.to_tuple(values(table, field))} end)
@@ -202,6 +217,51 @@ defmodule Macaw.Data.Source.Finish.Columns do
 
     Order.sort_with(indexes, order, schema, fn i, field -> elem(Map.fetch!(columns, field), i) end)
   end
+
+  # A field's keys paired with their row indexes, `{key, i}`, in reverse order, and the
+  # indexes of the rows with no key, in order. A `:time` field's key is its instant
+  # (`Order.key/2`), which a time buffer holds as it lies (`Chunk.instants/4`); every row
+  # has none when the table has no column the field names.
+  defp keyed(table, field, schema) do
+    case column(table, field) do
+      nil ->
+        {[], Enum.to_list(0..(Table.size(table) - 1)//1)}
+
+      name ->
+        key =
+          if Schema.fetch(schema, field, :type) == {:ok, :time},
+            do: nil,
+            else: Order.schema_key(schema, field)
+
+        {present, absent, _i} =
+          Enum.reduce(Table.chunks(table), {[], [], 0}, fn {chunk, first, count}, acc ->
+            chunk |> view_keys(name, first, count, key) |> pair(key, acc)
+          end)
+
+        {present, :lists.reverse(absent)}
+    end
+  end
+
+  defp view_keys(chunk, name, first, count, nil), do: Chunk.instants(chunk, name, first, count)
+  defp view_keys(chunk, name, first, count, _key), do: Chunk.values(chunk, name, first, count)
+
+  # Each value's key paired with its index, onto the reversed pairs and the reversed
+  # indexes without one; a `nil` key reads the values as keys already (instants).
+  defp pair([value | values], nil, {present, absent, i}) do
+    case value do
+      nil -> pair(values, nil, {present, [i | absent], i + 1})
+      k -> pair(values, nil, {[{k, i} | present], absent, i + 1})
+    end
+  end
+
+  defp pair([value | values], key, {present, absent, i}) do
+    case key.(value) do
+      nil -> pair(values, key, {present, [i | absent], i + 1})
+      k -> pair(values, key, {[{k, i} | present], absent, i + 1})
+    end
+  end
+
+  defp pair([], _key, acc), do: acc
 
   # -- reading a column -------------------------------------------------------------------
 

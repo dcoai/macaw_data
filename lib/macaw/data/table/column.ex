@@ -1052,12 +1052,28 @@ defmodule Macaw.Data.Table.Column do
 
   defp take(data, width, indexes), do: take_elixir(data, width, indexes)
 
-  defp take_elixir(data, width, indexes) do
-    indexes
-    |> runs()
-    |> Enum.map(fn {first, n} -> binary_part(data, first * width, n * width) end)
-    |> IO.iodata_to_binary()
-  end
+  # One pass over the indexes, each run of consecutive slots appended to the output as one
+  # part when the run ends, so a reorder costs one step a slot and a run one part
+  # (macaw_data#140); appending to a binary the process owns grows it in place.
+  defp take_elixir(_data, _width, []), do: <<>>
+  defp take_elixir(data, width, [i | rest]), do: take_runs(data, width, rest, i, 1, <<>>)
+
+  defp take_runs(data, width, [j | rest], first, n, acc) when j == first + n,
+    do: take_runs(data, width, rest, first, n + 1, acc)
+
+  defp take_runs(data, width, [j | rest], first, n, acc),
+    do:
+      take_runs(
+        data,
+        width,
+        rest,
+        j,
+        1,
+        <<acc::binary, binary_part(data, first * width, n * width)::binary>>
+      )
+
+  defp take_runs(data, width, [], first, n, acc),
+    do: <<acc::binary, binary_part(data, first * width, n * width)::binary>>
 
   defp take_precision(p, _indexes) when is_integer(p), do: p
   defp take_precision(precisions, indexes), do: take(precisions, 1, indexes)
