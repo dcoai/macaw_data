@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Added:** errors are values (#114, #116, spec/00 §5). A public function answers bad input with `{:error, reason}`; a `name!` twin raises its reason, a macro's misuse is a `CompileError`, and a raise remains only for a named internal invariant. The CI job `raises` (`ci/raises.exs`) fails on a `raise`, `reraise` or `throw` in `lib/` outside a bang twin and `ci/raises_allowlist.exs`. Its 46 `:convert` entries, the 59 sites still to convert, go as this release's work items land.
+
 - **Added:** a `:columns` source may answer a table or a column map (#107, #113, spec/02 §1.2, §8.2). `Macaw.Data.Derived.conform/2` holds the answer to the schema column by column and answers the output table, `{:ok, table}`; `Macaw.Data.Derived.Engine` packs it without making a row.
   - A whole column's fault has index `nil`. The new reasons are `:duplicate`, `:not_a_column` and `{:length, n}`. A table column of another type is `{:type, type}`.
   - Any other fault is at the lowest index, with an identity gap before a value fault. A single fault is the one the answer's rows would give.
