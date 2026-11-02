@@ -1071,7 +1071,7 @@ These bind the component that draws, not this library's code; each emitting libr
 
 Every source runs **one kit**, `Macaw.Data.Source.Conformance`: the contract of §2–§4 as checks, so a provider proves conformance by running it rather than by reading this file. It is visualize's `Visualize.Feed.Conformance` (visualize spec 08 §12), with the checks a source's superset of a feed needs.
 
-**Two layers.** `check(check, source, opts)` answers one check's **findings**, `{check, reason}` terms, `[]` for a source that passes; `check(source, opts)` runs them all, in the order of `checks/0`; `format/1` words a finding as a line a person reads. `use Macaw.Data.Source.Conformance, source: …` inside a module that uses `ExUnit.Case` writes one test per check, in a `describe` block, failing with the findings. The kit itself references no ExUnit function (`describe`, `test` and `flunk` appear only in the code `use` writes), so it loads in production. `use` refuses a missing `source:` and an unknown option at compile time; `check/3` refuses an unknown check, an unknown option and a request key outside the seven below.
+**Two layers.** `check(check, source, opts)` answers one check's **findings**, `{check, reason}` terms, `[]` for a source that passes; `check(source, opts)` runs them all, in the order of `checks/0`; `format/1` words a finding as a line a person reads. `use Macaw.Data.Source.Conformance, source: …` inside a module that uses `ExUnit.Case` writes one test per check, in a `describe` block, failing with the findings. The kit itself references no ExUnit function (`describe`, `test` and `flunk` appear only in the code `use` writes), so it loads in production. `use` refuses a missing `source:` and an unknown option at compile time; `check/3` answers its own options' faults as findings, never a raise (macaw_data#114, [00 §5](00-overview.md#data-errors)), so the test `use` writes fails with their words: `{check, {:unknown_check, checks}}` for an unknown check, `{check, {:option, key}}` for an option the kit does not take, `{check, {:request, ask}}` for a request with a key outside the seven below, and `{check, {:viewers, :two}}` for viewers that are not two.
 
 **The eight checks:**
 
@@ -1113,7 +1113,7 @@ a source that orders its rows passes; one serving them out of the order, one not
 ```
 
 ```test:conformance-use
-use writes one test per check into each describe block, refuses a missing source and an unknown option at compile time, and an unknown check is refused
+use writes one test per check into each describe block, refuses a missing source and an unknown option at compile time, and an unknown check, an unknown option, a request key outside the seven and viewers that are not two are each check/3's finding
 ```
 
 ```test:conformance-load

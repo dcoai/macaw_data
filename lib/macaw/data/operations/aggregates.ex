@@ -316,7 +316,13 @@ defmodule Macaw.Data.Operations.Aggregates do
     @impl true
     def step(sum, value, _options), do: Exact.add(sum, Aggregates.number!(name(), value))
     @impl true
-    def finish(sum, _options), do: Exact.value(sum)
+    def finish(sum, _options) do
+      case Exact.value(sum) do
+        {:ok, value} -> value
+        {:error, :overflow} = beyond -> beyond
+      end
+    end
+
     @impl true
     def merge(a, b, _options), do: Exact.merge(a, b)
     # Exact for integers alone: once a float is among the readings, the sum is a float
@@ -353,7 +359,14 @@ defmodule Macaw.Data.Operations.Aggregates do
 
     @impl true
     def finish({_sum, 0}, _options), do: nil
-    def finish({sum, n}, _options), do: Exact.value(sum) / n
+
+    def finish({sum, n}, _options) do
+      case Exact.value(sum) do
+        {:ok, value} -> value / n
+        {:error, :overflow} = beyond -> beyond
+      end
+    end
+
     @impl true
     def merge({a, m}, {b, n}, _options), do: {Exact.merge(a, b), m + n}
   end

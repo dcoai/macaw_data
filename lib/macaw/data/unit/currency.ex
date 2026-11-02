@@ -195,14 +195,12 @@ defmodule Macaw.Data.Unit.Currency do
   def known?(code), do: is_map_key(@minor, code)
 
   @doc false
-  # A code's minor units, `nil` for none; raises for a code not in the table.
+  # A code's minor units, `nil` for none, as `{:ok, units}`; a code not in the table is
+  # `{:error, {:unknown_currency, code}}`.
   def minor_units(code) do
     case Map.fetch(@minor, code) do
-      {:ok, minor} ->
-        minor
-
-      :error ->
-        raise ArgumentError, "not an ISO 4217 code this vocabulary knows: #{inspect(code)}"
+      {:ok, minor} -> {:ok, minor}
+      :error -> {:error, {:unknown_currency, code}}
     end
   end
 

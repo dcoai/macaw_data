@@ -96,7 +96,16 @@ defmodule Macaw.Data.Derived.Sandbox.Runtime do
   # A reason's words, by their spellings: the atoms a reason holds, read back from the
   # strings a stored function writes for them. A fixed table; no atom is made.
   @words Map.new(
-           [:unknown_column, :wrong_type, :type, :name, :table, :integer, :non_neg_integer] ++
+           [
+             :unknown_column,
+             :wrong_type,
+             :overflow,
+             :type,
+             :name,
+             :table,
+             :integer,
+             :non_neg_integer
+           ] ++
              Table.types(),
            &{Atom.to_string(&1), &1}
          )

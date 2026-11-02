@@ -10,7 +10,7 @@ defmodule Macaw.Data.Unit.CurrencyTest do
     test "list one, 178 codes, each with its minor units" do
       assert length(Currency.table()) == 178
 
-      assert Enum.map(~w(USD EUR GBP JPY BHD KWD CLF ISK XAU XXX), &Unit.minor_units/1) ==
+      assert Enum.map(~w(USD EUR GBP JPY BHD KWD CLF ISK XAU XXX), &Unit.minor_units!/1) ==
                [2, 2, 2, 0, 3, 3, 4, 0, nil, nil]
 
       for {code, minor, name} <- Currency.table() do
@@ -19,31 +19,33 @@ defmodule Macaw.Data.Unit.CurrencyTest do
         assert name != ""
       end
 
-      assert_raise ArgumentError, ~r/"ZZZ"/, fn -> Unit.minor_units("ZZZ") end
+      assert Unit.minor_units("ZZZ") == {:error, {:unknown_currency, "ZZZ"}}
+      assert Unit.minor_units("JPY") == {:ok, 0}
+      assert_raise ArgumentError, ~r/"ZZZ"/, fn -> Unit.minor_units!("ZZZ") end
     end
   end
 
   describe "{iso4217:XXX} is a dimension per code" do
     @tag verifies: "units-currency-code"
     test "each code its own dimension, composed like any unit" do
-      assert Unit.dimension("{iso4217:USD}") == %{{:currency, "USD"} => 1}
-      assert Unit.dimension("{iso4217:USD}/h") == %{{:currency, "USD"} => 1, time: -1}
+      assert Unit.dimension!("{iso4217:USD}") == %{{:currency, "USD"} => 1}
+      assert Unit.dimension!("{iso4217:USD}/h") == %{{:currency, "USD"} => 1, time: -1}
 
-      assert Unit.dimension("{iso4217:EUR}/kW/h") ==
+      assert Unit.dimension!("{iso4217:EUR}/kW/h") ==
                %{{:currency, "EUR"} => 1, mass: -1, length: -2, time: 2}
 
-      assert Unit.dimension("{iso4217:EUR}/{iso4217:USD}") ==
+      assert Unit.dimension!("{iso4217:EUR}/{iso4217:USD}") ==
                %{{:currency, "EUR"} => 1, {:currency, "USD"} => -1}
 
-      refute Unit.dimension("{iso4217:USD}") == Unit.dimension("{iso4217:EUR}")
-      assert Unit.factor("{iso4217:USD}/kW/h") == {1, 3_600_000_000}
+      refute Unit.dimension!("{iso4217:USD}") == Unit.dimension!("{iso4217:EUR}")
+      assert Unit.factor!("{iso4217:USD}/kW/h") == {1, 3_600_000_000}
     end
 
     @tag verifies: "units-currency-code"
     test "a code not in the table is refused, a plain annotation is still the unity" do
       assert Unit.parse("{iso4217:ZZZ}") == {:error, {:unknown_currency, "ZZZ"}}
       assert Unit.parse("{iso4217:usd}") == {:error, {:unknown_currency, "usd"}}
-      assert Unit.dimension("{USD}") == %{}
+      assert Unit.dimension!("{USD}") == %{}
       assert Unit.format_error({:unknown_currency, "ZZZ"}) =~ "ISO 4217"
     end
 
@@ -74,14 +76,14 @@ defmodule Macaw.Data.Unit.CurrencyTest do
       assert Unit.currency("{iso4217:GBP}/h") == nil
       assert Unit.currency("kg") == nil
       assert Unit.currency("sec") == nil
-      assert Quantity.of_unit("{iso4217:GBP}") == :currency
-      assert Quantity.of_unit("{iso4217:GBP}/h") == nil
+      assert Quantity.of_unit!("{iso4217:GBP}") == :currency
+      assert Quantity.of_unit!("{iso4217:GBP}/h") == nil
 
-      assert Unit.symbol("{iso4217:USD}") == "USD"
-      assert Unit.symbol("{iso4217:USD}/h") == "USD/h"
-      assert Unit.symbol("{iso4217:EUR}/kW/h") == "EUR/(kW·h)"
-      assert Unit.symbol("{iso4217:EUR}/kW.h") == "EUR·h/kW"
-      assert Quantity.label(%{unit: "{iso4217:USD}"}) == "USD"
+      assert Unit.symbol!("{iso4217:USD}") == "USD"
+      assert Unit.symbol!("{iso4217:USD}/h") == "USD/h"
+      assert Unit.symbol!("{iso4217:EUR}/kW/h") == "EUR/(kW·h)"
+      assert Unit.symbol!("{iso4217:EUR}/kW.h") == "EUR·h/kW"
+      assert Quantity.label!(%{unit: "{iso4217:USD}"}) == "USD"
     end
 
     @tag verifies: "units-alias-read"

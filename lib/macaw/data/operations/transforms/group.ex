@@ -419,11 +419,24 @@ defmodule Macaw.Data.Operations.Transforms.Aggregate do
     states = Enum.map(order, &Map.get_lazy(groups, &1, fn -> aggregate.init(options) end))
     columns = group_outputs(node, aggregate, Operations.columns(input))
 
+    finished = Enum.map(states, &aggregate.finish(&1, options))
+
     values =
       Enum.with_index(by_names, fn _name, i -> Enum.map(order, &Enum.at(&1, i)) end) ++
-        [Enum.map(states, &aggregate.finish(&1, options))]
+        [finished]
 
-    Step.output(input, key, Enum.zip_with(columns, values, fn {n, t}, v -> {n, t, v} end))
+    output(input, key, columns, values, finished)
+  end
+
+  # The step's table, or the fault of an aggregate value no column holds (spec/04 §3.1).
+  defp output(input, key, columns, values, finished) do
+    case Enum.find(finished, &match?({:error, _}, &1)) do
+      nil ->
+        Step.output(input, key, Enum.zip_with(columns, values, fn {n, t}, v -> {n, t, v} end))
+
+      {:error, reason} ->
+        {:error, {"field", reason}}
+    end
   end
 
   defp options(node, aggregate), do: Map.take(node, Enum.map(aggregate.options(), &elem(&1, 0)))
@@ -491,7 +504,7 @@ defmodule Macaw.Data.Operations.Transforms.Aggregate do
     keyed =
       Enum.with_index(by_names, fn _name, i -> Enum.map(order, &Enum.at(&1, i)) end) ++ [values]
 
-    Step.output(input, key, Enum.zip_with(columns, keyed, fn {n, t}, v -> {n, t, v} end))
+    output(input, key, columns, keyed, values)
   end
 
   defp by_list(nil), do: []

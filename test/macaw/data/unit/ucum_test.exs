@@ -56,61 +56,62 @@ defmodule Macaw.Data.Unit.UcumTest do
     @tag verifies: "units-atoms"
     test "each atom's factor and dimension is its UCUM definition, exactly" do
       for {atom, n, d, code} <- @definitions do
-        assert Unit.dimension(atom) == Unit.dimension(code), atom
-        assert Unit.factor(atom) == times(Unit.factor(code), {n, d}), atom
+        assert Unit.dimension!(atom) == Unit.dimension!(code), atom
+        assert Unit.factor!(atom) == times(Unit.factor!(code), {n, d}), atom
       end
     end
 
     @tag verifies: "units-atoms"
     test "the acre is 160 square rods of 16.5 US survey feet, the foot 1,200/3,937 m" do
       rod = times({33, 2}, {1200, 3937})
-      assert Unit.factor("[acr_us]") == times(times({160, 1}, rod), rod)
-      assert Unit.dimension("[acr_us]") == %{length: 2}
+      assert Unit.factor!("[acr_us]") == times(times({160, 1}, rod), rod)
+      assert Unit.dimension!("[acr_us]") == %{length: 2}
     end
 
     @tag verifies: "units-atoms"
     test "the degree is π/180 of the radian, and π cancels between two angles" do
-      assert Unit.factor("deg") == {1, 180, 1}
-      assert Unit.factor("rad") == {1, 1}
-      assert Unit.factor("deg/rad") == {1, 180, 1}
-      assert Unit.factor("deg/deg") == {1, 1}
-      assert Unit.factor("deg2") == {1, 32_400, 2}
-      assert Unit.convert(180, "deg", "rad") == :math.pi()
-      assert Unit.convert(:math.pi(), "rad", "deg") == 180.0
-      assert Unit.convert(90, "deg", "deg") == 90.0
+      assert Unit.factor!("deg") == {1, 180, 1}
+      assert Unit.factor!("rad") == {1, 1}
+      assert Unit.factor!("deg/rad") == {1, 180, 1}
+      assert Unit.factor!("deg/deg") == {1, 1}
+      assert Unit.factor!("deg2") == {1, 32_400, 2}
+      assert Unit.convert!(180, "deg", "rad") == :math.pi()
+      assert Unit.convert!(:math.pi(), "rad", "deg") == 180.0
+      assert Unit.convert!(90, "deg", "deg") == 90.0
     end
 
     @tag verifies: "units-dimension-factor"
     test "new dimensions follow UCUM's base units" do
-      assert Unit.dimension("lx") == %{luminous_intensity: 1, angle: 2, length: -2}
-      assert Unit.dimension("mA.h") == %{charge: 1}
-      assert Unit.dimension("V") == %{mass: 1, length: 2, time: -2, charge: -1}
-      assert Unit.dimension("mmol/l") == %{length: -3}
-      assert Unit.dimension("ug/m3") == %{mass: 1, length: -3}
-      assert Unit.dimension("min/km") == %{time: 1, length: -1}
-      assert Unit.dimension("[mi_i]/h") == %{length: 1, time: -1}
+      assert Unit.dimension!("lx") == %{luminous_intensity: 1, angle: 2, length: -2}
+      assert Unit.dimension!("mA.h") == %{charge: 1}
+      assert Unit.dimension!("V") == %{mass: 1, length: 2, time: -2, charge: -1}
+      assert Unit.dimension!("mmol/l") == %{length: -3}
+      assert Unit.dimension!("ug/m3") == %{mass: 1, length: -3}
+      assert Unit.dimension!("min/km") == %{time: 1, length: -1}
+      assert Unit.dimension!("[mi_i]/h") == %{length: 1, time: -1}
     end
 
     @tag verifies: "units-dimension-factor"
     test "a level has a dimension of its own per reference, and a decibel is a tenth of a bel" do
-      assert Unit.dimension("B") == %{level: 1}
-      assert Unit.dimension("dB") == %{level: 1}
-      assert Unit.dimension("dB[SPL]") == %{sound_pressure_level: 1}
-      refute Unit.dimension("dB[SPL]") == Unit.dimension("Pa")
-      refute Unit.dimension("dB") == Unit.dimension("1")
-      assert Unit.factor("dB") == {1, 10}
-      assert Unit.convert(30, "dB", "B") == 3.0
-      assert Unit.convert(3, "B[SPL]", "dB[SPL]") == 30.0
-      assert_raise ArgumentError, fn -> Unit.convert(30, "dB", "dB[SPL]") end
+      assert Unit.dimension!("B") == %{level: 1}
+      assert Unit.dimension!("dB") == %{level: 1}
+      assert Unit.dimension!("dB[SPL]") == %{sound_pressure_level: 1}
+      refute Unit.dimension!("dB[SPL]") == Unit.dimension!("Pa")
+      refute Unit.dimension!("dB") == Unit.dimension!("1")
+      assert Unit.factor!("dB") == {1, 10}
+      assert Unit.convert!(30, "dB", "B") == 3.0
+      assert Unit.convert!(3, "B[SPL]", "dB[SPL]") == 30.0
+      assert Unit.convert(30, "dB", "dB[SPL]") == {:error, {:logarithmic, "dB", "dB[SPL]"}}
     end
 
     @tag verifies: "units-dimension-factor"
     test "kind/1 tells a linear code from an affine and a logarithmic one" do
-      for code <- ~w(s kW.h [lb_av] deg mmol/l), do: assert(Unit.kind(code) == :linear, code)
-      for code <- ~w(Cel [degF] Cel/h), do: assert(Unit.kind(code) == :affine, code)
-      for code <- ~w(B dB dB[SPL] B[SPL]), do: assert(Unit.kind(code) == :logarithmic, code)
-      assert Unit.kind("K") == :linear
-      assert_raise ArgumentError, fn -> Unit.kind("sec") end
+      for code <- ~w(s kW.h [lb_av] deg mmol/l), do: assert(Unit.kind!(code) == :linear, code)
+      for code <- ~w(Cel [degF] Cel/h), do: assert(Unit.kind!(code) == :affine, code)
+      for code <- ~w(B dB dB[SPL] B[SPL]), do: assert(Unit.kind!(code) == :logarithmic, code)
+      assert Unit.kind!("K") == :linear
+      assert Unit.kind("sec") == {:error, {:unknown_atom, "sec"}}
+      assert Unit.kind("dB") == {:ok, :logarithmic}
     end
   end
 
@@ -180,7 +181,7 @@ defmodule Macaw.Data.Unit.UcumTest do
         "min/km" => "min/km"
       }
 
-      for {code, symbol} <- expected, do: assert(Unit.symbol(code) == symbol, code)
+      for {code, symbol} <- expected, do: assert(Unit.symbol!(code) == symbol, code)
     end
   end
 
@@ -188,8 +189,11 @@ defmodule Macaw.Data.Unit.UcumTest do
     @tag verifies: "units-dimension-factor"
     property "a product's dimension and factor are its components', a quotient's inverted" do
       check all(a <- code(), b <- code()) do
-        assert Unit.dimension(a <> "." <> b) == add(Unit.dimension(a), Unit.dimension(b))
-        assert Unit.dimension(a <> "/" <> b) == add(Unit.dimension(a), negate(Unit.dimension(b)))
+        assert Unit.dimension!(a <> "." <> b) == add(Unit.dimension!(a), Unit.dimension!(b))
+
+        assert Unit.dimension!(a <> "/" <> b) ==
+                 add(Unit.dimension!(a), negate(Unit.dimension!(b)))
+
         assert exact(a <> "." <> b) == mul(exact(a), exact(b))
         assert exact(a <> "/" <> b) == mul(exact(a), inv(exact(b)))
       end
@@ -198,17 +202,17 @@ defmodule Macaw.Data.Unit.UcumTest do
     @tag verifies: "units-convert"
     property "a code converts to itself unchanged" do
       check all(a <- code(), value <- float(min: -1.0e6, max: 1.0e6)) do
-        assert Unit.convert(value, a, a) == value
+        assert Unit.convert!(value, a, a) == value
       end
     end
 
     @tag verifies: "units-symbol-written"
     property "every atom's symbol reads back as its code, or names it among the choices" do
       check all(code <- member_of(readable_codes())) do
-        case Unit.parse_alias(Unit.symbol(code)) do
+        case Unit.parse_alias(Unit.symbol!(code)) do
           {:ok, read} ->
-            assert Unit.dimension(read) == Unit.dimension(code), code
-            assert Unit.factor(read) == Unit.factor(code), code
+            assert Unit.dimension!(read) == Unit.dimension!(code), code
+            assert Unit.factor!(read) == Unit.factor!(code), code
 
           {:error, {:ambiguous, _symbol, choices}} ->
             assert code in Enum.map(choices, &elem(&1, 0)), code
@@ -250,7 +254,7 @@ defmodule Macaw.Data.Unit.UcumTest do
   end
 
   defp exact(code) do
-    case Unit.factor(code) do
+    case Unit.factor!(code) do
       {n, d} -> {n, d, 0}
       {n, d, k} -> {n, d, k}
     end

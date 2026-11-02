@@ -528,7 +528,7 @@ defmodule Macaw.Data.SchemaTest do
             :percent
           ] do
         {:ok, code} = Macaw.Data.Unit.from_telemetry(unit)
-        measure = %{unit: code, quantity: Macaw.Data.Quantity.of_unit(code)}
+        measure = %{unit: code, quantity: Macaw.Data.Quantity.of_unit!(code)}
         description = Map.reject(Map.put(measure, :type, :number), fn {_k, v} -> v == nil end)
         assert {:ok, _} = Schema.new(%{value: description}), "#{inspect(unit)} → #{code}"
       end

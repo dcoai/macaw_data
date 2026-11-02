@@ -201,9 +201,14 @@ defmodule Macaw.Data.ConformanceTest do
                  budgets: [nil]
                )
 
-      assert_raise ArgumentError, ~r/keyword list of/, fn ->
-        Conformance.check(:deliveries, Broken.new(), requests: [[budget: 5]])
-      end
+      # The kit's own options are findings, never a raise, so its test fails with them.
+      assert Conformance.check(:deliveries, Broken.new(), requests: [[budget: 5]]) ==
+               [deliveries: {:request, [budget: 5]}]
+
+      assert Conformance.check(:deliveries, Broken.new(), windows: [], viewers: [%{}]) ==
+               [deliveries: {:option, :windows}, deliveries: {:viewers, :two}]
+
+      assert Conformance.format({:deliveries, {:request, [budget: 5]}}) =~ "keyword list of"
     end
 
     @tag verifies: "conformance-honest"
@@ -260,9 +265,13 @@ defmodule Macaw.Data.ConformanceTest do
 
     @tag verifies: "conformance-use"
     test "an unknown check is refused" do
-      assert_raise ArgumentError, ~r/not a conformance check/, fn ->
-        Conformance.check(:everything, Broken.new(), [])
-      end
+      assert [everything: {:unknown_check, checks}] =
+               Conformance.check(:everything, Broken.new(), [])
+
+      assert checks == Conformance.checks()
+
+      assert Conformance.format({:everything, {:unknown_check, checks}}) =~
+               "not a conformance check"
     end
   end
 end

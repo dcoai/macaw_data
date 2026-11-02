@@ -177,33 +177,44 @@ defmodule Macaw.Data.Source.Conformance do
   end
 
   @doc """
-  One check's findings for a source, `[]` when it passes (spec/01 §9). Raises
-  `ArgumentError` for an unknown check, an unknown option or a request with a key that
-  is not one of `params`, `window`, `box`, `region`, `latest` and `as_of`.
+  One check's findings for a source, `[]` when it passes (spec/01 §9). The kit's own
+  options are checked first, and a fault in them is a finding of the check, never a raise
+  (spec/00 §5), so the test the kit writes fails with its words: `{check,
+  {:unknown_check, @checks}}` for an unknown check, `{check, {:option, key}}` for an
+  option the kit does not take, `{check, {:request, ask}}` for a request that is not a
+  keyword list of `params`, `window`, `box`, `region`, `latest`, `order` and `as_of`, and
+  `{check, {:viewers, :two}}` for viewers that are not two.
   """
   @spec check(check(), Source.t(), keyword()) :: [finding()]
   def check(check, source, opts) when check in @checks and is_list(opts) do
-    o = opts |> Keyword.validate!(@defaults) |> Map.new() |> settled()
-    for reason <- run(check, source, o), do: {check, reason}
+    case settled(opts) do
+      {:ok, o} -> for reason <- run(check, source, o), do: {check, reason}
+      {:error, reasons} -> for reason <- reasons, do: {check, reason}
+    end
   end
 
-  def check(check, _source, _opts),
-    do:
-      raise(
-        ArgumentError,
-        "not a conformance check: #{inspect(check)}, one of #{inspect(@checks)}"
-      )
+  def check(check, _source, _opts), do: [{check, {:unknown_check, @checks}}]
 
-  defp settled(o) do
-    for ask <- o.requests do
-      (Keyword.keyword?(ask) && Keyword.keys(ask) -- @asks == []) ||
-        raise ArgumentError,
-              "a conformance request is a keyword list of #{inspect(@asks)}, got #{inspect(ask)}"
+  # The options with their defaults, and `now` and `as_of` settled; or every fault in them.
+  defp settled(opts) do
+    unknown = for {key, _value} <- opts, not Keyword.has_key?(@defaults, key), do: {:option, key}
+    o = @defaults |> Keyword.merge(opts) |> Map.new()
+
+    requests =
+      for ask <- List.wrap(o.requests),
+          not (Keyword.keyword?(ask) and Keyword.keys(ask) -- @asks == []),
+          do: {:request, ask}
+
+    viewers = if match?([_first, _second], o.viewers), do: [], else: [{:viewers, :two}]
+
+    case unknown ++ requests ++ viewers do
+      [] ->
+        now = o.now || DateTime.utc_now()
+        {:ok, %{o | now: now, as_of: o.as_of || DateTime.add(now, -86_400)}}
+
+      reasons ->
+        {:error, reasons}
     end
-
-    [_first, _second] = o.viewers
-    now = o.now || DateTime.utc_now()
-    %{o | now: now, as_of: o.as_of || DateTime.add(now, -86_400)}
   end
 
   # -- describe ------------------------------------------------------------------------------

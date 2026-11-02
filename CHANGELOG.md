@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- **Breaking:** the functions of a unit code answer `{:ok, value}` or `{:error, reason}` instead of raising (#114, #120, spec/03 §2, §5, §6):
+  - `Macaw.Data.Unit.dimension/1`, `Macaw.Data.Unit.factor/1`, `Macaw.Data.Unit.kind/1` and `Macaw.Data.Unit.symbol/2`: `parse/1`'s reason for a string that is not a code, and `{:syntax, text}` for a term that is no string;
+  - `Macaw.Data.Unit.convert/3`: `conversion/2`'s reason, or `:not_a_number`;
+  - `Macaw.Data.Unit.minor_units/1`: `{:unknown_currency, code}`.
+
+  Each has a `!` twin (`Macaw.Data.Unit.dimension!/1`, `Macaw.Data.Unit.factor!/1`, `Macaw.Data.Unit.kind!/1`, `Macaw.Data.Unit.symbol!/2`, `Macaw.Data.Unit.convert!/3`, `Macaw.Data.Unit.minor_units!/1`) with the old return.
+- **Breaking:** `Macaw.Data.Quantity.label/1`, `Macaw.Data.Quantity.of_unit/1` and `Macaw.Data.Quantity.bounds/2` answer `{:ok, value}` or `{:error, reason}` (#120, spec/03 §9, §14). `Macaw.Data.Quantity.label!/1`, `Macaw.Data.Quantity.of_unit!/1` and `Macaw.Data.Quantity.bounds!/2` keep the old returns. `Macaw.Data.Quantity.bounds/1` is unchanged.
+- **Breaking:** `Macaw.Data.FFT.fft/1` answers `{:ok, terms}` and `Macaw.Data.FFT.spectrum/3` `{:ok, lines}`, or `{:error, reason}`: `{:samples, n}`, `{:window, kind}`, `{:every, every}` or `{:values, :number}`, worded by `Macaw.Data.FFT.format_error/1` (#120, spec/04 §4.11). `Macaw.Data.FFT.fft!/1` and `Macaw.Data.FFT.spectrum!/3` keep the old returns.
+- **Breaking:** a sum beyond a float's range is the fault `:overflow` where it raised `ArithmeticError` (#120, spec/04 §5):
+  - `sum` and `mean` answer `{:error, :overflow}`, which `Macaw.Data.Aggregate` now allows from `reduce/2` and `finish/2`;
+  - `Macaw.Data.Operations.aggregate/4` answers `{["values"], :overflow}`;
+  - a grouping step answers `{[i, "field"], :overflow}`, and `bin` answers `{[i, "fn"], :overflow}`;
+  - `Macaw.Data.Derived.Columns.sum/2` and `Macaw.Data.Derived.Columns.mean/2` answer `{:overflow, name}`.
+- **Breaking:** the sandbox's options are faults, not raises (#120, spec/02 §6.4). `Macaw.Data.Derived.Sandbox.check/2` and `Macaw.Data.Derived.Sandbox.compile/2` answer `{:error, [{nil, {:option, key}}]}` and `{nil, {:bound, key, ceiling}}`, and a compile without a registry `{nil, {:operations, :registry}}`. `Macaw.Data.Derived.Sandbox.run/3` answers `{:error, :options, faults}`. `Macaw.Data.Derived.Engine.new/2` answers a bound above its ceiling as `{[], [key], {:bound, key, ceiling}}`.
+- **Breaking:** `Macaw.Data.Derived.Functions.registry/1` answers `{:ok, registry}` or every fault: `{[module], :not_a_function_module}` and `{[name], {:defined_twice, module, other}}` (#120, spec/02 §7). `Macaw.Data.Derived.Functions.registry!/1` keeps the old return.
+- **Changed:** the conformance kit's `Macaw.Data.Source.Conformance.check/3` answers its own options' faults as findings: `{check, {:unknown_check, checks}}`, `{check, {:option, key}}`, `{check, {:request, ask}}` and `{check, {:viewers, :two}}`. The test it writes fails with their words, where `check/3` raised before (#120, spec/01 §9).
 - **Breaking:** `Macaw.Data.Source.Finish.finish/4` answers `{:ok, delivery}` or `{:error, faults}` instead of a delivery or a raise (#114, #119, spec/01 §2.4, spec/04 §7). Every fault is answered before any step runs:
   - a request the schema cannot answer: `Macaw.Data.Window.check/2`'s faults;
   - `{[:reduce], {:unknown, :reducer, name}}`;

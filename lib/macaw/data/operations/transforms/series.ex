@@ -193,16 +193,24 @@ defmodule Macaw.Data.Operations.Transforms.Bin do
       end
 
     columns = outputs(node, Operations.columns(input))
+    bin_values = Enum.map(bins, &elem(&1, 2))
 
     values = [
       Enum.map(bins, &elem(&1, 0)),
       Enum.map(bins, &elem(&1, 1)),
       Enum.map(bins, fn _ -> 0 end),
-      Enum.map(bins, &elem(&1, 2)),
+      bin_values,
       Enum.map(bins, &elem(&1, 3))
     ]
 
-    Step.output(input, key, Enum.zip_with(columns, values, fn {n, t}, v -> {n, t, v} end))
+    # A bin's aggregate value no column holds is the step's fault (spec/04 §3.1).
+    case Enum.find(bin_values, &match?({:error, _}, &1)) do
+      nil ->
+        Step.output(input, key, Enum.zip_with(columns, values, fn {n, t}, v -> {n, t, v} end))
+
+      {:error, reason} ->
+        {:error, {"fn", reason}}
+    end
   end
 
   # The bins over the extent `{d0, d1}`: `n` equal-width ones, or at the inner thresholds
@@ -518,7 +526,7 @@ defmodule Macaw.Data.Operations.Transforms.Spectrum do
         fn {_key, value} -> value == nil end
       )
 
-    lines = sampled |> Enum.map(&elem(&1, 0)) |> FFT.spectrum(every, options)
+    lines = sampled |> Enum.map(&elem(&1, 0)) |> FFT.spectrum!(every, options)
 
     columns =
       [{frequency, Enum.map(lines, & &1.frequency)}, {magnitude, Enum.map(lines, & &1.magnitude)}] ++

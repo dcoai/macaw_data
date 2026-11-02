@@ -36,30 +36,6 @@
     reason: "defsource: a body that is not a do block fails the build (spec/02 §7)"
   },
   %{
-    site: "Macaw.Data.Derived.Functions.functions!/1",
-    count: 1,
-    class: :convert,
-    reason: "bad input it answers with a raise; #120 converts it"
-  },
-  %{
-    site: "Macaw.Data.Derived.Functions.register/3",
-    count: 1,
-    class: :convert,
-    reason: "bad input it answers with a raise; #120 converts it"
-  },
-  %{
-    site: "Macaw.Data.Derived.Sandbox.compile/2",
-    count: 1,
-    class: :convert,
-    reason: "bad input it answers with a raise; #120 converts it"
-  },
-  %{
-    site: "Macaw.Data.Derived.Sandbox.tightened!/1",
-    count: 1,
-    class: :convert,
-    reason: "bad input it answers with a raise; #120 converts it"
-  },
-  %{
     site: "Macaw.Data.Derived.Sandbox.Runtime.get/2",
     count: 1,
     class: :invariant,
@@ -71,24 +47,6 @@
     count: 1,
     class: :bang,
     reason: "the Runtime bang twins' one raise: their twin's reason in format_error/1's words"
-  },
-  %{
-    site: "Macaw.Data.Exact.to_float/1",
-    count: 1,
-    class: :convert,
-    reason: "bad input it answers with a raise; #120 converts it"
-  },
-  %{
-    site: "Macaw.Data.FFT.fft/1",
-    count: 1,
-    class: :convert,
-    reason: "bad input it answers with a raise; #120 converts it"
-  },
-  %{
-    site: "Macaw.Data.FFT.spectrum/3",
-    count: 2,
-    class: :convert,
-    reason: "bad input it answers with a raise; #120 converts it"
   },
   %{
     site: "lib/macaw/data/native/kernels.ex (file body)",
@@ -111,28 +69,10 @@
       "a reading of the wrong kind inside a step: each step's bind/3 checks its columns with Transforms.readings/3 before any chunk is read, and answers {:reads, kind} (spec/04 §3.1)"
   },
   %{
-    site: "Macaw.Data.Quantity.resolve!/1",
-    count: 1,
-    class: :convert,
-    reason: "bad input it answers with a raise; #120 converts it"
-  },
-  %{
     site: "Macaw.Data.Source.Conformance.__using__/1",
     count: 2,
     class: :compile,
     reason: "the conformance kit's options are checked as the test module compiles (spec/01 §9)"
-  },
-  %{
-    site: "Macaw.Data.Source.Conformance.check/3",
-    count: 1,
-    class: :convert,
-    reason: "bad input it answers with a raise; #120 converts it"
-  },
-  %{
-    site: "Macaw.Data.Source.Conformance.settled/1",
-    count: 1,
-    class: :convert,
-    reason: "bad input it answers with a raise; #120 converts it"
   },
   %{
     site: "Macaw.Data.Table.Digest.not_data/1",
@@ -156,28 +96,24 @@
       "a tensor of rank other than 1 or 2: Table.source/1 refuses one ({[], {:rank, r}}) before Table.from/2, Delivery.new/2 and Operations.apply/4 read it; Table.rows/1 reads a source source/1 accepts (spec/01 §1.1)"
   },
   %{
-    site: "Macaw.Data.Unit.convert/3",
-    count: 1,
-    class: :convert,
-    reason: "bad input it answers with a raise; #120 converts it"
-  },
-  %{
-    site: "Macaw.Data.Unit.parse!/1",
-    count: 1,
-    class: :convert,
-    reason: "bad input it answers with a raise; #120 converts it"
-  },
-  %{
-    site: "Macaw.Data.Unit.Currency.minor_units/1",
-    count: 1,
-    class: :convert,
-    reason: "bad input it answers with a raise; #120 converts it"
-  },
-  %{
     site: "Macaw.Data.Ops.value!/2",
     count: 1,
     class: :bang,
     reason:
       "the Ops bang twins' one raise (aggregate!/2,3, transform!/2,3, and __run__/5's ! kinds): their twin's faults in format_error/1's words"
+  },
+  %{
+    site: "Macaw.Data.FFT.value!/1",
+    count: 1,
+    class: :bang,
+    reason:
+      "the FFT bang twins' one raise (fft!/1, spectrum!/3): their twin's reason in format_error/1's words"
+  },
+  %{
+    site: "Macaw.Data.Unit.value!/1",
+    count: 1,
+    class: :bang,
+    reason:
+      "the Unit bang twins' one raise (dimension!/1, factor!/1, kind!/1, symbol!/2, convert!/3, minor_units!/1): their twin's reason in format_error/1's words"
   }
 ]

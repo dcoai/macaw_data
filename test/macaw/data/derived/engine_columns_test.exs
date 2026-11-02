@@ -104,7 +104,7 @@ defmodule Macaw.Data.Derived.EngineColumnsTest do
       Engine.new(sources,
         sources: [:in],
         debounce: 0,
-        functions: Functions.registry([Host])
+        functions: Functions.registry!([Host])
       )
 
     {engine, pairs}
@@ -201,7 +201,7 @@ defmodule Macaw.Data.Derived.EngineColumnsTest do
       Engine.new(%{["h"] => host, ["s"] => stored},
         sources: [:in],
         debounce: 0,
-        functions: Functions.registry([Host])
+        functions: Functions.registry!([Host])
       )
 
     {:ok, sourced} =
@@ -276,7 +276,7 @@ defmodule Macaw.Data.Derived.EngineColumnsTest do
       Engine.new(%{["c"] => source},
         sources: [:in],
         debounce: 0,
-        functions: Functions.registry([Host])
+        functions: Functions.registry!([Host])
       )
 
     bad = [%{t: ~U[1970-01-01 00:00:01Z], host: "a", v: "secret-value"}]
@@ -322,7 +322,7 @@ defmodule Macaw.Data.Derived.EngineColumnsTest do
       Engine.new(%{["s"] => source},
         sources: [:in],
         debounce: 0,
-        functions: Functions.registry([Host.Wide])
+        functions: Functions.registry!([Host.Wide])
       )
 
     {first, second} = {wide(0), wide(1)}

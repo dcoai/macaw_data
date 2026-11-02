@@ -43,9 +43,11 @@ defmodule Macaw.Data.Exact do
     do: {a + b, Map.merge(fa || %{}, fb || %{}, fn _exp, x, y -> x + y end)}
 
   @doc false
-  # The sum's value: an integer when no float was added, else the exact sum rounded once.
-  @spec value(t()) :: number()
-  def value({ints, nil}), do: ints
+  # The sum's value: an integer when no float was added, else the exact sum rounded once,
+  # `{:ok, value}`; a sum of floats beyond a float's range is `{:error, :overflow}`, since
+  # no float holds it (spec/04 §5, spec/00 §5).
+  @spec value(t()) :: {:ok, number()} | {:error, :overflow}
+  def value({ints, nil}), do: {:ok, ints}
   def value({ints, floats}), do: to_float((ints <<< 1074) + units(floats))
 
   # The floats' sum as the exact integer count of 2^-1074 it is: a mantissa at biased
@@ -53,8 +55,8 @@ defmodule Macaw.Data.Exact do
   defp units(floats),
     do: Enum.reduce(floats, 0, fn {exp, m}, total -> total + (m <<< max(exp - 1, 0)) end)
 
-  # The float nearest `n` × 2^-1074, ties to even.
-  defp to_float(0), do: 0.0
+  # The float nearest `n` × 2^-1074, ties to even; `{:error, :overflow}` past the largest.
+  defp to_float(0), do: {:ok, 0.0}
 
   defp to_float(n) do
     sign = if n < 0, do: 1, else: 0
@@ -67,14 +69,14 @@ defmodule Macaw.Data.Exact do
     cond do
       m < 1 <<< 52 ->
         <<f::float>> = <<sign::1, 0::11, m::52>>
-        f
+        {:ok, f}
 
       shift + 1 > 2046 ->
-        raise ArithmeticError, "the sum is beyond a float's range"
+        {:error, :overflow}
 
       true ->
         <<f::float>> = <<sign::1, shift + 1::11, m - (1 <<< 52)::52>>
-        f
+        {:ok, f}
     end
   end
 

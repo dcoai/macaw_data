@@ -170,7 +170,11 @@ defmodule Macaw.Data.Derived.Columns do
   def sum(table, name) do
     with {:ok, table, found} <- typed(table, name, [:number]) do
       {sum, _readings} = each(table, {Exact.zero(), 0}, &merge(&2, sum_view(&1, found)))
-      {:ok, Exact.value(sum)}
+
+      case Exact.value(sum) do
+        {:ok, value} -> {:ok, value}
+        {:error, :overflow} -> {:error, {:overflow, name}}
+      end
     end
   end
 
@@ -182,8 +186,14 @@ defmodule Macaw.Data.Derived.Columns do
   def mean(table, name) do
     with {:ok, table, found} <- typed(table, name, [:number]) do
       case each(table, {Exact.zero(), 0}, &merge(&2, sum_view(&1, found))) do
-        {_sum, 0} -> {:ok, nil}
-        {sum, n} -> {:ok, Exact.value(sum) / n}
+        {_sum, 0} ->
+          {:ok, nil}
+
+        {sum, n} ->
+          case Exact.value(sum) do
+            {:ok, value} -> {:ok, value / n}
+            {:error, :overflow} -> {:error, {:overflow, name}}
+          end
       end
     end
   end
@@ -315,6 +325,9 @@ defmodule Macaw.Data.Derived.Columns do
   def format_error({:wrong_type, name, expected, actual}),
     do:
       "column #{inspect(name)} is #{inspect(actual)}, not #{Enum.map_join(expected, " or ", &inspect/1)}"
+
+  def format_error({:overflow, name}),
+    do: "column #{inspect(name)} sums beyond a float's range, so no float holds its sum"
 
   def format_error({:type, :name}), do: "a column is named by an atom or a string"
   def format_error({:type, :table}), do: "the input read is not a Macaw.Data.Table"

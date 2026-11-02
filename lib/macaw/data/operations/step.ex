@@ -71,7 +71,11 @@ defmodule Macaw.Data.Operations.Step do
 
     with {:ok, parts} <- parts(module, node, table, context) do
       partials = chunks(module, node, parts, parallel?(table, context))
-      {:ok, merge(module, node, partials, table, Enum.map(parts, & &1.key), context)}
+
+      case merge(module, node, partials, table, Enum.map(parts, & &1.key), context) do
+        %Table{} = output -> {:ok, output}
+        {:error, {_key, _reason}} = error -> error
+      end
     end
   end
 

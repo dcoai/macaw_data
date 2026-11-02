@@ -136,6 +136,40 @@ defmodule Macaw.Data.Operations.AggregatesTest do
     end
 
     @tag verifies: "operations-statistics-values"
+    test "a sum beyond a float's range is the fault :overflow, never a raise" do
+      huge = [1.0e308, 1.0e308]
+      registry = Operations.registry()
+
+      assert Operations.aggregate(registry, "sum", huge, %{}) ==
+               {:error, [{["values"], :overflow}]}
+
+      assert Operations.aggregate(registry, "mean", huge, %{}) ==
+               {:error, [{["values"], :overflow}]}
+
+      assert Operations.aggregate(registry, "sum", [1.0e308, -1.0e308, 1.0], %{}) == {:ok, 1.0}
+
+      rows = Enum.map(huge, &%{v: &1, k: "a"})
+
+      for node <- [
+            %{op: "sum", field: :v},
+            %{op: "aggregate", field: :v, fn: "mean", by: :k},
+            %{op: "aggregate", field: :v, fn: "sum"}
+          ] do
+        assert Operations.apply(registry, [node], rows) == {:error, [{[0, "field"], :overflow}]}
+      end
+
+      assert Operations.apply(registry, [%{op: "bin", field: :v, fn: "sum", thresholds: 1}], rows) ==
+               {:error, [{[0, "fn"], :overflow}]}
+
+      table = Macaw.Data.Table.new!([{"v", :number, huge}])
+      assert Macaw.Data.Derived.Columns.sum(table, "v") == {:error, {:overflow, "v"}}
+      assert Macaw.Data.Derived.Columns.mean(table, "v") == {:error, {:overflow, "v"}}
+
+      assert Operations.format_error({["values"], :overflow}) ==
+               "values: sums beyond a float's range"
+    end
+
+    @tag verifies: "operations-statistics-values"
     test "a reading of the wrong kind is a fault naming what the aggregate reads" do
       for {name, values} <- [
             {"sum", [1, "2"]},

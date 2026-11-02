@@ -44,7 +44,7 @@ defmodule Macaw.Data.Quantity do
       iex> Macaw.Data.Quantity.additivity(:data_rate)
       %{across: true, over_time: false}
 
-      iex> Macaw.Data.Quantity.label(%{unit: "{request}"})
+      iex> Macaw.Data.Quantity.label!(%{unit: "{request}"})
       "request"
 
   """
@@ -147,23 +147,43 @@ defmodule Macaw.Data.Quantity do
   def bounds(quantity), do: Facts.fetch!(quantity).bounds
 
   @doc """
-  A quantity's bounds in a unit of it: the base's, converted. A unit without a factor
-  (`Cel`) takes the base's bounds as they are.
+  A quantity's bounds in a unit of it: the base's, converted, as `{:ok, bounds}`. A unit
+  without a factor (`Cel`) takes the base's bounds as they are. A unit that is no code, or
+  not of the quantity's dimension, is `Macaw.Data.Unit.convert/3`'s `{:error, reason}`
+  (spec/00 §5); `bounds!/2` answers the bounds or raises.
 
   ## Examples
 
       iex> Macaw.Data.Quantity.bounds(:ratio, "%")
-      {0.0, 100.0}
+      {:ok, {0.0, 100.0}}
+
+      iex> Macaw.Data.Quantity.bounds(:ratio, "s")
+      {:error, {:dimension, "1", "s"}}
 
   """
-  @spec bounds(t(), Unit.code()) :: {number() | nil, number() | nil}
+  @spec bounds(t(), Unit.code()) :: {:ok, {number() | nil, number() | nil}} | {:error, term()}
   def bounds(quantity, unit) do
     {min, max} = bounds(quantity)
     base = base_unit(quantity)
 
-    if base == nil or base == unit or Unit.factor(unit) == nil,
-      do: {min, max},
-      else: {bound(min, base, unit), bound(max, base, unit)}
+    with {:ok, factor} <- if(base == nil or base == unit, do: {:ok, nil}, else: Unit.factor(unit)) do
+      if base == nil or base == unit or factor == nil do
+        {:ok, {min, max}}
+      else
+        with {:ok, low} <- bound(min, base, unit),
+             {:ok, high} <- bound(max, base, unit),
+             do: {:ok, {low, high}}
+      end
+    end
+  end
+
+  @doc "As `bounds/2`, the bounds alone, raising `ArgumentError` in `Macaw.Data.Unit.format_error/1`'s words."
+  @spec bounds!(t(), Unit.code()) :: {number() | nil, number() | nil}
+  def bounds!(quantity, unit) do
+    case bounds(quantity, unit) do
+      {:ok, bounds} -> bounds
+      {:error, reason} -> raise ArgumentError, Unit.format_error(reason)
+    end
   end
 
   @doc """
@@ -266,22 +286,35 @@ defmodule Macaw.Data.Quantity do
   ## Examples
 
       iex> Macaw.Data.Quantity.of_unit("kW.h")
-      :energy
+      {:ok, :energy}
 
-      iex> Macaw.Data.Quantity.of_unit("{request}")
+      iex> Macaw.Data.Quantity.of_unit!("{request}")
       :count
 
   """
-  @spec of_unit(Unit.code()) :: t() | nil
+  @spec of_unit(Unit.code()) :: {:ok, t() | nil} | {:error, term()}
   def of_unit(unit) do
     case Unit.dimension(unit) do
-      dims when dims == %{} ->
-        if atom?(unit, "%"), do: :ratio, else: :count
+      {:ok, dims} when dims == %{} ->
+        {:ok, if(atom?(unit, "%"), do: :ratio, else: :count)}
 
-      dims ->
+      {:ok, dims} ->
         if Unit.currency(unit),
-          do: :currency,
-          else: Enum.find(@all -- @dimensionless, &(Unit.dimension(base_unit(&1)) == dims))
+          do: {:ok, :currency},
+          else:
+            {:ok, Enum.find(@all -- @dimensionless, &(Unit.dimension!(base_unit(&1)) == dims))}
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  @doc "As `of_unit/1`, the quantity alone, raising `ArgumentError` in `Macaw.Data.Unit.format_error/1`'s words."
+  @spec of_unit!(Unit.code()) :: t() | nil
+  def of_unit!(unit) do
+    case of_unit(unit) do
+      {:ok, quantity} -> quantity
+      {:error, reason} -> raise ArgumentError, Unit.format_error(reason)
     end
   end
 
@@ -310,7 +343,7 @@ defmodule Macaw.Data.Quantity do
          :ok <- check_quantity(quantity) do
       case {unit, quantity} do
         {nil, nil} -> {:ok, %{unit: nil, quantity: nil}}
-        {unit, nil} -> {:ok, %{unit: unit, quantity: of_unit(unit)}}
+        {unit, nil} -> {:ok, %{unit: unit, quantity: of_unit!(unit)}}
         {nil, quantity} -> {:ok, %{unit: base_unit(quantity), quantity: quantity}}
         {unit, quantity} -> pair(unit, quantity)
       end
@@ -320,30 +353,43 @@ defmodule Macaw.Data.Quantity do
   @doc """
   The label rule (spec/03 §14): **the unit, else the quantity, else nothing** — the
   unit's symbol with its annotations written when it is not empty, else the quantity's
-  name with spaces for underscores, else `nil`. Raises `ArgumentError` for a measure
-  `resolve/1` refuses.
+  name with spaces for underscores, else `nil`, as `{:ok, label}`. A measure `resolve/1`
+  refuses is its `{:error, reason}` (spec/00 §5); `label!/1` answers the label or raises.
 
   ## Examples
 
       iex> Macaw.Data.Quantity.label(%{unit: "ms"})
-      "ms"
+      {:ok, "ms"}
 
-      iex> Macaw.Data.Quantity.label(%{quantity: :count})
+      iex> Macaw.Data.Quantity.label!(%{quantity: :count})
       "count"
 
-      iex> Macaw.Data.Quantity.label(%{})
+      iex> Macaw.Data.Quantity.label!(%{})
       nil
 
-  """
-  @spec label(measure()) :: String.t() | nil
-  def label(measure) do
-    %{unit: unit, quantity: quantity} = resolve!(measure)
-    symbol = if unit, do: Unit.symbol(unit, annotations: true), else: ""
+      iex> Macaw.Data.Quantity.label(%{unit: "By", quantity: :duration})
+      {:error, {:quantity, :duration, "By"}}
 
-    cond do
-      symbol != "" -> symbol
-      quantity -> quantity |> Atom.to_string() |> String.replace("_", " ")
-      true -> nil
+  """
+  @spec label(measure()) :: {:ok, String.t() | nil} | {:error, reason()}
+  def label(measure) when is_map(measure) do
+    with {:ok, %{unit: unit, quantity: quantity}} <- resolve(measure) do
+      symbol = if unit, do: Unit.symbol!(unit, annotations: true), else: ""
+
+      cond do
+        symbol != "" -> {:ok, symbol}
+        quantity -> {:ok, quantity |> Atom.to_string() |> String.replace("_", " ")}
+        true -> {:ok, nil}
+      end
+    end
+  end
+
+  @doc "As `label/1`, the label alone, raising `ArgumentError` naming the reason."
+  @spec label!(measure()) :: String.t() | nil
+  def label!(measure) do
+    case label(measure) do
+      {:ok, label} -> label
+      {:error, reason} -> raise ArgumentError, "not a measure: #{inspect(reason)}"
     end
   end
 
@@ -368,23 +414,13 @@ defmodule Macaw.Data.Quantity do
     fits? =
       case quantity do
         :currency -> Unit.currency(unit) != nil
-        quantity when quantity in @dimensionless -> Unit.dimension(unit) == %{}
-        quantity -> Unit.dimension(unit) == Unit.dimension(base_unit(quantity))
+        quantity when quantity in @dimensionless -> Unit.dimension!(unit) == %{}
+        quantity -> Unit.dimension!(unit) == Unit.dimension!(base_unit(quantity))
       end
 
     if fits?,
       do: {:ok, %{unit: unit, quantity: quantity}},
       else: {:error, {:quantity, quantity, unit}}
-  end
-
-  defp resolve!(measure) do
-    case resolve(measure) do
-      {:ok, resolved} ->
-        resolved
-
-      {:error, reason} ->
-        raise ArgumentError, "not a measure: #{inspect(measure)} (#{inspect(reason)})"
-    end
   end
 
   # -- scaling --------------------------------------------------------------------------
@@ -440,7 +476,7 @@ defmodule Macaw.Data.Quantity do
 
   defp atom?(unit, atom), do: unit |> components() |> Enum.any?(&(&1.atom == atom))
 
-  defp bound(nil, _base, _unit), do: nil
+  defp bound(nil, _base, _unit), do: {:ok, nil}
   defp bound(value, base, unit), do: Unit.convert(value, base, unit)
 
   defp components(unit) do

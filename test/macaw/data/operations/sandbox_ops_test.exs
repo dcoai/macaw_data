@@ -185,9 +185,8 @@ defmodule Macaw.Data.Operations.SandboxOpsTest do
 
       assert {:error, [{1, {:unknown_operation, :transform, "double"}}]} = Sandbox.compile(source)
 
-      assert_raise ArgumentError, ~r/compile needs the registry/, fn ->
-        Sandbox.compile(source, operations: nil)
-      end
+      assert Sandbox.compile(source, operations: nil) ==
+               {:error, [{nil, {:operations, :registry}}]}
     end
   end
 

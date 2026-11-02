@@ -64,7 +64,7 @@ defmodule Macaw.Data.Derived.FunctionsTest do
 
   @tag verifies: "derived-registry"
   test "the registry: the modules given and nothing else, by name string with module and arity" do
-    assert Functions.registry([Sources]) == %{
+    assert Functions.registry!([Sources]) == %{
              "doubled" => {Sources, 1},
              "last" => {Sources, 1},
              "runaway" => {Sources, 1},
@@ -74,14 +74,18 @@ defmodule Macaw.Data.Derived.FunctionsTest do
     # Default closed: no modules, no functions, whatever the application environment holds.
     Application.put_env(:macaw_data, :derived_functions, [Sources])
     on_exit(fn -> Application.delete_env(:macaw_data, :derived_functions) end)
-    assert Functions.registry([]) == %{}
+    assert Functions.registry!([]) == %{}
 
-    assert_raise ArgumentError, ~r/defined by both/, fn ->
-      Functions.registry([Sources, Other])
-    end
+    assert {:error, [{[name], {:defined_twice, Sources, Other}}]} =
+             Functions.registry([Sources, Other])
 
-    assert_raise ArgumentError, ~r/not a derived-source function module/, fn ->
-      Functions.registry([Enum])
+    assert is_binary(name)
+    assert Functions.registry([Enum]) == {:error, [{[Enum], :not_a_function_module}]}
+    assert Functions.registry(:none) == {:error, [{[], {:type, :modules}}]}
+    assert {:ok, %{}} = Functions.registry([])
+
+    assert_raise ArgumentError, ~r/not a registry of derived-source functions/, fn ->
+      Functions.registry!([Sources, Other])
     end
   end
 

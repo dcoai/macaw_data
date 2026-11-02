@@ -35,7 +35,7 @@ defmodule Macaw.Data.Derived.EngineChangeTest do
       Engine.new(%{["a"] => a, ["b"] => b},
         sources: [:given],
         debounce: 0,
-        functions: Functions.registry([Echo])
+        functions: Functions.registry!([Echo])
       )
 
     engine

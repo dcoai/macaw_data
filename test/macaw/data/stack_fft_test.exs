@@ -202,7 +202,7 @@ defmodule Macaw.Data.StackFFTTest do
         n = Integer.pow(2, exponent)
         k = min(k, div(n, 2) - 1)
         samples = for i <- 0..(n - 1), do: amplitude * :math.sin(2 * :math.pi() * k * i / n)
-        terms = FFT.fft(samples)
+        terms = FFT.fft!(samples)
         magnitudes = FFT.magnitudes(terms)
 
         assert length(terms) == n
@@ -217,11 +217,13 @@ defmodule Macaw.Data.StackFFTTest do
 
     @tag verifies: "operations-spectrum-lines"
     test "a constant is DC alone; a length that is not a power of two raises" do
-      [{dc, dc_im} | rest] = FFT.fft(List.duplicate(2, 8))
+      [{dc, dc_im} | rest] = FFT.fft!(List.duplicate(2, 8))
       assert dc == 16.0 and dc_im == 0.0
       assert Enum.all?(rest, fn {re, im} -> abs(re) < 1.0e-12 and abs(im) < 1.0e-12 end)
 
-      assert_raise ArgumentError, ~r/power of two/, fn -> FFT.fft([1, 2, 3]) end
+      assert FFT.fft([1, 2, 3]) == {:error, {:samples, 3}}
+      assert FFT.fft([1, :a]) == {:error, {:values, :number}}
+      assert_raise ArgumentError, ~r/power of two/, fn -> FFT.fft!([1, 2, 3]) end
 
       # The tapers: hann and hamming over five ones, and a sequence under four untapered.
       assert Enum.map(FFT.window([1, 1, 1, 1, 1], :hann), &Float.round(&1, 3)) == [
@@ -251,7 +253,7 @@ defmodule Macaw.Data.StackFFTTest do
       values = for i <- 0..511, do: 3 * :math.sin(2 * :math.pi() * 32 * i * every)
 
       for window <- FFT.windows() do
-        lines = FFT.spectrum(values, every, window: window)
+        lines = FFT.spectrum!(values, every, window: window)
         assert length(lines) == 256
         peak = Enum.max_by(lines, & &1.magnitude)
         assert peak.frequency == 32.0
@@ -259,16 +261,26 @@ defmodule Macaw.Data.StackFFTTest do
       end
 
       offset = Enum.map(values, &(&1 + 40))
-      assert Enum.at(FFT.spectrum(offset, every), 1).magnitude > 10
-      flat = FFT.spectrum(offset, every, detrend: true)
+      assert Enum.at(FFT.spectrum!(offset, every), 1).magnitude > 10
+      flat = FFT.spectrum!(offset, every, detrend: true)
       assert Enum.at(flat, 0).magnitude < 0.01 and Enum.at(flat, 1).magnitude < 0.01
       assert_in_delta Enum.max_by(flat, & &1.magnitude).magnitude, 3.0, 0.01
 
       # The newest power of two: 300 values take the last 256.
-      assert FFT.spectrum(Enum.take(values, 300), every) |> length() == 128
-      assert FFT.spectrum([1.0], every) == []
-      assert_raise ArgumentError, ~r/samples/, fn -> FFT.spectrum(values, every, samples: 100) end
-      assert_raise ArgumentError, ~r/window/, fn -> FFT.spectrum(values, every, window: :flat) end
+      assert FFT.spectrum!(Enum.take(values, 300), every) |> length() == 128
+      assert FFT.spectrum!([1.0], every) == []
+      assert FFT.spectrum(values, every, samples: 100) == {:error, {:samples, 100}}
+      assert FFT.spectrum(values, every, window: :flat) == {:error, {:window, :flat}}
+      assert FFT.spectrum([1, :a], every) == {:error, {:values, :number}}
+      assert FFT.spectrum(values, 0) == {:error, {:every, 0}}
+
+      assert_raise ArgumentError, ~r/samples/, fn ->
+        FFT.spectrum!(values, every, samples: 100)
+      end
+
+      assert_raise ArgumentError, ~r/window/, fn ->
+        FFT.spectrum!(values, every, window: :flat)
+      end
     end
 
     # The cost's growth by count, not by clock: four times the samples is 4 · 12/10 = 4.8
@@ -276,8 +288,8 @@ defmodule Macaw.Data.StackFFTTest do
     @tag verifies: "operations-spectrum-lines"
     test "four times the samples is under six times the work" do
       values = fn n -> for i <- 0..(n - 1), do: :math.sin(i / 7) + rem(i * 7919, 101) / 100 end
-      {small, _} = Work.reductions(fn -> FFT.spectrum(values.(1024), 0.01) end)
-      {large, lines} = Work.reductions(fn -> FFT.spectrum(values.(4096), 0.01) end)
+      {small, _} = Work.reductions(fn -> FFT.spectrum!(values.(1024), 0.01) end)
+      {large, lines} = Work.reductions(fn -> FFT.spectrum!(values.(4096), 0.01) end)
 
       assert length(lines) == 2048
 

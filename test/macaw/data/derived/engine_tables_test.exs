@@ -88,7 +88,7 @@ defmodule Macaw.Data.Derived.EngineTablesTest do
         function: :seen
       )
 
-    functions = Macaw.Data.Derived.Functions.registry([Host])
+    functions = Macaw.Data.Derived.Functions.registry!([Host])
     table = readings(12, 3)
 
     assert answer(engine(source, functions: functions), table) ==

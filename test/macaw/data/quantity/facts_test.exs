@@ -42,12 +42,12 @@ defmodule Macaw.Data.Quantity.FactsTest do
         family = Quantity.family(q, nil, system)
 
         for member <- family do
-          assert Unit.dimension(member) == Unit.dimension(Quantity.base_unit(q)),
+          assert Unit.dimension!(member) == Unit.dimension!(Quantity.base_unit(q)),
                  "#{q} #{system} #{member}"
         end
 
         if Quantity.kind(q) != :affine do
-          factors = Enum.map(family, &Unit.convert(1, &1, Quantity.base_unit(q)))
+          factors = Enum.map(family, &Unit.convert!(1, &1, Quantity.base_unit(q)))
           assert factors == Enum.sort(factors), "#{q} #{system}: smallest first"
         end
       end
@@ -58,12 +58,12 @@ defmodule Macaw.Data.Quantity.FactsTest do
     @tag verifies: "quantities-kind-bounds"
     test "in the base unit, and converted into another unit of the quantity" do
       assert Quantity.bounds(:angle) == {0, 360}
-      assert Quantity.bounds(:angle, "rad") == {0.0, 2 * :math.pi()}
+      assert Quantity.bounds!(:angle, "rad") == {0.0, 2 * :math.pi()}
       assert Quantity.bounds(:ratio) == {0, 1}
-      assert Quantity.bounds(:ratio, "%") == {0.0, 100.0}
-      assert Quantity.bounds(:duration, "ms") == {0.0, nil}
-      assert Quantity.bounds(:temperature, "[degF]") == {nil, nil}
-      assert Quantity.bounds(:currency, "{iso4217:USD}") == {nil, nil}
+      assert Quantity.bounds!(:ratio, "%") == {0.0, 100.0}
+      assert Quantity.bounds!(:duration, "ms") == {0.0, nil}
+      assert Quantity.bounds!(:temperature, "[degF]") == {nil, nil}
+      assert Quantity.bounds!(:currency, "{iso4217:USD}") == {nil, nil}
     end
   end
 
@@ -127,7 +127,7 @@ defmodule Macaw.Data.Quantity.FactsTest do
       ]
 
       for {unit, system, family} <- cases do
-        assert Quantity.family(Quantity.of_unit(unit), unit, system) == family,
+        assert Quantity.family(Quantity.of_unit!(unit), unit, system) == family,
                inspect({unit, system})
       end
     end

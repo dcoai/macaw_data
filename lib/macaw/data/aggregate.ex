@@ -37,8 +37,12 @@ defmodule Macaw.Data.Aggregate do
   @doc "Whether the input's unit and quantity carry to the output."
   @callback keeps_unit?() :: boolean()
 
-  @doc "The value of the readings, `nil`s already dropped."
-  @callback reduce([term()], options()) :: term()
+  @doc """
+  The value of the readings, `nil`s already dropped; or `{:error, reason}` where no value
+  of the output's type holds it (`sum` and `mean` beyond a float's range: `:overflow`),
+  which the caller answers as a fault (spec/04 §3.1, §5).
+  """
+  @callback reduce([term()], options()) :: term() | {:error, term()}
 
   @doc "The streaming form's first state."
   @callback init(options()) :: term()
@@ -46,8 +50,8 @@ defmodule Macaw.Data.Aggregate do
   @doc "The streaming form's state after one more reading."
   @callback step(term(), term(), options()) :: term()
 
-  @doc "The streaming form's value of its state."
-  @callback finish(term(), options()) :: term()
+  @doc "The streaming form's value of its state, or `{:error, reason}` as `reduce/2`'s."
+  @callback finish(term(), options()) :: term() | {:error, term()}
 
   @doc """
   The combining form (spec/04 §1.2): the state of two runs of readings, the first

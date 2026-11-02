@@ -216,7 +216,7 @@ defmodule Macaw.Data.Derived.EngineTest do
         Engine.new(%{["a"] => a, ["d"] => d},
           sources: [:hosts],
           debounce: 0,
-          functions: Functions.registry([Blocked]),
+          functions: Functions.registry!([Blocked]),
           max_reductions: 1_000_000,
           # Generous, as spec/02 §6.4 asks: a first compile in a node that loads modules on
           # first use waits on the code server, which a loaded host can keep waiting past

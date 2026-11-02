@@ -257,9 +257,7 @@ defmodule Macaw.Data.Derived.SandboxTest do
       assert ok?(~S|fn _rows, c -> c["vars"]["x"] end|, fields: [:cpu])
       assert ok?("fn _rows, c -> c.vars.x end", fields: [:cpu])
 
-      assert_raise ArgumentError, ~r/unknown keys \[:vars\]/, fn ->
-        Sandbox.check("fn x -> x end", vars: ["x"])
-      end
+      assert Sandbox.check("fn x -> x end", vars: ["x"]) == {:error, [{nil, {:option, :vars}}]}
     end
 
     @tag verifies: "derived-checker-reads"
@@ -642,15 +640,23 @@ defmodule Macaw.Data.Derived.SandboxTest do
                  max_reductions: 1_000
                )
 
-      for {key, over} <- [max_reductions: 100_000_001, timeout: 30_001, max_heap: 10_000_001] do
-        assert_raise ArgumentError, ~r/never raised/, fn ->
-          Sandbox.run(fn -> 1 end, [], [{key, over}])
-        end
+      for {key, over, ceiling} <- [
+            {:max_reductions, 100_000_001, 100_000_000},
+            {:timeout, 30_001, 30_000},
+            {:max_heap, 10_000_001, 10_000_000}
+          ] do
+        assert Sandbox.run(fn -> 1 end, [], [{key, over}]) ==
+                 {:error, :options, [{nil, {:bound, key, ceiling}}]}
       end
 
-      assert_raise ArgumentError, ~r/never raised/, fn ->
-        Sandbox.check("fn x -> x end", max_source: 10_001)
-      end
+      assert Sandbox.run(fn -> 1 end, [], spawn: []) ==
+               {:error, :options, [{nil, {:option, :spawn}}]}
+
+      assert Sandbox.check("fn x -> x end", max_source: 10_001) ==
+               {:error, [{nil, {:bound, :max_source, 10_000}}]}
+
+      assert Sandbox.format_error({nil, {:bound, :max_source, 10_000}}) =~ "never raised"
+      assert_raise ArgumentError, ~r/never raised/, fn -> Sandbox.tightened!(max_heap: 0) end
 
       assert {:error, [{nil, {:too_long, 5, _}}]} = Sandbox.check("fn x -> x end", max_source: 5)
     end

@@ -8,7 +8,7 @@ defmodule Macaw.Data.FFT do
   two of samples, tapered by a window, transformed, and read as one-sided amplitudes —
   what the `spectrum` transform of spec/04 §4.11 answers.
 
-      iex> Macaw.Data.FFT.fft([1, 0, 0, 0])
+      iex> Macaw.Data.FFT.fft!([1, 0, 0, 0])
       [{1.0, 0.0}, {1.0, 0.0}, {1.0, 0.0}, {1.0, 0.0}]
   """
 
@@ -26,21 +26,62 @@ defmodule Macaw.Data.FFT do
 
   @doc """
   The discrete Fourier transform of a sequence whose length is a power of two: numbers
-  are taken as real, `{re, im}` pairs as complex. Raises `ArgumentError` for any other
-  length.
+  are taken as real, `{re, im}` pairs as complex, `{:ok, terms}`. Any other length is
+  `{:error, {:samples, n}}`, and a term that is neither `{:error, {:values, :number}}`
+  (spec/00 §5); `fft!/1` answers the terms or raises.
 
-      iex> Macaw.Data.FFT.fft([0, 1, 0, -1]) |> Enum.map(fn {re, im} -> {Float.round(re, 9) + 0.0, Float.round(im, 9) + 0.0} end)
+      iex> {:ok, terms} = Macaw.Data.FFT.fft([0, 1, 0, -1])
+      iex> Enum.map(terms, fn {re, im} -> {Float.round(re, 9) + 0.0, Float.round(im, 9) + 0.0} end)
       [{0.0, 0.0}, {0.0, -2.0}, {0.0, 0.0}, {0.0, 2.0}]
+      iex> Macaw.Data.FFT.fft([1, 2, 3])
+      {:error, {:samples, 3}}
   """
-  @spec fft([number() | complex()]) :: [complex()]
+  @spec fft([number() | complex()]) :: {:ok, [complex()]} | {:error, reason()}
   def fft(sequence) when is_list(sequence) do
     n = length(sequence)
 
-    power_of_two?(n) ||
-      raise ArgumentError, "the FFT takes a power of two of samples, not #{n}"
-
-    sequence |> Enum.map(&complex/1) |> transform(n)
+    cond do
+      not power_of_two?(n) -> {:error, {:samples, n}}
+      not Enum.all?(sequence, &term?/1) -> {:error, {:values, :number}}
+      true -> {:ok, sequence |> Enum.map(&complex/1) |> transform(n)}
+    end
   end
+
+  def fft(_sequence), do: {:error, {:values, :number}}
+
+  @doc "As `fft/1`, the terms alone, raising `ArgumentError` in `format_error/1`'s words."
+  @spec fft!([number() | complex()]) :: [complex()]
+  def fft!(sequence), do: value!(fft(sequence))
+
+  @typedoc "Why a transform or a spectrum is refused (`format_error/1`)."
+  @type reason ::
+          {:samples, term()} | {:window, term()} | {:every, term()} | {:values, :number}
+
+  @doc """
+  A refusal's words.
+
+      iex> Macaw.Data.FFT.format_error({:samples, 12})
+      "the FFT takes a power of two of samples, not 12"
+  """
+  @spec format_error(reason()) :: String.t()
+  def format_error({:samples, n}),
+    do: "the FFT takes a power of two of samples, not #{inspect(n)}"
+
+  def format_error({:window, kind}),
+    do: "window is one of #{inspect(@windows)}, not #{inspect(kind)}"
+
+  def format_error({:every, every}),
+    do: "every is the seconds between samples, above zero, not #{inspect(every)}"
+
+  def format_error({:values, :number}), do: "every value is a number, or a complex {re, im}"
+
+  defp term?(n) when is_number(n), do: true
+  defp term?({re, im}) when is_number(re) and is_number(im), do: true
+  defp term?(_other), do: false
+
+  # The bang twins' one raise: their twin's reason in `format_error/1`'s words.
+  defp value!({:ok, value}), do: value
+  defp value!({:error, reason}), do: raise(ArgumentError, format_error(reason))
 
   @doc "The magnitude `sqrt(re² + im²)` of every term."
   @spec magnitudes([complex()]) :: [float()]
@@ -76,33 +117,46 @@ defmodule Macaw.Data.FFT do
   by `window` (`:hann`), transformed, and read as `samples / 2` lines — `frequency` is
   `k / (samples · every)` hertz, `magnitude` the amplitude `|X_k| · 2 / (samples · gain)`
   with the window's mean gain divided out (the DC line not doubled), `phase` the argument
-  of `X_k`. Fewer than two values yield `[]`.
+  of `X_k`, as `{:ok, lines}`. Fewer than two values yield `{:ok, []}`. A refusal is
+  `{:error, reason}` (spec/00 §5): `{:samples, s}`, `{:window, kind}`, `{:every, every}`
+  or `{:values, :number}`; `spectrum!/3` answers the lines or raises.
 
   ## Options
 
-    * `:samples` - the window length, a power of two; raises `ArgumentError` otherwise
+    * `:samples` - the window length, a power of two
     * `:window` - one of `windows/0` (default `:hann`)
     * `:detrend` - subtract the window's mean before transforming, so an offset does not
       leak from the DC line into its neighbors (default `false`)
 
       iex> every = 1 / 64
       iex> values = for i <- 0..63, do: :math.sin(2 * :math.pi() * 8 * i * every)
-      iex> lines = Macaw.Data.FFT.spectrum(values, every, window: :none)
+      iex> {:ok, lines} = Macaw.Data.FFT.spectrum(values, every, window: :none)
       iex> peak = Enum.max_by(lines, & &1.magnitude)
       iex> {length(lines), Float.round(peak.frequency, 6), Float.round(peak.magnitude, 6)}
       {32, 8.0, 1.0}
   """
-  @spec spectrum([number()], number(), keyword()) :: [line()]
-  def spectrum(values, every, opts \\ []) when is_list(values) and every > 0 do
-    count = length(values)
-    samples = Keyword.get(opts, :samples) || largest_power_of_two(count)
+  @spec spectrum([number()], number(), keyword()) :: {:ok, [line()]} | {:error, reason()}
+  def spectrum(values, every, opts \\ []) do
+    samples =
+      is_list(values) && (Keyword.get(opts, :samples) || largest_power_of_two(length(values)))
+
     kind = Keyword.get(opts, :window, :hann)
 
-    (samples == nil or power_of_two?(samples)) ||
-      raise ArgumentError, "samples must be a power of two, not #{inspect(samples)}"
+    cond do
+      not (is_list(values) and Enum.all?(values, &is_number/1)) -> {:error, {:values, :number}}
+      not (is_number(every) and every > 0) -> {:error, {:every, every}}
+      not (samples == nil or power_of_two?(samples)) -> {:error, {:samples, samples}}
+      kind not in @windows -> {:error, {:window, kind}}
+      true -> {:ok, lines(values, every, samples, kind, opts)}
+    end
+  end
 
-    kind in @windows ||
-      raise ArgumentError, "window must be one of #{inspect(@windows)}, not #{inspect(kind)}"
+  @doc "As `spectrum/3`, the lines alone, raising `ArgumentError` in `format_error/1`'s words."
+  @spec spectrum!([number()], number(), keyword()) :: [line()]
+  def spectrum!(values, every, opts \\ []), do: value!(spectrum(values, every, opts))
+
+  defp lines(values, every, samples, kind, opts) do
+    count = length(values)
 
     if samples == nil or samples < 2 or count < samples do
       []

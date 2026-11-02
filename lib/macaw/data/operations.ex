@@ -353,8 +353,14 @@ defmodule Macaw.Data.Operations do
           if Transforms.read_as?(values, kind), do: [], else: [{["values"], {:reads, kind}}]
 
         case Enum.sort(faults ++ unread ++ read) do
-          [] -> {:ok, module.reduce(values, checked)}
-          faults -> {:error, faults}
+          [] ->
+            case module.reduce(values, checked) do
+              {:error, reason} -> {:error, [{["values"], reason}]}
+              value -> {:ok, value}
+            end
+
+          faults ->
+            {:error, faults}
         end
     end
   end
@@ -445,6 +451,7 @@ defmodule Macaw.Data.Operations do
   defp to_text(part), do: inspect(part)
 
   defp why(:not_a_table), do: "is not a table"
+  defp why(:overflow), do: "sums beyond a float's range"
   defp why(:not_a_package), do: "is not a package: it has no __members__/0"
   defp why(:no_behavior), do: "implements no behavior"
 

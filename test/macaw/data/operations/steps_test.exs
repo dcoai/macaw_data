@@ -429,7 +429,7 @@ defmodule Macaw.Data.Operations.StepsTest do
         assert Table.column(run(Storage.chunked(table, size), node), "sum") == [sum]
       end
 
-      assert sum ===
+      assert {:ok, sum} ===
                Enum.reduce(values, Macaw.Data.Exact.zero(), &Macaw.Data.Exact.add(&2, &1))
                |> Macaw.Data.Exact.value()
     end

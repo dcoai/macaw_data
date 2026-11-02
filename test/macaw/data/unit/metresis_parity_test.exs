@@ -31,7 +31,7 @@ defmodule Macaw.Data.Unit.MetresisParityTest do
   @tag verifies: "units-metresis-parity"
   test "a family's units share one dimension, so each converts within its family" do
     for {family, rows} <- Enum.group_by(MetresisParity.units(), &elem(&1, 0)) do
-      dimensions = rows |> Enum.map(&Unit.dimension(elem(&1, 3))) |> Enum.uniq()
+      dimensions = rows |> Enum.map(&Unit.dimension!(elem(&1, 3))) |> Enum.uniq()
       assert [_one] = dimensions, "#{family}: #{inspect(dimensions)}"
     end
   end
@@ -47,8 +47,8 @@ defmodule Macaw.Data.Unit.MetresisParityTest do
     for {_family, unit, _factor, code} <- MetresisParity.units() do
       case Unit.parse_alias(unit) do
         {:ok, read} ->
-          assert Unit.dimension(read) == Unit.dimension(code), unit
-          assert Unit.factor(read) == Unit.factor(code), unit
+          assert Unit.dimension!(read) == Unit.dimension!(code), unit
+          assert Unit.factor!(read) == Unit.factor!(code), unit
 
         {:error, {:ambiguous, ^unit, choices}} ->
           assert code in Enum.map(choices, &elem(&1, 0)), unit
@@ -64,12 +64,12 @@ defmodule Macaw.Data.Unit.MetresisParityTest do
 
       for {family, unit, _factor, code} <- MetresisParity.units() do
         quantity = Map.fetch!(quantities, family)
-        assert Quantity.of_unit(code) == quantity, "#{family} #{unit}"
+        assert Quantity.of_unit!(code) == quantity, "#{family} #{unit}"
         assert {:ok, _} = Quantity.resolve(%{unit: code, quantity: quantity})
       end
 
       for iso <- MetresisParity.currencies(),
-          do: assert(Quantity.of_unit("{iso4217:#{iso}}") == :currency)
+          do: assert(Quantity.of_unit!("{iso4217:#{iso}}") == :currency)
     end
 
     @tag verifies: "quantities-additivity-defaults"
@@ -98,7 +98,7 @@ defmodule Macaw.Data.Unit.MetresisParityTest do
         unit = if family == :percent, do: "%", else: Quantity.base_unit(quantity)
 
         {vmin, vmax} =
-          if unit, do: Quantity.bounds(quantity, unit), else: Quantity.bounds(quantity)
+          if unit, do: Quantity.bounds!(quantity, unit), else: Quantity.bounds(quantity)
 
         assert {vmin && vmin * 1.0, vmax && vmax * 1.0} == {min, max}, "#{family}"
       end
@@ -117,7 +117,7 @@ defmodule Macaw.Data.Unit.MetresisParityTest do
           {_, to, _, to_code} <- rows,
           value <- @values do
         theirs = MetresisParity.metresis_convert(value, family, from, to)
-        ours = Unit.convert(value, from_code, to_code)
+        ours = Unit.convert!(value, from_code, to_code)
         label = "#{value} #{from} → #{to}: metresis #{theirs}, macaw_data #{ours}"
 
         if from != to and (Map.has_key?(differs, from) or Map.has_key?(differs, to)) do
@@ -132,13 +132,13 @@ defmodule Macaw.Data.Unit.MetresisParityTest do
 
     @tag verifies: "units-metresis-parity"
     test "°C↔°F is exact, including absolute zero and where the scales cross" do
-      assert Unit.convert(-40, "Cel", "[degF]") ==
+      assert Unit.convert!(-40, "Cel", "[degF]") ==
                MetresisParity.metresis_convert(-40, :temperature, "°C", "°F")
 
-      assert Unit.convert(0, "K", "Cel") ==
+      assert Unit.convert!(0, "K", "Cel") ==
                MetresisParity.metresis_convert(0, :temperature, "K", "°C")
 
-      assert Unit.convert(100, "Cel", "[degF]") ==
+      assert Unit.convert!(100, "Cel", "[degF]") ==
                MetresisParity.metresis_convert(100, :temperature, "°C", "°F")
     end
 

@@ -79,46 +79,56 @@ defmodule Macaw.Data.UnitTest do
   describe "dimension/1 and factor/1" do
     @tag verifies: "units-dimension-factor"
     test "a code's dimension sums its components' and its factor is exact" do
-      assert Unit.dimension("kW.h") == %{mass: 1, length: 2, time: -2}
-      assert Unit.dimension("J") == Unit.dimension("kW.h")
-      assert Unit.dimension("{request}/s") == %{time: -1}
-      assert Unit.dimension("%") == %{}
-      assert Unit.dimension("m/s.s") == %{length: 1}
+      assert Unit.dimension!("kW.h") == %{mass: 1, length: 2, time: -2}
+      assert Unit.dimension!("J") == Unit.dimension!("kW.h")
+      assert Unit.dimension!("{request}/s") == %{time: -1}
+      assert Unit.dimension!("%") == %{}
+      assert Unit.dimension!("m/s.s") == %{length: 1}
 
-      assert Unit.factor("us") == {1, 1_000_000}
-      assert Unit.factor("kW.h") == {3_600_000_000, 1}
-      assert Unit.factor("MiBy") == {1_048_576, 1}
-      assert Unit.factor("bit") == {1, 8}
-      assert Unit.factor("%") == {1, 100}
-      assert Unit.factor("Cel") == nil
-      assert Unit.factor("Cel/s") == nil
+      assert Unit.factor!("us") == {1, 1_000_000}
+      assert Unit.factor!("kW.h") == {3_600_000_000, 1}
+      assert Unit.factor!("MiBy") == {1_048_576, 1}
+      assert Unit.factor!("bit") == {1, 8}
+      assert Unit.factor!("%") == {1, 100}
+      assert Unit.factor!("Cel") == nil
+      assert Unit.factor!("Cel/s") == nil
     end
 
     @tag verifies: "units-dimension-factor"
-    test "a string that is not a code raises" do
-      assert_raise ArgumentError, ~r/"sec"/, fn -> Unit.dimension("sec") end
-      assert_raise ArgumentError, fn -> Unit.factor("") end
+    test "a string that is not a code is parse/1's fault, never a raise" do
+      assert Unit.dimension("sec") == {:error, {:unknown_atom, "sec"}}
+      assert Unit.factor("") == {:error, :empty}
+      assert Unit.kind(:s) == {:error, {:syntax, ":s"}}
+      assert Unit.symbol("sec") == {:error, {:unknown_atom, "sec"}}
+      assert {:ok, %{time: 1}} = Unit.dimension("s")
+      assert_raise ArgumentError, ~r/"sec"/, fn -> Unit.dimension!("sec") end
+      assert_raise ArgumentError, fn -> Unit.factor!("") end
     end
   end
 
   describe "convert/3" do
     @tag verifies: "units-convert"
     test "values scale between codes of one dimension" do
-      assert Unit.convert(1500, "ms", "s") == 1.5
-      assert Unit.convert(1500, "us", "ms") == 1.5
-      assert Unit.convert(90, "s", "min") == 1.5
-      assert Unit.convert(1, "kW.h", "J") == 3.6e6
-      assert Unit.convert(8, "bit", "By") == 1.0
-      assert Unit.convert(1, "{request}/s", "/min") == 60.0
+      assert Unit.convert!(1500, "ms", "s") == 1.5
+      assert Unit.convert!(1500, "us", "ms") == 1.5
+      assert Unit.convert!(90, "s", "min") == 1.5
+      assert Unit.convert!(1, "kW.h", "J") == 3.6e6
+      assert Unit.convert!(8, "bit", "By") == 1.0
+      assert Unit.convert!(1, "{request}/s", "/min") == 60.0
     end
 
     @tag verifies: "units-convert"
     test "conversion between dimensions is refused, with the reason" do
-      assert_raise ArgumentError, ~r/cannot convert "s" to "By": .*different dimensions/, fn ->
-        Unit.convert(1, "s", "By")
+      assert Unit.convert(1, "s", "By") == {:error, {:dimension, "s", "By"}}
+      assert Unit.convert(1, "Cel/h", "K/h") == {:error, {:affine_in_term, "Cel/h"}}
+      assert Unit.convert(:one, "s", "s") == {:error, :not_a_number}
+      assert Unit.convert(1500, "ms", "s") == {:ok, 1.5}
+
+      assert_raise ArgumentError, ~r/"s" and "By" measure different dimensions/, fn ->
+        Unit.convert!(1, "s", "By")
       end
 
-      assert_raise ArgumentError, ~r/inside a term/, fn -> Unit.convert(1, "Cel/h", "K/h") end
+      assert_raise ArgumentError, ~r/inside a term/, fn -> Unit.convert!(1, "Cel/h", "K/h") end
     end
   end
 
@@ -148,14 +158,14 @@ defmodule Macaw.Data.UnitTest do
         "10.m" => "10·m"
       }
 
-      for {code, symbol} <- expected, do: assert(Unit.symbol(code) == symbol, code)
+      for {code, symbol} <- expected, do: assert(Unit.symbol!(code) == symbol, code)
     end
 
     @tag verifies: "units-symbol-written"
     test "annotations: true writes an annotation standing alone, never one on a unit" do
-      assert Unit.symbol("{request}/s", annotations: true) == "request/s"
-      assert Unit.symbol("{request}", annotations: true) == "request"
-      assert Unit.symbol("By{heap}", annotations: true) == "B"
+      assert Unit.symbol!("{request}/s", annotations: true) == "request/s"
+      assert Unit.symbol!("{request}", annotations: true) == "request"
+      assert Unit.symbol!("By{heap}", annotations: true) == "B"
     end
   end
 

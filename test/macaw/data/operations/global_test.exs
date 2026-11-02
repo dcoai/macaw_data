@@ -144,7 +144,7 @@ defmodule Macaw.Data.Operations.GlobalTest do
         1
       end
 
-    for line <- FFT.spectrum(Enum.map(sampled, & &1["v"]), every, window: :hann, detrend: false),
+    for line <- FFT.spectrum!(Enum.map(sampled, & &1["v"]), every, window: :hann, detrend: false),
         do: %{"frequency" => line.frequency, "magnitude" => line.magnitude}
   end
 

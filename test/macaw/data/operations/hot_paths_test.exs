@@ -281,7 +281,7 @@ defmodule Macaw.Data.Operations.HotPathsTest do
               max_runs: 500
             ) do
         state = Enum.reduce(values, Exact.zero(), &Exact.add(&2, &1))
-        f = Exact.value(state)
+        {:ok, f} = Exact.value(state)
 
         exact =
           Enum.reduce(values, 0, fn
@@ -305,7 +305,8 @@ defmodule Macaw.Data.Operations.HotPathsTest do
       {reductions, state} =
         Work.reductions(fn -> Enum.reduce(values, Exact.zero(), &Exact.add(&2, &1)) end)
 
-      assert is_float(Exact.value(state))
+      assert {:ok, f} = Exact.value(state)
+      assert is_float(f)
 
       assert reductions <= 5 * length(values),
              "#{reductions} reductions for #{length(values)} adds"

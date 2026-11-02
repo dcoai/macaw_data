@@ -42,7 +42,7 @@ defmodule Macaw.Data.Derived.Functions do
       iex> Doc.Sources.__derived__()
       [{:doubled, 1, "fn rows -> Enum.map(rows, &(&1 * 2)) end"}]
       iex> Macaw.Data.Derived.Functions.registry([Doc.Sources])
-      %{"doubled" => {Doc.Sources, 1}}
+      {:ok, %{"doubled" => {Doc.Sources, 1}}}
   """
 
   @typedoc "Each host function's name, its string, by the module that defines it and its arity."
@@ -146,42 +146,56 @@ defmodule Macaw.Data.Derived.Functions do
 
   @doc """
   The registry of `modules` (spec/02 §7): each function's name, its string, by the module
-  that defines it and its arity. Default closed: only the modules given are read. Raises
-  `ArgumentError` for a module without `__derived__/0` and for a name two modules define.
+  that defines it and its arity, `{:ok, registry}`. Default closed: only the modules given
+  are read. Every fault is answered (spec/00 §5): `{[module], :not_a_function_module}` for
+  a module without `__derived__/0`, `{[name], {:defined_twice, module, other}}` for a name
+  two modules define. `registry!/1` answers the registry or raises.
   """
-  @spec registry([module()]) :: registry()
+  @spec registry([module()]) :: {:ok, registry()} | {:error, [{list(), term()}, ...]}
   def registry(modules) when is_list(modules) do
-    modules
-    |> Enum.uniq()
-    |> Enum.reduce(%{}, fn module, registry ->
-      module
-      |> functions!()
-      |> Enum.reduce(registry, fn {name, arity, _source}, registry ->
-        register(registry, Atom.to_string(name), {module, arity})
+    {registry, faults} =
+      modules
+      |> Enum.uniq()
+      |> Enum.reduce({%{}, []}, fn module, {registry, faults} ->
+        case functions(module) do
+          {:ok, functions} ->
+            Enum.reduce(functions, {registry, faults}, fn {name, arity, _source}, acc ->
+              register(acc, Atom.to_string(name), {module, arity})
+            end)
+
+          :error ->
+            {registry, faults ++ [{[module], :not_a_function_module}]}
+        end
       end)
-    end)
+
+    if faults == [], do: {:ok, registry}, else: {:error, faults}
   end
 
-  defp functions!(module) do
-    if is_atom(module) and Code.ensure_loaded?(module) and
-         function_exported?(module, :__derived__, 0) do
-      module.__derived__()
-    else
-      raise ArgumentError,
-            "#{inspect(module)} is not a derived-source function module: " <>
-              "`use Macaw.Data.Derived.Functions` defines __derived__/0 (spec/02 §7)"
+  def registry(_modules), do: {:error, [{[], {:type, :modules}}]}
+
+  @doc "As `registry/1`, the registry alone, raising `ArgumentError` naming the faults."
+  @spec registry!([module()]) :: registry()
+  def registry!(modules) do
+    case registry(modules) do
+      {:ok, registry} ->
+        registry
+
+      {:error, faults} ->
+        raise ArgumentError, "not a registry of derived-source functions: #{inspect(faults)}"
     end
   end
 
-  defp register(registry, name, {module, _arity} = entry) do
-    case Map.fetch(registry, name) do
-      :error ->
-        Map.put(registry, name, entry)
+  defp functions(module) do
+    if is_atom(module) and Code.ensure_loaded?(module) and
+         function_exported?(module, :__derived__, 0),
+       do: {:ok, module.__derived__()},
+       else: :error
+  end
 
-      {:ok, {other, _arity}} ->
-        raise ArgumentError,
-              "derived-source function #{name} is defined by both #{inspect(other)} and " <>
-                "#{inspect(module)}: a derived source names one function (spec/02 §7)"
+  defp register({registry, faults}, name, {module, _arity} = entry) do
+    case Map.fetch(registry, name) do
+      :error -> {Map.put(registry, name, entry), faults}
+      {:ok, {other, _arity}} -> {registry, faults ++ [{[name], {:defined_twice, other, module}}]}
     end
   end
 end

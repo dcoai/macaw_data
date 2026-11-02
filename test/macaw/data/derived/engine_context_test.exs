@@ -66,7 +66,7 @@ defmodule Macaw.Data.Derived.EngineContextTest do
     {:ok, engine} =
       Engine.new(
         sources,
-        [sources: [:hosts], debounce: 0, functions: Functions.registry([Sources])] ++ opts
+        [sources: [:hosts], debounce: 0, functions: Functions.registry!([Sources])] ++ opts
       )
 
     engine
@@ -284,9 +284,11 @@ defmodule Macaw.Data.Derived.EngineContextTest do
     test "the bounds are tighten-only, and the registry default closed" do
       a = stored(:a, "fn %{hosts: rows} -> [%{n: Enum.count(rows)}] end")
 
-      assert_raise ArgumentError, ~r/never raised/, fn ->
-        Engine.new(%{[:a] => a}, sources: [:hosts], max_reductions: 100_000_001)
-      end
+      assert Engine.new(%{[:a] => a}, sources: [:hosts], max_reductions: 100_000_001) ==
+               {:error, [{[], [:max_reductions], {:bound, :max_reductions, 100_000_000}}]}
+
+      assert {:error, [{[], [:packages, Enum], :not_a_package}]} =
+               Engine.new(%{[:a] => a}, sources: [:hosts], packages: [Enum])
 
       f = host(:f, :seen)
 

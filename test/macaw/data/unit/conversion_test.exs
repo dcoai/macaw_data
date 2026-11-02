@@ -49,13 +49,13 @@ defmodule Macaw.Data.Unit.ConversionTest do
       assert Unit.conversion("[degF]", "K") == {:ok, {{5, 9}, {45_967, 180}}}
       assert Unit.conversion("mK", "Cel") == {:ok, {{1, 1000}, {-5463, 20}}}
 
-      assert Unit.convert(100, "Cel", "[degF]") == 212.0
-      assert Unit.convert(-40, "Cel", "[degF]") == -40.0
-      assert Unit.convert(-40, "[degF]", "Cel") == -40.0
-      assert Unit.convert(0, "K", "Cel") == -273.15
-      assert Unit.convert(0, "K", "[degF]") == -459.67
-      assert Unit.convert(32, "[degF]", "Cel") == 0.0
-      assert Unit.convert(37, "Cel", "[degF]") == 98.6
+      assert Unit.convert!(100, "Cel", "[degF]") == 212.0
+      assert Unit.convert!(-40, "Cel", "[degF]") == -40.0
+      assert Unit.convert!(-40, "[degF]", "Cel") == -40.0
+      assert Unit.convert!(0, "K", "Cel") == -273.15
+      assert Unit.convert!(0, "K", "[degF]") == -459.67
+      assert Unit.convert!(32, "[degF]", "Cel") == 0.0
+      assert Unit.convert!(37, "Cel", "[degF]") == 98.6
     end
 
     @tag verifies: "units-convert"
@@ -90,8 +90,11 @@ defmodule Macaw.Data.Unit.ConversionTest do
       assert Unit.conversion("{iso4217:EUR}/kW/h", "{iso4217:EUR}/MW/h") ==
                {:ok, {{1000, 1}, {0, 1}}}
 
+      assert Unit.convert(1, "{iso4217:USD}", "{iso4217:EUR}") ==
+               {:error, {:currency, "{iso4217:USD}", "{iso4217:EUR}"}}
+
       assert_raise ArgumentError, ~r/exchange rate is data/, fn ->
-        Unit.convert(1, "{iso4217:USD}", "{iso4217:EUR}")
+        Unit.convert!(1, "{iso4217:USD}", "{iso4217:EUR}")
       end
     end
 
@@ -117,7 +120,7 @@ defmodule Macaw.Data.Unit.ConversionTest do
               to <- member_of(group),
               value <- float(min: -1.0e6, max: 1.0e6)
             ) do
-        back = value |> Unit.convert(from, to) |> Unit.convert(to, from)
+        back = value |> Unit.convert!(from, to) |> Unit.convert!(to, from)
         assert_in_delta back, value, max(abs(value) * 1.0e-12, 1.0e-9), "#{from} ⇄ #{to}"
       end
     end
@@ -145,7 +148,7 @@ defmodule Macaw.Data.Unit.ConversionTest do
             ) do
         assert {:error, {reason, ^from, ^to}} = Unit.conversion(from, to)
         assert reason in [:dimension, :logarithmic]
-        assert_raise ArgumentError, fn -> Unit.convert(1, from, to) end
+        assert Unit.convert(1, from, to) == {:error, {reason, from, to}}
       end
     end
   end

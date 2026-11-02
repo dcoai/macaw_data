@@ -248,6 +248,15 @@ defmodule Macaw.Data.Source.Conformance.Words do
   def words({:pushed_after_unsubscribe, count}),
     do: "#{count} message(s) arrived after unsubscribe/2"
 
+  def words({:unknown_check, checks}), do: "not a conformance check: one of #{inspect(checks)}"
+  def words({:option, key}), do: "#{inspect(key)} is not an option the conformance kit takes"
+
+  def words({:request, ask}),
+    do:
+      "a conformance request is a keyword list of params, window, box, region, latest, " <>
+        "order and as_of, not #{inspect(ask)}"
+
+  def words({:viewers, :two}), do: "viewers: names two viewers, the first and the second"
   def words(other), do: inspect(other)
 
   defp call({:fetch, {:unreadable, %Request{} = request}}),

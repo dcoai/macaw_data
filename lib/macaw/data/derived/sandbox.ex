@@ -47,7 +47,7 @@ defmodule Macaw.Data.Derived.Sandbox do
   @type fault :: {pos_integer() | nil, term()}
 
   @typedoc "What a call can end in besides a value (spec/02 §6.4)."
-  @type kind :: :reductions | :hung | :memory | :raised
+  @type kind :: :reductions | :hung | :memory | :raised | :options
 
   @doc "As `check/2` with no options."
   @spec check(String.t()) :: {:ok, Macro.t()} | {:error, [fault(), ...]}
@@ -67,7 +67,21 @@ defmodule Macaw.Data.Derived.Sandbox do
   """
   @spec check(String.t(), keyword()) :: {:ok, Macro.t()} | {:error, [fault(), ...]}
   def check(source, opts) when is_binary(source) and is_list(opts) do
-    Checker.check(source, opts |> defaults() |> Keyword.validate!(@check_opts) |> tightened!())
+    with {:ok, opts} <- options(defaults(opts), @check_opts), do: Checker.check(source, opts)
+  end
+
+  # The options as given, each a known one and every bound at most its default:
+  # `{:ok, opts}`, or every fault, `{nil, {:option, key}}` for an option not taken and
+  # `{nil, {:bound, key, ceiling}}` for a bound above its ceiling (spec/02 §6.4).
+  defp options(opts, known) do
+    unknown =
+      for {key, _value} <- opts, not Keyword.has_key?(known, key), do: {nil, {:option, key}}
+
+    case {unknown, tightened(opts)} do
+      {[], {:ok, opts}} -> {:ok, Keyword.merge(known, opts)}
+      {unknown, {:ok, _opts}} -> {:error, unknown}
+      {unknown, {:error, faults}} -> {:error, unknown ++ faults}
+    end
   end
 
   # The registry is the library's own package unless the caller gives one, or `nil`.
@@ -96,17 +110,16 @@ defmodule Macaw.Data.Derived.Sandbox do
   """
   @spec compile(String.t(), keyword()) :: {:ok, Compiled.t()} | {:error, [fault(), ...]}
   def compile(source, opts) when is_binary(source) and is_list(opts) do
-    opts = opts |> defaults() |> Keyword.validate!(@check_opts ++ @run_opts) |> tightened!()
-
-    match?(%Registry{}, opts[:operations]) ||
-      raise ArgumentError,
-            "compile needs the registry its Macaw.Data.Ops calls run against, got " <>
-              "operations: #{inspect(opts[:operations])} (spec/04 §6.1)"
-
-    with {:ok, quoted} <- Checker.check(source, Keyword.take(opts, Keyword.keys(@check_opts))) do
+    with {:ok, opts} <- options(defaults(opts), @check_opts ++ @run_opts),
+         :ok <- registry(opts[:operations]),
+         {:ok, quoted} <- Checker.check(source, Keyword.take(opts, Keyword.keys(@check_opts))) do
       evaluate(source, quoted, opts)
     end
   end
+
+  # The registry a `Macaw.Data.Ops` call runs against (spec/04 §6.1): a compile needs one.
+  defp registry(%Registry{}), do: :ok
+  defp registry(_other), do: {:error, [{nil, {:operations, :registry}}]}
 
   # Map reads become `Sandbox.Runtime.get/2`, by spelling, so an atom receiver never calls a
   # function and a field written as a string reaches an atom key (visualize D-195); the
@@ -246,42 +259,55 @@ defmodule Macaw.Data.Derived.Sandbox do
   heap passed `max_heap:` (`10_000_000` words) and the VM killed it, `{:error, :raised,
   module}` with the exception's module when it raised. The process is spawned with its heap
   limit set and monitored; a killed process is waited for before the call returns. Each
-  bound may be lowered, never raised: a value above its default is `ArgumentError`.
+  bound may be lowered, never raised: an option not taken, or a value above its default,
+  is `{:error, :options, faults}`, `{nil, {:option, key}}` and `{nil, {:bound, key,
+  ceiling}}`, before anything runs (spec/00 §5).
   """
   @spec run(Compiled.t() | function(), list(), keyword()) ::
           {:ok, term()} | {:error, kind(), term()}
   def run(function, args, opts) when is_list(args) and is_list(opts) do
-    opts = opts |> Keyword.validate!(@run_opts) |> tightened!()
+    case options(opts, @run_opts) do
+      {:ok, opts} ->
+        fun =
+          case function do
+            %Compiled{fun: fun} -> fun
+            fun when is_function(fun) -> fun
+          end
 
-    fun =
-      case function do
-        %Compiled{fun: fun} -> fun
-        fun when is_function(fun) -> fun
-      end
+        case bounded(fn -> apply(fun, args) end, opts) do
+          {:ok, value} -> {:ok, value}
+          {:error, kind, detail, _reason} -> {:error, kind, detail}
+        end
 
-    case bounded(fn -> apply(fun, args) end, opts) do
-      {:ok, value} -> {:ok, value}
-      {:error, kind, detail, _reason} -> {:error, kind, detail}
+      {:error, faults} ->
+        {:error, :options, faults}
     end
   end
 
   @doc false
-  # Every bound given at most its default, else `ArgumentError` (spec/02 §6.4); the
-  # engine checks its options with it when it is defined.
+  # Every bound given at most its default (spec/02 §6.4): `{:ok, opts}`, or every bound
+  # above its ceiling, `{nil, {:bound, key, ceiling}}`; the engine checks its options with
+  # it when it is defined.
+  @spec tightened(keyword()) :: {:ok, keyword()} | {:error, [fault(), ...]}
+  def tightened(opts) do
+    faults =
+      for {key, ceiling} <- @bounds,
+          Keyword.has_key?(opts, key),
+          value = Keyword.get(opts, key),
+          not (is_integer(value) and value > 0 and value <= ceiling),
+          do: {nil, {:bound, key, ceiling}}
+
+    if faults == [], do: {:ok, opts}, else: {:error, faults}
+  end
+
+  @doc false
+  # As `tightened/1`, the options alone, raising `ArgumentError` in `format_error/1`'s words.
   @spec tightened!(keyword()) :: keyword()
   def tightened!(opts) do
-    for {key, ceiling} <- @bounds, Keyword.has_key?(opts, key) do
-      case Keyword.fetch!(opts, key) do
-        n when is_integer(n) and n > 0 and n <= ceiling ->
-          :ok
-
-        other ->
-          raise ArgumentError,
-                "#{key}: is a positive integer at most #{ceiling}, which may be lowered, never raised, got #{inspect(other)} (spec/02 §6.4)"
-      end
+    case tightened(opts) do
+      {:ok, opts} -> opts
+      {:error, faults} -> raise ArgumentError, Enum.map_join(faults, "; ", &format_error/1)
     end
-
-    opts
   end
 
   # The bounded runner (`Macaw.Data.Bounded`): a monitored process with its heap limit set at
@@ -339,6 +365,13 @@ defmodule Macaw.Data.Derived.Sandbox do
     do: "#{name} is a name this node has never seen; use a schema's field or value, or rename it"
 
   defp words({:syntax, message}), do: "does not parse: #{message}"
+  defp words({:option, key}), do: "#{inspect(key)} is not an option the sandbox takes"
+
+  defp words({:bound, key, ceiling}),
+    do: "#{key} is a positive integer at most #{ceiling}, which may be lowered, never raised"
+
+  defp words({:operations, :registry}),
+    do: "a compile needs the registry its Macaw.Data.Ops calls run against (spec/04 §6.1)"
 
   defp words({:not_a_function, arity}), do: "the source must be one fn taking #{arguments(arity)}"
 

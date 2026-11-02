@@ -51,7 +51,7 @@ defmodule Macaw.Data.Derived.EngineAnswersTest do
 
   defp engine(sources) do
     {:ok, engine} =
-      Engine.new(sources, sources: [:in], debounce: 0, functions: Functions.registry([Host]))
+      Engine.new(sources, sources: [:in], debounce: 0, functions: Functions.registry!([Host]))
 
     engine
   end

@@ -92,8 +92,10 @@ defmodule Macaw.Data.Operations.Cache do
         &fill/2
       )
 
-    output = Step.merge(module, node, partials, table, Enum.map(parts, & &1.key), context)
-    {:ok, output, %__MODULE__{parts: held, last: last}}
+    case Step.merge(module, node, partials, table, Enum.map(parts, & &1.key), context) do
+      %Table{} = output -> {:ok, output, %__MODULE__{parts: held, last: last}}
+      {:error, {_key, _reason}} = error -> error
+    end
   end
 
   # How a part is come by: held under its key, updated by inverse from its base's part

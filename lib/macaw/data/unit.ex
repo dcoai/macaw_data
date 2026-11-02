@@ -41,10 +41,10 @@ defmodule Macaw.Data.Unit do
       iex> Macaw.Data.Unit.parse("sec")
       {:error, {:unknown_atom, "sec"}}
 
-      iex> Macaw.Data.Unit.symbol("By/s")
+      iex> Macaw.Data.Unit.symbol!("By/s")
       "B/s"
 
-      iex> Macaw.Data.Unit.convert(1500, "ms", "s")
+      iex> Macaw.Data.Unit.convert!(1500, "ms", "s")
       1.5
 
       iex> Macaw.Data.Unit.parse_alias("mph")
@@ -303,44 +303,56 @@ defmodule Macaw.Data.Unit do
   def valid?(_code), do: false
 
   @doc """
-  The dimension of a code: each base dimension's exponent, `%{}` when dimensionless.
-  Raises `ArgumentError` for a string that is not a code.
+  The dimension of a code: `{:ok, dimension}`, each base dimension's exponent, `%{}` when
+  dimensionless; `parse/1`'s `{:error, reason}` for a string that is not a code
+  (spec/00 §5). `dimension!/1` answers the dimension or raises.
 
   ## Examples
 
       iex> Macaw.Data.Unit.dimension("[psi]")
-      %{mass: 1, length: -1, time: -2}
-
-      iex> Macaw.Data.Unit.dimension("dB[SPL]")
+      {:ok, %{mass: 1, length: -1, time: -2}}
+      iex> Macaw.Data.Unit.dimension!("dB[SPL]")
       %{sound_pressure_level: 1}
+      iex> Macaw.Data.Unit.dimension("furlong")
+      {:error, {:unknown_atom, "furlong"}}
 
   """
-  @spec dimension(code()) :: dimension()
-  def dimension(code), do: code |> parse!() |> dims()
+  @spec dimension(code()) :: {:ok, dimension()} | {:error, reason()}
+  def dimension(code), do: with({:ok, components} <- parsed(code), do: {:ok, dims(components)})
+
+  @doc "As `dimension/1`, the dimension alone, raising `ArgumentError` in `format_error/1`'s words."
+  @spec dimension!(code()) :: dimension()
+  def dimension!(code), do: value!(dimension(code))
 
   @doc """
   The exact factor of a code to its base: `{numerator, denominator}`, or
   `{numerator, denominator, k}` — that rational times πᵏ — for a code holding the degree,
-  or `nil` for a code holding an affine unit (`Cel`, `[degF]`). Raises `ArgumentError`
-  for a string that is not a code.
+  or `nil` for a code holding an affine unit (`Cel`, `[degF]`), as `{:ok, factor}`;
+  `parse/1`'s `{:error, reason}` for a string that is not a code. `factor!/1` answers the
+  factor or raises.
 
   ## Examples
 
       iex> Macaw.Data.Unit.factor("[ft_i]")
-      {381, 1250}
-
-      iex> Macaw.Data.Unit.factor("deg")
+      {:ok, {381, 1250}}
+      iex> Macaw.Data.Unit.factor!("deg")
       {1, 180, 1}
 
   """
-  @spec factor(code()) :: exact() | nil
+  @spec factor(code()) :: {:ok, exact() | nil} | {:error, reason()}
   def factor(code) do
-    case exact(code) do
-      nil -> nil
-      {n, d, 0} -> {n, d}
-      exact -> exact
+    with {:ok, components} <- parsed(code) do
+      case exact_of(components) do
+        nil -> {:ok, nil}
+        {n, d, 0} -> {:ok, {n, d}}
+        exact -> {:ok, exact}
+      end
     end
   end
+
+  @doc "As `factor/1`, the factor alone, raising `ArgumentError` in `format_error/1`'s words."
+  @spec factor!(code()) :: exact() | nil
+  def factor!(code), do: value!(factor(code))
 
   @doc """
   The ISO 4217 code a code is in when it is a currency alone — `{iso4217:USD}` is
@@ -370,30 +382,42 @@ defmodule Macaw.Data.Unit do
 
   @doc """
   An ISO 4217 code's minor units — the decimals an amount in it is written to — or `nil`
-  for a code with none (`XAU`). Raises `ArgumentError` for a code not in the table.
+  for a code with none (`XAU`), as `{:ok, units}`; `{:error, {:unknown_currency, code}}`
+  for a code not in the table. `minor_units!/1` answers the units or raises.
 
   ## Examples
 
-      iex> Enum.map(~w(USD JPY BHD XAU), &Macaw.Data.Unit.minor_units/1)
+      iex> Enum.map(~w(USD JPY BHD XAU), &Macaw.Data.Unit.minor_units!/1)
       [2, 0, 3, nil]
+      iex> Macaw.Data.Unit.minor_units("ZZZ")
+      {:error, {:unknown_currency, "ZZZ"}}
 
   """
-  @spec minor_units(String.t()) :: non_neg_integer() | nil
+  @spec minor_units(String.t()) :: {:ok, non_neg_integer() | nil} | {:error, reason()}
   def minor_units(iso), do: Currency.minor_units(iso)
+
+  @doc "As `minor_units/1`, the units alone, raising `ArgumentError` in `format_error/1`'s words."
+  @spec minor_units!(String.t()) :: non_neg_integer() | nil
+  def minor_units!(iso), do: value!(minor_units(iso))
 
   @doc """
   How a code's values relate to its base (spec/03 §2): `:affine` for a code holding
-  `Cel` or `[degF]`, `:logarithmic` for one holding `B` or `B[SPL]`, else `:linear`.
-  Raises `ArgumentError` for a string that is not a code.
+  `Cel` or `[degF]`, `:logarithmic` for one holding `B` or `B[SPL]`, else `:linear`, as
+  `{:ok, kind}`; `parse/1`'s `{:error, reason}` for a string that is not a code.
+  `kind!/1` answers the kind or raises.
 
   ## Examples
 
       iex> Macaw.Data.Unit.kind("dB")
-      :logarithmic
+      {:ok, :logarithmic}
 
   """
-  @spec kind(code()) :: kind()
-  def kind(code), do: code |> parse!() |> kind_of()
+  @spec kind(code()) :: {:ok, kind()} | {:error, reason()}
+  def kind(code), do: with({:ok, components} <- parsed(code), do: {:ok, kind_of(components)})
+
+  @doc "As `kind/1`, the kind alone, raising `ArgumentError` in `format_error/1`'s words."
+  @spec kind!(code()) :: kind()
+  def kind!(code), do: value!(kind(code))
 
   @doc """
   The exact conversion from one code to another (spec/03 §6, D-155):
@@ -437,33 +461,36 @@ defmodule Macaw.Data.Unit do
   @doc """
   A value in `from` written in `to` (spec/03 §6): `value × scale + offset` of
   `conversion/2`, as a float — the scale and offset exact, and the arithmetic rounded
-  once for an integer value. Raises `ArgumentError` naming the reason for a pair
-  `conversion/2` refuses.
+  once for an integer value, as `{:ok, float}`; `{:error, reason}` for a pair
+  `conversion/2` refuses, and `{:error, :not_a_number}` for a value that is no number
+  (spec/00 §5). `convert!/3` answers the float or raises.
 
   ## Examples
 
       iex> Macaw.Data.Unit.convert(2_500_000, "By", "MBy")
-      2.5
+      {:ok, 2.5}
 
-      iex> Macaw.Data.Unit.convert(100, "Cel", "[degF]")
+      iex> Macaw.Data.Unit.convert!(100, "Cel", "[degF]")
       212.0
 
-      iex> Macaw.Data.Unit.convert(30, "dB", "B")
+      iex> Macaw.Data.Unit.convert!(30, "dB", "B")
       3.0
 
-  """
-  @spec convert(number(), code(), code()) :: float()
-  def convert(value, from, to) when is_number(value) do
-    case conversion(from, to) do
-      {:ok, {scale, offset}} ->
-        apply_conversion(value, scale, offset)
+      iex> Macaw.Data.Unit.convert(1, "By", "s")
+      {:error, {:dimension, "By", "s"}}
 
-      {:error, reason} ->
-        raise ArgumentError,
-              "cannot convert #{inspect(from)} to #{inspect(to)}: #{format_error(reason)} " <>
-                "(spec/03 §6)"
-    end
+  """
+  @spec convert(number(), code(), code()) :: {:ok, float()} | {:error, term()}
+  def convert(value, from, to) when is_number(value) do
+    with {:ok, {scale, offset}} <- conversion(from, to),
+         do: {:ok, apply_conversion(value, scale, offset)}
   end
+
+  def convert(_value, _from, _to), do: {:error, :not_a_number}
+
+  @doc "As `convert/3`, the float alone, raising `ArgumentError` in `format_error/1`'s words."
+  @spec convert!(number(), code(), code()) :: float()
+  def convert!(value, from, to), do: value!(convert(value, from, to))
 
   @doc """
   The code a person means by a symbol they typed (spec/03 §3, D-155): `°C`, `lb`,
@@ -536,6 +563,7 @@ defmodule Macaw.Data.Unit do
     do: "#{inspect(code)} is not an ISO 4217 code of the currency extension"
 
   def format_error(:empty), do: "a unit code is not empty"
+  def format_error(:not_a_number), do: "a value converts only when it is a number"
   def format_error({:syntax, rest}), do: "a UCUM code does not read at #{inspect(rest)}"
 
   def format_error({:unknown_atom, atom}),
@@ -557,16 +585,24 @@ defmodule Macaw.Data.Unit do
   ## Examples
 
       iex> Macaw.Data.Unit.symbol("us")
-      "µs"
+      {:ok, "µs"}
 
-      iex> Macaw.Data.Unit.symbol("{request}/s", annotations: true)
+      iex> Macaw.Data.Unit.symbol!("{request}/s", annotations: true)
       "request/s"
 
   """
-  @spec symbol(code(), keyword()) :: String.t()
+  @spec symbol(code(), keyword()) :: {:ok, String.t()} | {:error, reason()}
   def symbol(code, opts \\ []) do
+    with {:ok, components} <- parsed(code), do: {:ok, symbol_of(components, opts)}
+  end
+
+  @doc "As `symbol/2`, the symbol alone, raising `ArgumentError` in `format_error/1`'s words."
+  @spec symbol!(code(), keyword()) :: String.t()
+  def symbol!(code, opts \\ []), do: value!(symbol(code, opts))
+
+  defp symbol_of(components, opts) do
     annotations? = Keyword.get(opts, :annotations, false)
-    {up, down} = code |> parse!() |> Enum.split_with(&(&1.exponent > 0))
+    {up, down} = Enum.split_with(components, &(&1.exponent > 0))
     numerator = up |> Enum.map(&written(&1, annotations?)) |> Enum.reject(&(&1 == ""))
     denominator = down |> Enum.map(&written(&1, annotations?)) |> Enum.reject(&(&1 == ""))
 
@@ -750,21 +786,17 @@ defmodule Macaw.Data.Unit do
 
   defp split_at(code, n), do: {binary_part(code, 0, n), binary_part(code, n, byte_size(code) - n)}
 
-  defp parse!(code) do
-    case parse(code) do
-      {:ok, components} ->
-        components
+  # A code's components, or why it is none; a term that is no string reads as no code.
+  defp parsed(code) when is_binary(code), do: parse(code)
+  defp parsed(other), do: {:error, {:syntax, inspect(other)}}
 
-      {:error, reason} ->
-        raise ArgumentError,
-              "not a UCUM code Macaw.Data.Unit reads: #{inspect(code)} (#{inspect(reason)})"
-    end
-  end
+  # The bang twins' one raise: their twin's reason in `format_error/1`'s words.
+  defp value!({:ok, value}), do: value
+  defp value!({:error, reason}), do: raise(ArgumentError, format_error(reason))
 
   # -- factors ------------------------------------------------------------------------
 
   # A code's factor as `{n, d, k}`, n/d·πᵏ, or `nil` when it holds an affine unit.
-  defp exact(code), do: code |> parse!() |> exact_of()
 
   defp component_factor(%{atom: nil, factor: nil}), do: {1, 1, 0}
   defp component_factor(%{atom: nil, factor: n}), do: {n, 1, 0}

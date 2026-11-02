@@ -47,7 +47,7 @@ defmodule Macaw.Data.Derived.EngineLoadTest do
       Engine.new(%{["a"] => a},
         sources: [:hosts],
         debounce: 0,
-        functions: Functions.registry([Blocked]),
+        functions: Functions.registry!([Blocked]),
         max_reductions: 1_000_000,
         timeout: 1_000,
         max_heap: 200_000

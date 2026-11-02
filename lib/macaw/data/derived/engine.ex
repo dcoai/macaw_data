@@ -106,8 +106,14 @@ defmodule Macaw.Data.Derived.Engine do
         max_heap: 10_000_000
       )
 
-    run_opts =
-      opts |> Keyword.take([:max_reductions, :timeout, :max_heap]) |> Sandbox.tightened!()
+    {run_opts, bound_errors} =
+      case opts |> Keyword.take([:max_reductions, :timeout, :max_heap]) |> Sandbox.tightened() do
+        {:ok, run_opts} ->
+          {run_opts, []}
+
+        {:error, faults} ->
+          {[], for({nil, {:bound, key, _} = why} <- faults, do: {[], [key], why})}
+      end
 
     sources = opts[:sources] |> Enum.map(&Names.name/1) |> Enum.uniq()
     functions = opts[:functions]
@@ -121,6 +127,7 @@ defmodule Macaw.Data.Derived.Engine do
       end)
 
     errors = if errors == [], do: cycles(inputs), else: errors
+    errors = bound_errors ++ errors
 
     # The packages' registry (spec/04 §2): a fault of it is the engine's, under
     # `[:packages]` at the root.
