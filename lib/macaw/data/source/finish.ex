@@ -18,10 +18,11 @@ defmodule Macaw.Data.Source.Finish do
   The budget never widens the window: finishing only removes rows. A delivery that needs
   none of it comes back as it is.
 
-  **A table stays a table, finished on its columns** (macaw_data#105): `:window` and
-  `:latest` read the columns they decide by and keep rows of the table's chunks, as views
-  or gathered by their slots, making no row; they keep exactly the rows finishing the
-  table's rows would keep. Any other delivery is finished over its rows, read by name.
+  **A table stays a table, finished on its columns** (macaw_data#105): every step reads
+  the columns it decides by and keeps rows of the table's chunks, as views or gathered by
+  their slots, and never reads the table's rows. An order under a budget that keeps its
+  head gathers that head alone. Each step keeps exactly the rows finishing the table's
+  rows would keep. Any other delivery is finished over its rows, read by name.
 
   The pure rules of running sources (spec/01 §6) are here too: `ceiling/2` clamps a
   budget to the host's ceiling, and `pooled/1` is the one budget a pooled fetch asks for,
@@ -71,25 +72,19 @@ defmodule Macaw.Data.Source.Finish do
            end),
          {:ok, d} <-
            step(d, :box in supports or request.box == nil, fn d ->
-             with {:ok, rows} <- Delivery.named_rows(d),
-                  do:
-                    {:ok,
-                     d
-                     |> rebuild(Window.trim_box(rows, field, request.box))
-                     |> serve(:window, request.box)}
+             with {:ok, d} <- boxed(d, field, request.box),
+                  do: {:ok, serve(d, :window, request.box)}
            end),
          {:ok, d} <-
-           step(d, :region in supports or request.region == nil, fn d ->
-             with {:ok, rows} <- Delivery.named_rows(d),
-                  do: {:ok, rebuild(d, Window.trim_region(rows, request.region))}
-           end),
+           step(d, :region in supports or request.region == nil, &region(&1, request.region)),
          {:ok, d} <-
            step(d, :latest in supports or not request.latest, &latest(&1, field, schema)),
          {:ok, d} <-
            step(d, :order in supports or request.order == [], fn d ->
-             with {:ok, rows} <- Delivery.named_rows(d),
-                  {:ok, sorted} <- Order.sort(rows, request.order, schema),
-                  do: {:ok, d |> rebuild(sorted) |> serve(:ordered, ordered_by(d.served))}
+             by = ordered_by(d.served)
+
+             with {:ok, d} <- ordered(d, request.order, schema, head(supports, request.budget)),
+                  do: {:ok, serve(d, :ordered, by)}
            end) do
       step(
         d,
@@ -157,6 +152,60 @@ defmodule Macaw.Data.Source.Finish do
          do: {:ok, rebuild(delivery, Window.trim(rows, field, window))}
   end
 
+  # The rows whose `field` lies in the box.
+  defp boxed(%Delivery{rows: %Table{} = table} = delivery, field, box) do
+    table = Subset.ready(table)
+    {:ok, %{delivery | rows: Subset.at(table, Columns.box(table, field, box))}}
+  end
+
+  defp boxed(%Delivery{} = delivery, field, box) do
+    with {:ok, rows} <- Delivery.named_rows(delivery),
+         do: {:ok, rebuild(delivery, Window.trim_box(rows, field, box))}
+  end
+
+  # The rows whose every ranged field lies in its range.
+  defp region(%Delivery{rows: %Table{} = table} = delivery, region) do
+    table = Subset.ready(table)
+    {:ok, %{delivery | rows: Subset.at(table, Columns.region(table, region))}}
+  end
+
+  defp region(%Delivery{} = delivery, region) do
+    with {:ok, rows} <- Delivery.named_rows(delivery),
+         do: {:ok, rebuild(delivery, Window.trim_region(rows, region))}
+  end
+
+  # The budget an ordered table keeps the head of, when the budget step will (it is not
+  # the source's), so the order step gathers that head alone; `nil` for none.
+  defp head(supports, budget) when is_integer(budget) and budget > 0,
+    do: if(:budget in supports, do: nil, else: budget)
+
+  defp head(_supports, _budget), do: nil
+
+  # The rows in the order. A table's row indexes are sorted by its columns and the rows
+  # gathered in that order, only its `head` when the budget will keep no more: the budget
+  # step's own cut, `reduced_by: :runtime`, made before the rows it drops are gathered.
+  defp ordered(%Delivery{rows: %Table{} = table} = delivery, order, schema, head) do
+    table = Subset.ready(table)
+
+    with {:ok, sorted} <- Columns.ordered(table, order, schema) do
+      case head do
+        n when is_integer(n) and length(sorted) > n ->
+          {:ok,
+           %{delivery | rows: Subset.at(table, Enum.take(sorted, n))}
+           |> serve(:reduced_by, :runtime)}
+
+        _all ->
+          {:ok, %{delivery | rows: Subset.at(table, sorted)}}
+      end
+    end
+  end
+
+  defp ordered(%Delivery{} = delivery, order, schema, _head) do
+    with {:ok, rows} <- Delivery.named_rows(delivery),
+         {:ok, sorted} <- Order.sort(rows, order, schema),
+         do: {:ok, rebuild(delivery, sorted)}
+  end
+
   # Each identity's latest row by the window field.
   defp latest(%Delivery{rows: %Table{} = table} = delivery, field, schema) do
     table = Subset.ready(table)
@@ -178,16 +227,8 @@ defmodule Macaw.Data.Source.Finish do
 
   defp serve(delivery, key, value), do: %{delivery | served: Map.put(delivery.served, key, value)}
 
-  # Fewer rows, in the delivery's form: a table the same columns in their order and of
-  # their types; any other source the rows themselves, named (macaw#185).
-  defp rebuild(%Delivery{rows: %Table{} = table} = delivery, rows) do
-    columns =
-      for name <- Table.names(table),
-          do: {name, Table.column_type(table, name), Enum.map(rows, &Map.get(&1, name))}
-
-    %{delivery | rows: Table.new!(columns)}
-  end
-
+  # Fewer rows of a delivery that is no table: the rows themselves, named (macaw#185). A
+  # table keeps rows of its chunks instead (`Finish.Columns`).
   defp rebuild(%Delivery{} = delivery, rows), do: %{delivery | rows: rows, names: nil}
 
   @doc """
@@ -245,10 +286,10 @@ defmodule Macaw.Data.Source.Finish do
 
   defp reduced(%Delivery{served: %{ordered: by}} = delivery, _schema, budget, _reducer, _registry)
        when by != nil and is_integer(budget) and budget > 0 do
-    with {:ok, rows} <- Delivery.named_rows(delivery) do
-      if length(rows) <= budget,
+    with {:ok, form} <- form(delivery) do
+      if size(form) <= budget,
         do: {:ok, delivery},
-        else: {:ok, delivery |> rebuild(Enum.take(rows, budget)) |> serve(:reduced_by, :runtime)}
+        else: {:ok, delivery |> keep(form, 0..(budget - 1)) |> serve(:reduced_by, :runtime)}
     end
   end
 
@@ -257,46 +298,92 @@ defmodule Macaw.Data.Source.Finish do
     clock = Schema.window_field(schema)
     numbers = for {name, %{type: :number}} <- schema.fields, name != clock, do: name
 
-    with {:ok, rows} <- Delivery.named_rows(delivery) do
-      if length(rows) <= budget or numbers == [] do
+    with {:ok, form} <- form(delivery) do
+      if size(form) <= budget or numbers == [] do
         {:ok, delivery}
       else
-        with {:ok, kept} <-
-               kept(rows, schema, Enum.sort_by(numbers, &to_string/1), budget, reducer, registry),
-             do: {:ok, delivery |> rebuild(at_most(kept, budget)) |> serve(:reduced_by, :runtime)}
+        numbers = Enum.sort_by(numbers, &to_string/1)
+
+        with {:ok, kept} <- kept(form, schema, numbers, budget, reducer, registry),
+             do:
+               {:ok,
+                delivery |> keep(form, at_most(kept, budget)) |> serve(:reduced_by, :runtime)}
       end
     end
   end
 
-  defp kept(rows, schema, numbers, budget, method, registry) do
+  # What the budget reads of a delivery: a table as it is, any other the rows by name.
+  defp form(%Delivery{rows: %Table{} = table}), do: {:ok, {:table, Subset.ready(table)}}
+
+  defp form(%Delivery{} = delivery) do
+    with {:ok, rows} <- Delivery.named_rows(delivery), do: {:ok, {:rows, rows}}
+  end
+
+  defp size({:table, table}), do: Table.size(table)
+  defp size({:rows, rows}), do: length(rows)
+
+  # A field's values, in order; a table's read from its column, making no row.
+  defp read({:table, table}, field), do: Columns.values(table, field)
+  defp read({:rows, rows}, field), do: Enum.map(rows, &Table.get(&1, field))
+
+  # A field's positions (`Window.position/1`), in order.
+  defp positions({:table, table}, field), do: Columns.positions(table, field)
+  defp positions(form, field), do: form |> read(field) |> Enum.map(&Window.position/1)
+
+  # The rows at the ascending indexes, in the delivery's form.
+  defp keep(delivery, {:table, table}, first..last//1) when last >= first,
+    do: %{delivery | rows: Table.slice(table, first, last - first + 1)}
+
+  defp keep(delivery, {:table, table}, indexes), do: %{delivery | rows: Subset.at(table, indexes)}
+
+  defp keep(delivery, {:rows, rows}, first..last//1),
+    do: rebuild(delivery, Enum.slice(rows, first..last//1))
+
+  defp keep(delivery, {:rows, rows}, indexes) do
+    kept = MapSet.new(indexes)
+    rebuild(delivery, for({row, i} <- Enum.with_index(rows), MapSet.member?(kept, i), do: row))
+  end
+
+  # The indexes, ascending, of the rows each series' reducer keeps, field by field: a
+  # series the rows sharing every `:category` field's value, each field's readings and
+  # the window field's positions read once, by index.
+  defp kept(form, schema, numbers, budget, method, registry) do
     categories =
       Enum.sort_by(for({name, %{type: :category}} <- schema.fields, do: name), &to_string/1)
 
     time = Schema.window_field(schema)
+    n = size(form)
 
     groups =
-      rows
-      |> Enum.with_index()
-      |> Enum.group_by(fn {row, _i} -> Enum.map(categories, &Table.get(row, &1)) end)
-      |> Map.values()
+      case Enum.map(categories, &read(form, &1)) do
+        [] ->
+          if n == 0, do: [], else: [Enum.to_list(0..(n - 1))]
 
+        columns ->
+          columns
+          |> Enum.zip_with(& &1)
+          |> Enum.with_index()
+          |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
+          |> Map.values()
+      end
+
+    x = if time, do: form |> positions(time) |> List.to_tuple()
     share = length(groups) * length(numbers)
     node = node!(method, budget, share, registry)
 
+    ys = for field <- numbers, do: {field, form |> read(field) |> List.to_tuple()}
+
     result =
-      for group <- groups, field <- numbers, reduce: {:ok, MapSet.new()} do
+      for group <- groups, {field, y} <- ys, reduce: {:ok, MapSet.new()} do
         {:ok, kept} ->
-          with {:ok, picked} <- pick(Enum.with_index(group), time, field, node, method),
-               do:
-                 {:ok,
-                  Enum.reduce(picked, kept, fn {{_row, i}, _place}, acc -> MapSet.put(acc, i) end)}
+          with {:ok, picked} <- pick(group, x, y, field, node, method),
+               do: {:ok, Enum.reduce(picked, kept, &MapSet.put(&2, &1))}
 
         {:error, _faults} = error ->
           error
       end
 
-    with {:ok, kept} <- result,
-         do: {:ok, for({row, i} <- Enum.with_index(rows), MapSet.member?(kept, i), do: row)}
+    with {:ok, kept} <- result, do: {:ok, kept |> MapSet.to_list() |> Enum.sort()}
   end
 
   # The reducer's node, checked as any node is, its defaults filled in: `fields` the x and
@@ -313,28 +400,24 @@ defmodule Macaw.Data.Source.Finish do
   end
 
   # One series' readings of one field, as the reducer's [x, y], reduced by its node: the
-  # kept points, each with its row's index; or the reducer's fault over the readings, at
-  # the field (`{[:rows, field], reason}`).
-  defp pick(points, time, field, node, {module, _count, _per, _least}) do
+  # indexes of the rows it keeps; or the reducer's fault over the readings, at the field
+  # (`{[:rows, field], reason}`). `x` is each row's position by the window field, or its
+  # place in the series without one.
+  defp pick(series, x, y, field, node, {module, _count, _per, _least}) do
+    xs = if x, do: Enum.map(series, &elem(x, &1)), else: Enum.to_list(0..(length(series) - 1)//1)
+
     table =
       Table.new!([
-        {"x", :number, Enum.map(points, &x(&1, time))},
-        {"y", :term, Enum.map(points, fn {{row, _i}, _place} -> Table.get(row, field) end)},
-        {"i", :number, Enum.map(points, fn {{_row, i}, _place} -> i end)}
+        {"x", :number, xs},
+        {"y", :term, Enum.map(series, &elem(y, &1))},
+        {"i", :number, series}
       ])
 
     case module.run(node, table, %{}) do
-      %Table{} = reduced ->
-        kept = reduced |> Table.column("i") |> MapSet.new()
-        {:ok, Enum.filter(points, fn {{_row, i}, _place} -> MapSet.member?(kept, i) end)}
-
-      {:error, {_key, reason}} ->
-        {:error, [{[:rows, field], reason}]}
+      %Table{} = reduced -> {:ok, Table.column(reduced, "i")}
+      {:error, {_key, reason}} -> {:error, [{[:rows, field], reason}]}
     end
   end
-
-  defp x({{_row, _i}, place}, nil), do: place
-  defp x({{row, _i}, _place}, time), do: Window.position(Table.get(row, time))
 
   # The registered reducer `method` names: its module, its count option, the rows each unit
   # keeps and the least count its option takes; else `{[:reduce], {:unknown, :reducer,
@@ -360,14 +443,14 @@ defmodule Macaw.Data.Source.Finish do
 
   # Many series each keep a few rows; when their union is still over the budget, an even
   # stride over it keeps the first and the last.
-  defp at_most(rows, budget) when length(rows) <= budget, do: rows
+  defp at_most(indexes, budget) when length(indexes) <= budget, do: indexes
 
-  defp at_most(rows, 1), do: [hd(rows)]
+  defp at_most(indexes, 1), do: [hd(indexes)]
 
-  defp at_most(rows, budget) do
-    n = length(rows)
+  defp at_most(indexes, budget) do
+    n = length(indexes)
     picks = MapSet.new(0..(budget - 1), &round(&1 * (n - 1) / (budget - 1)))
-    for {row, i} <- Enum.with_index(rows), MapSet.member?(picks, i), do: row
+    for {index, i} <- Enum.with_index(indexes), MapSet.member?(picks, i), do: index
   end
 
   @doc """

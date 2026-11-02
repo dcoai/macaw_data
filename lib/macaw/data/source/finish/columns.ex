@@ -159,6 +159,86 @@ defmodule Macaw.Data.Source.Finish.Columns do
   defp intersect([_ | _] = as, [_ | bs]), do: intersect(as, bs)
   defp intersect(_as, _bs), do: []
 
+  @doc false
+  # The indexes, ascending, of the rows whose every ranged field lies in its range
+  # (`Window.trim_region/2`): each field's `within/3`, intersected.
+  @spec region(Table.t(), %{Table.name() => Window.t()}) :: [non_neg_integer()]
+  def region(table, region) do
+    region
+    |> Enum.map(fn {field, range} -> indexes(within(table, field, range)) end)
+    |> Enum.reduce(&intersect(&2, &1))
+  end
+
+  defp indexes({:run, first, count}), do: Enum.to_list(first..(first + count - 1)//1)
+  defp indexes({:at, indexes}), do: indexes
+
+  # -- :box --------------------------------------------------------------------------------
+
+  @doc false
+  # The indexes, ascending, of the rows whose `field` lies in the box (`Window.in_box?/2`):
+  # a point column is a list of its positions, read value by value.
+  @spec box(Table.t(), Table.name(), map()) :: [non_neg_integer()]
+  def box(table, field, box) do
+    table
+    |> values(field)
+    |> Enum.with_index()
+    |> Enum.flat_map(fn {position, i} -> if Window.in_box?(position, box), do: [i], else: [] end)
+  end
+
+  # -- :order ------------------------------------------------------------------------------
+
+  @doc false
+  # The row indexes in the order (`Order.sort_with/4`), each field read from its column as
+  # `Order.sort/3` reads it of a row: `{:ok, indexes}`, or the order's faults.
+  @spec ordered(Table.t(), Order.t(), Schema.t()) ::
+          {:ok, [non_neg_integer()]} | {:error, [{list(), term()}, ...]}
+  def ordered(table, order, schema) do
+    columns =
+      Map.new(order, fn {field, _direction} -> {field, List.to_tuple(values(table, field))} end)
+
+    indexes = Enum.to_list(0..(Table.size(table) - 1)//1)
+
+    Order.sort_with(indexes, order, schema, fn i, field -> elem(Map.fetch!(columns, field), i) end)
+  end
+
+  # -- reading a column -------------------------------------------------------------------
+
+  @doc false
+  # A field's values, in order, as its column decodes them; every row's `nil` when the
+  # table has no column the field names (`Table.get/2` of a row reads it so).
+  @spec values(Table.t(), Table.name() | nil) :: [term()]
+  def values(table, field) do
+    case column(table, field) do
+      nil ->
+        List.duplicate(nil, Table.size(table))
+
+      name ->
+        Enum.flat_map(Table.chunks(table), fn {chunk, first, count} ->
+          Chunk.values(chunk, name, first, count)
+        end)
+    end
+  end
+
+  @doc false
+  # Each row's `Window.position/1` by a field, `nil` where it has none. A UTC or zoned
+  # buffer holds the very position, Unix microseconds, read as it lies; any other column is
+  # read value by value.
+  @spec positions(Table.t(), Table.name() | nil) :: [number() | nil]
+  def positions(table, field) do
+    case column(table, field) do
+      nil ->
+        List.duplicate(nil, Table.size(table))
+
+      name ->
+        Enum.flat_map(Table.chunks(table), fn {chunk, first, count} ->
+          case kind(storage(chunk, name, first, count)) do
+            DateTime -> Chunk.instants(chunk, name, first, count)
+            _other -> chunk |> Chunk.values(name, first, count) |> Enum.map(&Window.position/1)
+          end
+        end)
+    end
+  end
+
   # -- :latest ------------------------------------------------------------------------------
 
   @doc false
@@ -167,47 +247,17 @@ defmodule Macaw.Data.Source.Finish.Columns do
   # `nil` names nothing and is dropped (`Window.latest_rows/3`).
   @spec latest(Table.t(), Table.name(), Schema.t()) :: [non_neg_integer()]
   def latest(table, field, schema) do
-    views = Table.chunks(table)
-    size = Table.size(table)
-    positions = positions(views, column(table, field), size)
-    ids = identities(table, views, size, Schema.identity(schema))
-    Window.latest_indexes(Enum.zip(ids, positions))
-  end
-
-  # Each row's position by the column, `nil` where it has none. A UTC or zoned buffer holds
-  # the very position, Unix microseconds, and a date buffer days that order and tie as the
-  # position's Gregorian days do; any other column is read value by value.
-  defp positions(_views, nil, size), do: List.duplicate(nil, size)
-
-  defp positions(views, name, _size) do
-    Enum.flat_map(views, fn {chunk, first, count} ->
-      case kind(storage(chunk, name, first, count)) do
-        kind when kind in [DateTime, Date] -> Chunk.instants(chunk, name, first, count)
-        _other -> chunk |> Chunk.values(name, first, count) |> Enum.map(&Window.position/1)
-      end
-    end)
+    ids = identities(table, Schema.identity(schema))
+    Window.latest_indexes(Enum.zip(ids, positions(table, field)))
   end
 
   # Each row's identity: the one field's value, a tuple of several fields' values, `nil`
   # when one is missing (`Schema.identity/2` tells rows apart the same way); every row's
   # `nil` with no identity declared.
-  defp identities(_table, _views, size, []), do: List.duplicate(nil, size)
+  defp identities(table, []), do: List.duplicate(nil, Table.size(table))
 
-  defp identities(table, views, size, fields) do
-    columns =
-      for field <- fields do
-        case column(table, field) do
-          nil ->
-            List.duplicate(nil, size)
-
-          name ->
-            Enum.flat_map(views, fn {chunk, first, count} ->
-              Chunk.values(chunk, name, first, count)
-            end)
-        end
-      end
-
-    case columns do
+  defp identities(table, fields) do
+    case Enum.map(fields, &values(table, &1)) do
       [one] -> one
       several -> Enum.zip_with(several, &composite/1)
     end

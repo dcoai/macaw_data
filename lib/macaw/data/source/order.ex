@@ -130,17 +130,35 @@ defmodule Macaw.Data.Source.Order do
       {:error, [{[:order, 0], {:unknown_field, "at"}}]}
   """
   @spec sort([map()], t(), Schema.t()) :: {:ok, [map()]} | {:error, [{list(), term()}, ...]}
-  def sort(rows, [], _schema), do: {:ok, rows}
+  def sort(rows, order, %Schema{} = schema), do: sort_with(rows, order, schema, &Table.get/2)
 
-  def sort(rows, order, %Schema{} = schema) do
+  @doc """
+  The items sorted by the order under the schema's types, stably, as `sort/3` sorts rows:
+  `read` takes an item and a field of the order, as the order names it, to the item's
+  value of that field. `{:ok, items}`, or `sort/3`'s faults. `sort/3` is this over rows,
+  each read by name; finishing a table (spec/01 §2.4) sorts its row indexes so, each
+  field read from its column, and makes no row.
+
+      iex> alias Macaw.Data.{Schema, Source.Order}
+      iex> schema = Schema.new!(%{v: %{type: :number}})
+      iex> values = {3, nil, 1}
+      iex> Order.sort_with([0, 1, 2], [{:v, :asc}], schema, fn i, _field -> elem(values, i) end)
+      {:ok, [2, 0, 1]}
+  """
+  @spec sort_with([item], t(), Schema.t(), (item, Schema.name() -> term())) ::
+          {:ok, [item]} | {:error, [{list(), term()}, ...]}
+        when item: term()
+  def sort_with(items, [], _schema, _read), do: {:ok, items}
+
+  def sort_with(items, order, %Schema{} = schema, read) when is_function(read, 2) do
     case faults(order, schema) do
       [] ->
         keys =
           Enum.map(order, fn {field, direction} ->
-            {direction, schema_key(schema, field), &Table.get(&1, field)}
+            {direction, schema_key(schema, field), &read.(&1, field)}
           end)
 
-        {:ok, sort_by(rows, keys)}
+        {:ok, sort_by(items, keys)}
 
       faults ->
         {:error, faults}
@@ -176,17 +194,22 @@ defmodule Macaw.Data.Source.Order do
   def sort_by(items, []), do: items
 
   # One key: the keys are terms that compare as the type orders, so a stable sort of them
-  # in its direction, the items without a reading after, in their order.
+  # in its direction, the items without a reading after, in their order. `:lists.keysort/2`
+  # is stable ascending; descending, it sorts the items reversed and reverses the result,
+  # so items of one key keep their order either way.
   def sort_by(items, [{direction, key, read}]) do
     {present, absent} =
       items
       |> Enum.map(fn item -> {key.(read.(item)), item} end)
       |> Enum.split_with(&(elem(&1, 0) != nil))
 
-    present
-    |> Enum.sort_by(&elem(&1, 0), direction)
-    |> Enum.concat(absent)
-    |> Enum.map(&elem(&1, 1))
+    sorted =
+      case direction do
+        :asc -> :lists.keysort(1, present)
+        :desc -> present |> :lists.reverse() |> then(&:lists.keysort(1, &1)) |> :lists.reverse()
+      end
+
+    Enum.map(sorted ++ absent, &elem(&1, 1))
   end
 
   def sort_by(items, keys) do

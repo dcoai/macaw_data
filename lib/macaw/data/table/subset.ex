@@ -3,8 +3,10 @@ defmodule Macaw.Data.Table.Subset do
   # Some of a table's rows as a table of its columns, no row made (spec/01 §1.1.1): the
   # rows a columnar step keeps, by index. Rows in the table's order are runs of its
   # chunks, a contiguous run read where it lies as a view and any other gathered by its
-  # slots (`Chunk.gather/5`), nothing decoded. Rows in another order are gathered in the
-  # table's order, then each column read in theirs: only the kept rows are decoded.
+  # slots (`Chunk.gather/5`), nothing decoded. Rows in another order from one view are
+  # gathered from its chunk in that order, nothing decoded either; across views they are
+  # gathered in the table's order, then each column read in theirs and packed again: only
+  # the kept rows are decoded.
   #
   # `last: n` (`Macaw.Data.Derived.Last`) and finishing (`Macaw.Data.Source.Finish`) keep
   # rows so.
@@ -29,25 +31,56 @@ defmodule Macaw.Data.Table.Subset do
     header = for name <- Table.names(table), do: {name, Table.column_type(table, name)}
     views = Table.chunks(table)
 
-    if ascending?(indexes) do
-      sorted = Keyword.get(opts, :sorted, Table.sorted(table))
-      {:ok, taken} = Table.from_chunks(header, runs(views, indexes), sorted: sorted)
-      taken
-    else
-      in_order = Enum.sort(indexes)
-      {:ok, gathered} = Table.from_chunks(header, runs(views, in_order))
-      place = in_order |> Enum.with_index() |> Map.new()
-      at = Enum.map(indexes, &Map.fetch!(place, &1))
+    cond do
+      ascending?(indexes) ->
+        sorted = Keyword.get(opts, :sorted, Table.sorted(table))
+        {:ok, taken} = Table.from_chunks(header, runs(views, indexes), sorted: sorted)
+        taken
 
-      columns =
-        for {name, type} <- header do
-          values = gathered |> Table.column(name) |> List.to_tuple()
-          {name, type, Enum.map(at, &elem(values, &1))}
-        end
+      view = one_view(views, indexes) ->
+        {:ok, taken} = Table.from_chunks(header, [view])
+        taken
 
-      {:ok, taken} = Table.new(columns)
-      taken
+      true ->
+        repacked(header, views, indexes)
     end
+  end
+
+  # Rows in another order, all of one view: gathered from its chunk in their order, every
+  # column copied by its slots (`Chunk.gather/5` takes indexes in any order).
+  defp one_view(views, indexes) do
+    {low, high} = Enum.min_max(indexes)
+    one_view(views, 0, low, high, indexes)
+  end
+
+  defp one_view([{chunk, first, count} | _views], start, low, high, indexes)
+       when low >= start and high < start + count do
+    locals = Enum.map(indexes, &(&1 - start))
+    {Chunk.gather(chunk, first, count, locals, {:subset, locals}), 0, length(locals)}
+  end
+
+  defp one_view([{_chunk, _first, count} | views], start, low, high, indexes)
+       when low >= start + count,
+       do: one_view(views, start + count, low, high, indexes)
+
+  defp one_view(_views, _start, _low, _high, _indexes), do: nil
+
+  # Rows in another order across views: gathered in the table's order, then each column
+  # read in theirs and packed again. Only the kept rows are decoded.
+  defp repacked(header, views, indexes) do
+    in_order = Enum.sort(indexes)
+    {:ok, gathered} = Table.from_chunks(header, runs(views, in_order))
+    place = in_order |> Enum.with_index() |> Map.new()
+    at = Enum.map(indexes, &Map.fetch!(place, &1))
+
+    columns =
+      for {name, type} <- header do
+        values = gathered |> Table.column(name) |> List.to_tuple()
+        {name, type, Enum.map(at, &elem(values, &1))}
+      end
+
+    {:ok, taken} = Table.new(columns)
+    taken
   end
 
   defp ascending?([a | [b | _] = rest]), do: a < b and ascending?(rest)

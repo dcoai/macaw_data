@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Changed:** `Macaw.Data.Source.Finish.finish/4` finishes a table delivery's `:box`, `:region`, `:order` and `:budget` on its columns too (#105, #126, spec/01 §2.4). No step reads a table's rows, and each keeps exactly the rows it kept before. An order whose head the budget keeps gathers that head alone. On a 50k-row table, reductions before and after:
+  - a region keeping half: 3,697,471 to 718,109;
+  - an order's top 1,000: 7,851,916 to 1,569,977;
+  - a budget of 1,000: 10,263,925 to 5,685,119;
+  - a full order: 6,092,786 to 5,316,784.
+- **Added:** `Macaw.Data.Source.Order.sort_with/4` sorts any items by an order under a schema, each field read by a function. `Macaw.Data.Source.Order.sort/3` is it over rows (#126).
+- **Changed:** `Macaw.Data.Source.Order.sort_by/2` sorts one key with `:lists.keysort/2`, stably in either direction, so `sort` steps and finishing order cost less (#126).
 - **Breaking:** `Macaw.Data.Derived.window/3` answers a table for a table input under a request window (`window`, `box`, `region`, `latest`), where it answered the table's rows (#105, #125, spec/02 §2.2). A list of rows still answers rows. The derived engine makes an input's rows only at a function's call.
 - **Changed:** `Macaw.Data.Source.Finish.finish/4` finishes a table delivery's `:window` and `:latest` on its columns (#105, #125, spec/01 §2.4). It keeps rows of the table's chunks and makes no row, and keeps exactly the rows it kept before. On a 50k-row table, a window keeping half its rows costs 319,799 reductions (5,349,486 before). With the table sorted by its window field, a binary search costs 5,252. Latest costs 609,412 (5,163,695 before).
 - **Breaking:** a quantity's facts answer `{:ok, fact}` or `{:error, reason}` where a map read raised (#114, #121, spec/03 §9–§11). The functions are `Macaw.Data.Quantity.base_unit/1`, `Macaw.Data.Quantity.kind/1`, `Macaw.Data.Quantity.bounds/1`, `Macaw.Data.Quantity.additivity/2`, `Macaw.Data.Quantity.family/2` and `Macaw.Data.Quantity.family/3`, and the reasons are:

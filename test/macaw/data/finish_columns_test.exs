@@ -62,9 +62,16 @@ defmodule Macaw.Data.FinishColumnsTest do
 
   # The rows as a table of several chunks, cut where `cuts` says, the first and last view
   # partial when `trim` asks, and said to be sorted by its window field when `sorted`.
-  defp table(kind, rows, cuts, sorted) do
-    columns = [{:t, type(kind)}, {:id, :category}, {:h, :category}, {:v, :number}]
+  defp table(kind, rows, cuts, sorted),
+    do:
+      table_of(
+        [{:t, type(kind)}, {:id, :category}, {:h, :category}, {:v, :number}],
+        rows,
+        cuts,
+        sorted && :t
+      )
 
+  defp table_of(columns, rows, cuts, sorted) do
     pieces =
       rows
       |> split(cuts)
@@ -81,7 +88,7 @@ defmodule Macaw.Data.FinishColumnsTest do
       end)
 
     if sorted,
-      do: Table.from_chunks(columns, Table.chunks(joined), sorted: :t) |> elem(1),
+      do: Table.from_chunks(columns, Table.chunks(joined), sorted: sorted) |> elem(1),
       else: joined
   end
 
@@ -95,8 +102,10 @@ defmodule Macaw.Data.FinishColumnsTest do
     Enum.reverse([rest | pieces])
   end
 
-  defp rows_of(kind, steps, ids) do
-    for {{k, {id, h}}, v} <- Enum.with_index(Enum.zip(steps, ids)),
+  defp rows_of(kind, steps, ids, vs \\ nil) do
+    vs = vs || Enum.to_list(0..(length(steps) - 1)//1)
+
+    for {{k, {id, h}}, v} <- Enum.zip(Enum.zip(steps, ids), vs),
         do: %{t: at(kind, k), id: id, h: h, v: v}
   end
 
@@ -171,6 +180,143 @@ defmodule Macaw.Data.FinishColumnsTest do
                )
       end
     end
+  end
+
+  @tag verifies: "finish-columns"
+  property "finishing a table by region, order and budget keeps the rows its rows keep" do
+    check all(
+            kind <- kinds(),
+            steps <- list_of(one_of([constant(nil), integer(-12..12)]), max_length: 60),
+            ids <-
+              list_of(
+                tuple({member_of([nil, "a", "b", "c"]), member_of([nil, "x", "y"])}),
+                length: length(steps)
+              ),
+            vs <-
+              list_of(one_of([constant(nil), integer(-4..4), member_of([0.5, 2.5, -1.5])]),
+                length: length(steps)
+              ),
+            cuts <- list_of(integer(0..20), max_length: 4),
+            sorted <- boolean(),
+            from <- edge(steps),
+            to <- edge(steps),
+            low <- one_of([constant(nil), integer(-4..4)]),
+            order <-
+              list_of(tuple({member_of(["t", :v, "id", :h]), member_of([:asc, :desc])}),
+                max_length: 2
+              ),
+            budget <- one_of([constant(nil), integer(1..12)]),
+            reduce <- member_of(["lttb", "m4"]),
+            region? <- boolean(),
+            cut <- member_of([:none, :source, :capped]),
+            one_series? <- boolean()
+          ) do
+      steps = if sorted, do: Enum.sort_by(steps, &key/1), else: steps
+      # One series often, so the reducer has rows to choose between.
+      ids = if one_series?, do: Enum.map(ids, fn _ -> {"a", "x"} end), else: ids
+      rows = rows_of(kind, steps, ids, vs)
+      table = table(kind, rows, cuts, sorted)
+      schema = schema(kind, :one)
+      order = Enum.uniq_by(order, &to_string(elem(&1, 0)))
+      # A region's range is refused inverted (spec/01 §2.3), so its ends come in order.
+      [from, to] = if from && to && from > to, do: [to, from], else: [from, to]
+
+      fields =
+        [order: order, budget: budget] ++
+          if(region?,
+            do: [
+              region: %{
+                "t" => [from && bound(kind, from), to && bound(kind, to)],
+                "v" => [low, nil]
+              }
+            ],
+            else: []
+          )
+
+      served =
+        case cut do
+          :none -> []
+          :source -> [reduced_by: :source]
+          :capped -> [capped: true]
+        end
+
+      request = Request.new!([now: @now] ++ fields)
+      description = Description.new!(schema: schema)
+
+      columnar =
+        Finish.finish!(Delivery.new!(table, served: served), description, request, reduce: reduce)
+
+      by_rows =
+        Finish.finish!(Delivery.new!(Table.rows(table), served: served), description, request,
+          reduce: reduce
+        )
+
+      assert %Table{} = columnar.rows
+      assert Table.equal?(columnar.rows, packed(table, by_rows.rows))
+      assert columnar.served == by_rows.served
+    end
+  end
+
+  @tag verifies: "finish-columns"
+  property "finishing a table by box keeps the positions its rows keep" do
+    schema = Schema.new!(%{"p" => %{type: :point, window: true}, "v" => %{type: :number}})
+    position = one_of([constant(nil), tuple({integer(-180..180), integer(-90..90)})])
+
+    check all(
+            positions <- list_of(position, max_length: 60),
+            cuts <- list_of(integer(0..20), max_length: 4),
+            west <- integer(-180..180),
+            east <- integer(-180..180),
+            south <- integer(-90..0),
+            north <- integer(0..90)
+          ) do
+      rows = for {p, v} <- Enum.with_index(positions), do: %{p: p, v: v}
+      table = table_of([{:p, :point}, {:v, :number}], rows, cuts, nil)
+      box = %{west: west, south: south, east: east, north: north}
+
+      columnar = finished(table, schema, box: box)
+      by_rows = finished(Table.rows(table), schema, box: box)
+
+      assert Table.equal?(columnar.rows, packed(table, by_rows.rows))
+      assert columnar.served == by_rows.served
+    end
+  end
+
+  @tag verifies: "finish-columns"
+  test "no step reads a table's rows: every step of a table finishes on its columns" do
+    alias Macaw.Data.Test.Trace
+
+    schema = schema(:utc, :one)
+    steps = for i <- 0..39, do: rem(i * 7, 30)
+    ids = for i <- 0..39, do: {Enum.at(["a", "b", "c"], rem(i, 3)), "x"}
+    table = table(:utc, rows_of(:utc, steps, ids), [10, 15], false)
+
+    asks = [
+      [window: [bound(:utc, 3), bound(:utc, 25)], region: %{"v" => [2, 35]}, latest: true],
+      [window: [bound(:utc, 3), nil], order: [{"v", :desc}, {"t", :asc}], budget: 5],
+      [budget: 6],
+      [order: [{"t", :desc}]]
+    ]
+
+    points = Schema.new!(%{"p" => %{type: :point, window: true}, "v" => %{type: :number}})
+
+    located =
+      Table.new!([
+        {:p, :point, for(i <- 0..9, do: {i * 10, 0})},
+        {:v, :number, Enum.to_list(0..9)}
+      ])
+
+    box = %{west: 15, south: -1, east: 55, north: 1}
+
+    for read <- [{Delivery, :named_rows, 1}, {Table, :rows, 1}] do
+      for fields <- asks do
+        assert Trace.calls(read, fn -> finished(table, schema, fields) end) == []
+      end
+
+      assert Trace.calls(read, fn -> finished(located, points, box: box) end) == []
+    end
+
+    assert Table.column(finished(located, points, box: box).rows, :v) == [2, 3, 4, 5]
   end
 
   @tag verifies: "finish-columns"

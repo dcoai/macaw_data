@@ -68,6 +68,34 @@ defmodule Macaw.Data.FinishColumnsCostTest do
     assert latest < transpose
   end
 
+  # A region reads its ranged columns, a scan of each packed buffer, intersected: 718,109
+  # when this was written, 3,697,471 by rows. An order with a budget sorts the row indexes
+  # by the order's columns and gathers its head alone: 1,569,977, 7,851,916 by rows. A
+  # budget reduces each host's series from its columns and gathers the kept rows:
+  # 5,685,119, 10,263,925 by rows; most of it is the reducer's own work, which the rows
+  # paid too.
+  @tag verifies: "finish-columns-cost"
+  test "finishing a 50k-row table by region, order and budget stays under its bounds" do
+    table = readings()
+    {transpose, _rows} = Work.reductions(fn -> Table.rows(table) end)
+
+    {region, {:ok, kept}} = Work.reductions(fn -> finish(table, region: %{cpu: [50, 100]}) end)
+    assert Table.size(kept.rows) == 25_000
+    assert region < 900_000
+    assert region < transpose
+
+    {top, {:ok, head}} =
+      Work.reductions(fn -> finish(table, order: [{:cpu, :desc}], budget: 1_000) end)
+
+    assert Table.size(head.rows) == 1_000
+    assert Enum.all?(Table.column(head.rows, :cpu), &(&1 >= 98.0))
+    assert top < 2_000_000
+
+    {budget, {:ok, reduced}} = Work.reductions(fn -> finish(table, budget: 1_000) end)
+    assert Table.size(reduced.rows) <= 1_000
+    assert budget < 6_500_000
+  end
+
   # A derived source's request window over a table input is the same finishing: 319,907
   # when this was written, 4,109,058 when the table was transposed and finished as rows.
   @tag verifies: "finish-columns-cost"
