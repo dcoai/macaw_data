@@ -32,7 +32,7 @@ defmodule Macaw.Data.OrderTest do
     @impl true
     def fetch(_source, request) do
       send(self(), {:fetched, request})
-      {:ok, Delivery.new([%{"p50" => 1}])}
+      {:ok, Delivery.new!([%{"p50" => 1}])}
     end
   end
 

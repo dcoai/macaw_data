@@ -155,7 +155,7 @@ defmodule Macaw.Data.Operations.SandboxOpsTest do
     end
 
     defp run(engine) do
-      delivery = Delivery.new(for(i <- 1..4, do: %{t: i, host: "h", cpu: i * 10}))
+      delivery = Delivery.new!(for(i <- 1..4, do: %{t: i, host: "h", cpu: i * 10}))
       engine |> Engine.push(%{hosts: delivery}, %{hosts: @hosts}, 0) |> Engine.run(0)
     end
 

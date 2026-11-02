@@ -44,7 +44,7 @@ defmodule Macaw.Data.ConformanceOrderTest do
       rows = if over, do: Enum.take(rows, budget), else: rows
 
       {:ok,
-       Delivery.new(rows,
+       Delivery.new!(rows,
          schema: Schema.version(@schema),
          served: [
            window: request.window || [1, 40],

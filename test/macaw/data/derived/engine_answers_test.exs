@@ -94,7 +94,7 @@ defmodule Macaw.Data.Derived.EngineAnswersTest do
     check all(rows <- list_of(a_row(), max_length: 30), max_runs: 100) do
       engine =
         engine
-        |> Engine.push(%{in: Delivery.new(packed(rows))}, %{in: @schema}, 0)
+        |> Engine.push(%{in: Delivery.new!(packed(rows))}, %{in: @schema}, 0)
         |> Engine.run(0)
 
       assert Engine.faults(engine) == %{}
@@ -144,7 +144,9 @@ defmodule Macaw.Data.Derived.EngineAnswersTest do
     ]
 
     engine =
-      engine |> Engine.push(%{in: Delivery.new(packed(rows))}, %{in: @schema}, 0) |> Engine.run(0)
+      engine
+      |> Engine.push(%{in: Delivery.new!(packed(rows))}, %{in: @schema}, 0)
+      |> Engine.run(0)
 
     assert Engine.faults(engine) == %{}
     outputs = Engine.outputs(engine)
@@ -269,7 +271,7 @@ defmodule Macaw.Data.Derived.EngineAnswersTest do
             )
         })
 
-      engine = engine |> Engine.push(%{in: Delivery.new(input)}, %{in: schema}, 0)
+      engine = engine |> Engine.push(%{in: Delivery.new!(input)}, %{in: schema}, 0)
       {work, done} = Work.reductions(fn -> Engine.run(engine, 0) end)
       assert Engine.faults(done) == %{}
       {work, Engine.outputs(done)[["a"]].rows}

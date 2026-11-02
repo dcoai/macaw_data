@@ -128,7 +128,7 @@ defmodule Macaw.Data.Derived.EngineColumnsTest do
         ) do
       rows = Enum.sort_by(rows, &DateTime.to_unix(&1.t))
       held = if table?, do: packed(rows), else: rows
-      Delivery.new(held, served: [complete_until: watermark])
+      Delivery.new!(held, served: [complete_until: watermark])
     end
   end
 
@@ -211,14 +211,14 @@ defmodule Macaw.Data.Derived.EngineColumnsTest do
       )
 
     engine =
-      engine |> Engine.push(%{in: Delivery.new(sourced)}, %{in: @schema}, 0) |> Engine.run(0)
+      engine |> Engine.push(%{in: Delivery.new!(sourced)}, %{in: @schema}, 0) |> Engine.run(0)
 
     assert Engine.faults(engine) == %{}
     assert Delivery.rows(Engine.outputs(engine)[["h"]]) == [%{"origin" => "kept"}]
     assert Delivery.rows(Engine.outputs(engine)[["s"]]) == [%{"n" => 1}]
 
     # A list delivery is packed under the input's schema, so the host reads a table.
-    engine = engine |> Engine.push(%{in: Delivery.new(rows)}, %{in: @schema}, 1) |> Engine.run(1)
+    engine = engine |> Engine.push(%{in: Delivery.new!(rows)}, %{in: @schema}, 1) |> Engine.run(1)
     assert Delivery.rows(Engine.outputs(engine)[["h"]]) == [%{"origin" => "none"}]
   end
 
@@ -280,7 +280,7 @@ defmodule Macaw.Data.Derived.EngineColumnsTest do
       )
 
     bad = [%{t: ~U[1970-01-01 00:00:01Z], host: "a", v: "secret-value"}]
-    engine = engine |> Engine.push(%{in: Delivery.new(bad)}, %{in: @schema}, 0) |> Engine.run(0)
+    engine = engine |> Engine.push(%{in: Delivery.new!(bad)}, %{in: @schema}, 0) |> Engine.run(0)
 
     assert %{["c"] => %{kind: :nonconforming, detail: {:input, "in", faults}}} =
              Engine.faults(engine)
@@ -326,11 +326,11 @@ defmodule Macaw.Data.Derived.EngineColumnsTest do
       )
 
     {first, second} = {wide(0), wide(1)}
-    engine = engine |> Engine.push(%{in: Delivery.new(first)}, %{in: @wide}, 0) |> Engine.run(0)
+    engine = engine |> Engine.push(%{in: Delivery.new!(first)}, %{in: @wide}, 0) |> Engine.run(0)
 
     {engine_work, done} =
       Work.reductions(fn ->
-        engine |> Engine.push(%{in: Delivery.new(second)}, %{in: @wide}, 1) |> Engine.run(1)
+        engine |> Engine.push(%{in: Delivery.new!(second)}, %{in: @wide}, 1) |> Engine.run(1)
       end)
 
     assert Engine.faults(done) == %{}

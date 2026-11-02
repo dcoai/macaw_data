@@ -8,13 +8,13 @@ defmodule Macaw.Data.Operations.ReducersTest do
 
   @schema Schema.new!(%{t: %{type: :number, window: true}, v: %{type: :number}})
   @rows for t <- 1..200, do: %{t: t, v: rem(t * 7919, 23)}
-  @delivery Delivery.new(@rows)
+  defp delivery, do: Delivery.new!(@rows)
 
   defp finish(opts) do
     {:ok, description} = Description.new(schema: @schema)
 
     Finish.finish(
-      @delivery,
+      delivery(),
       description,
       Request.new!(budget: 20, now: ~U[2026-10-27 00:00:00Z]),
       opts
@@ -50,7 +50,7 @@ defmodule Macaw.Data.Operations.ReducersTest do
     assert length(ts(every)) == 20
     assert hd(ts(every)) == 1 and List.last(ts(every)) == 200
 
-    assert Finish.reduce(@delivery, @schema, 10, "every", hosted) |> ts() |> length() == 10
+    assert Finish.reduce(delivery(), @schema, 10, "every", hosted) |> ts() |> length() == 10
   end
 
   @tag verifies: "operations-reducers-named"
@@ -62,7 +62,7 @@ defmodule Macaw.Data.Operations.ReducersTest do
     end
 
     assert_raise ArgumentError, ~r/names no registered reducer/, fn ->
-      Finish.reduce(@delivery, @schema, nil, "sort")
+      Finish.reduce(delivery(), @schema, nil, "sort")
     end
   end
 end

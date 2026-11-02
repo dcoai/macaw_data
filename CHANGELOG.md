@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **Breaking:** `Macaw.Data.Delivery.new/2` answers `{:ok, delivery}` or `{:error, faults}` instead of a delivery or a raise (#114, #117, spec/01 §3). Each fault is `{path, reason}`, and all of them are answered at once, in the order of the fields: `{[:rows], {:type, :rows}}`, `{[:rows], :delivery}`, `{[key], :unknown_key}`, `{[:served, fact], :unknown_key}`, `{[:served, fact], {:type, kind}}` or `{:enum, values}`, and the `{:type, kind}` of `names`, `types`, `schema`, `origin`, `retracted` and `replace`, with an index for a bad retracted row or replacement. `Macaw.Data.Delivery.format_error/1` words them. `Macaw.Data.Delivery.new!/2` keeps the old return and raises `ArgumentError` in those words. Upgrade: call `new!/2` where the input is known to be good, or match the result.
+- **Breaking:** `Macaw.Data.Delivery.named_rows/1` answers `{:ok, rows}` or `{:error, [{[:names], :required}]}` for tuple rows without names, or `{:error, [{[:names], {:width, n, width}}]}` for rows that don't fit their names, instead of raising (#117). `Macaw.Data.Delivery.named_rows!/1` keeps the old return.
+- **Measured:** `Macaw.Data.Delivery.new/2` costs 64 reductions with no options (69 before) and 121 with every option (115 before). Both take 0.6 to 3 µs, the same as before within the noise.
+
 - **Added:** errors are values (#114, #116, spec/00 §5). A public function answers bad input with `{:error, reason}`; a `name!` twin raises its reason, a macro's misuse is a `CompileError`, and a raise remains only for a named internal invariant. The CI job `raises` (`ci/raises.exs`) fails on a `raise`, `reraise` or `throw` in `lib/` outside a bang twin and `ci/raises_allowlist.exs`. Its 46 `:convert` entries, the 59 sites still to convert, go as this release's work items land.
 
 - **Added:** a `:columns` source may answer a table or a column map (#107, #113, spec/02 §1.2, §8.2). `Macaw.Data.Derived.conform/2` holds the answer to the schema column by column and answers the output table, `{:ok, table}`; `Macaw.Data.Derived.Engine` packs it without making a row.

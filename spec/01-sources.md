@@ -736,11 +736,11 @@ held/1's rows are a chunked table of the source's origin, its columns the schema
 ## 3. Deliveries {#sources-delivery}
 
 **`Macaw.Data.Delivery` is one answer of a source,** a snapshot of its relation (§2.5): its rows, and what it actually served, a handful of terms beside the rows, never per row. `%Delivery{rows, names, types, schema, served, origin, retracted, replace}`:
-- **`rows`, the rows as the source gave them** (macaw#185): a list of row maps or tuples, a map or keyword list of columns, an `Nx.Tensor`, a `Table.Reader` source, or a `Macaw.Data.Table`, which passes as it is. **Nothing is packed or rewritten when a delivery is made:** a delivery is on the hottest path a live chart has, every tick of every chart reading it, and packing at the edge cost a reader of rows half a second for 50,000 rows (visualize#970), dropped tuple rows, and rewrote values a reader gave (an integer beside floats, a naive time, a sparse row). `new/2` checks only the shape, and raises `ArgumentError` for rows of no shape a source has.
+- **`rows`, the rows as the source gave them** (macaw#185): a list of row maps or tuples, a map or keyword list of columns, an `Nx.Tensor`, a `Table.Reader` source, or a `Macaw.Data.Table`, which passes as it is. **Nothing is packed or rewritten when a delivery is made:** a delivery is on the hottest path a live chart has, every tick of every chart reading it, and packing at the edge cost a reader of rows half a second for 50,000 rows (visualize#970), dropped tuple rows, and rewrote values a reader gave (an integer beside floats, a naive time, a sparse row). `new/2` checks only the shape, and answers rows of no shape a source has with a fault.
 - **`names`**: the column names of tuple rows or a tensor, in order, or `nil`; **`types`**: column types for packing, `%{}` to infer them.
 - **Reading:**
   - `rows/1` (and `Table.rows/1` of a delivery) is the row view, as `Table.rows/1` reads the source: a row list itself, uncopied, its tuple rows unchanged; a table, a column map or a tensor one row at a time. Nothing is rewritten.
-  - `named_rows/1` is the rows as maps, for a reader that reads them by name (finishing, push, a reducer): tuple rows and a tensor named by `names` (`Table.named/2`). **Tuple rows without names raise `ArgumentError`:** they cannot be read by name, and are never dropped for it.
+  - `named_rows/1` is the rows as maps, for a reader that reads them by name (finishing, push, a reducer): `{:ok, rows}`, tuple rows and a tensor named by `names` (`Table.named/2`). **Tuple rows without names are `{:error, [{[:names], :required}]}`:** they cannot be read by name, and are never dropped for it. Rows that do not fit their names are `{[:names], reason}`, `Table.named/2`'s `{:width, names, width}` or `{:rank, rank}`. `named_rows!/1` raises.
   - `table/2` packs the rows into a `Macaw.Data.Table` (§1.1) for a reader that wants columns, `{:ok, table}` or `{:error, faults}`, with the delivery's `types` and `names` and any `opts` gives; `table!/2` raises. **Packing normalizes, there and only there:** the delivery's rows never change. A source that already holds a table delivers it, and a reader of columns pays nothing.
   - `empty?/1` is whether there are no rows.
 - **`schema`**, the **version** of the schema the rows were produced under (§1.10), never the schema itself, which the cache holds by version (§1.12); `nil` when the source has none.
@@ -757,7 +757,21 @@ held/1's rows are a chunked table of the source's origin, its columns the schema
 - **`origin`**: `%{source: name, request: digest, as_of: time}`, the source, a digest of the request (`Macaw.Layers.Document.digest/1` of it), and the `DateTime` it is as of when used, else `nil`; or `nil`.
 - **`retracted`** and **`replace`**: the changes a pushed increment carries beside its inserted rows (§4.2), `[]` by default.
 
-`new/2` raises `ArgumentError` naming the fault for a key that is not a delivery's or a served fact, or a value a field does not take. visualize's `Visualize.Data.Delivery` holds these facts flat, with `reduced_by: :feed | :visualize` and no `served` or `origin`; mapping them at adoption is visualize's.
+**`new/2` answers `{:ok, delivery}` or every fault, `{path, reason}`** (macaw_data#114, [00 §5](00-overview.md#data-errors)), in the order of the fields; `new!/2` raises `ArgumentError` in `format_error/1`'s words:
+
+| Fault | Meaning |
+|---|---|
+| `{[:rows], :delivery}` | a delivery of a delivery |
+| `{[:rows], {:type, :rows}}` | rows of no shape a source has |
+| `{[key], :unknown_key}` | an option that is not a delivery's (`{[:opts], {:type, :keyword}}`: options that are not a keyword list) |
+| `{[:served, fact], :unknown_key}` | a fact that is not a served fact (`{[:served], {:type, :keyword}}`: served facts that are neither a keyword list nor a map) |
+| `{[:served, fact], reason}` | a value the fact does not take: `window` `{:type, :window}`, `capped` `{:type, :boolean}`, `reduced_by` and `ordered` `{:enum, values}`, `params` `{:type, :map}`, `note` `{:type, :string}`, `position` `{:type, :non_neg_integer}`, `complete_until` `{:type, :instant}` |
+| `{[:names], {:type, :names}}`, `{[:types], {:type, :map}}` | names that are not atoms or strings; types that are not a map |
+| `{[:schema], {:type, :version}}`, `{[:origin], {:type, :origin}}` | a schema that is not a version; a malformed origin |
+| `{[:retracted], {:type, :list}}`, `{[:retracted, i], {:type, :row}}` | retracted rows that are not a list, or not row maps |
+| `{[:replace], {:type, :list}}`, `{[:replace, i], {:type, :replacement}}` | replacements that are not a list, or a malformed range replacement |
+
+visualize's `Visualize.Data.Delivery` holds these facts flat, with `reduced_by: :feed | :visualize` and no `served` or `origin`; mapping them at adoption is visualize's.
 
 **Absence is never zero:** a source never fills a gap with 0, and a delivery's table keeps every gap `nil` (§1.1). (metresis.md C1.)
 
@@ -770,7 +784,7 @@ a delivery reads rows, columns, keyword columns and a table as rows, empty?/1 an
 ```
 
 ```test:delivery-tuple-rows
-tuple rows and a tensor read back as given; named_rows/1 and table/2 name them by names (or table/2's names:); without names named_rows/1 raises, and with too few it raises naming the fit
+tuple rows and a tensor read back as given; named_rows/1 and table/2 name them by names (or table/2's names:); without names named_rows/1 answers {[:names], :required}, and with too few it answers the fit; named_rows!/1 raises either
 ```
 
 ```test:delivery-absence
@@ -787,6 +801,10 @@ a box window over a point field takes four bounds, may cross the antimeridian, a
 
 ```test:delivery-schema-origin
 a delivery names the schema's version, never the schema; its origin is the source, the request's digest and as_of, nil by default; malformed versions and origins are refused
+```
+
+```test:delivery-faults
+for generated rows and options, good and bad, new/2 never raises: it answers {:ok, delivery} or every fault, a {path, reason} format_error/1 words; new!/2 raises ArgumentError in those words
 ```
 
 ## 4. Push {#sources-push}

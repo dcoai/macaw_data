@@ -10,7 +10,7 @@ defmodule Macaw.Data.Derived.Context do
 
       iex> alias Macaw.Data.{Delivery, Schema}
       iex> schema = Schema.new!(%{cpu: %{type: :number, bounds: [0, 100]}})
-      iex> delivery = Delivery.new([%{cpu: 3}], served: [window: [0, 10], capped: true])
+      iex> delivery = Delivery.new!([%{cpu: 3}], served: [window: [0, 10], capped: true])
       iex> Macaw.Data.Derived.Context.new([%{key: "hosts", delivery: delivery, schema: schema}])
       %{"inputs" => %{"hosts" => %{"schema" => %{"cpu" => %{"bounds" => [0, 100], "type" => :number}},
         "window" => [0, 10], "resolution" => nil, "capped" => true}}}

@@ -56,7 +56,7 @@ defmodule Macaw.Data.Derived.EngineLoadTest do
     rows = for i <- 1..2, do: %{t: i, host: "h#{i}", cpu: i * 10}
 
     engine
-    |> Engine.push(%{hosts: Delivery.new(rows)}, %{hosts: @hosts}, 0)
+    |> Engine.push(%{hosts: Delivery.new!(rows)}, %{hosts: @hosts}, 0)
     |> Engine.run(0)
     |> Engine.faults()
     |> Map.fetch!(["a"])
@@ -80,7 +80,7 @@ defmodule Macaw.Data.Derived.EngineLoadTest do
     rows = for i <- 1..2, do: %{t: i, host: "h#{i}", cpu: i * 10}
 
     engine
-    |> Engine.push(%{hosts: Delivery.new(rows)}, %{hosts: @hosts}, 0)
+    |> Engine.push(%{hosts: Delivery.new!(rows)}, %{hosts: @hosts}, 0)
     |> Engine.run(0)
     |> Engine.faults()
   end

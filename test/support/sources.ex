@@ -159,7 +159,7 @@ defmodule Macaw.Data.Test.Sources do
       t = 100 + generation
 
       delivery =
-        Delivery.new([row(t, 1, flaw)],
+        Delivery.new!([row(t, 1, flaw)],
           types: types(flaw),
           served: [window: [t, t]],
           schema: Schema.version(schema)
@@ -277,7 +277,7 @@ defmodule Macaw.Data.Test.Sources do
             %{source: :broken, request: "", as_of: as_of}
         end
 
-      Delivery.new(rows,
+      Delivery.new!(rows,
         types: types(flaw),
         served: [
           window: [if(flaw == :served_window_lie, do: lo + 2, else: lo), hi],
@@ -366,7 +366,7 @@ defmodule Macaw.Data.Test.Sources do
       rows = if request.latest and flaw != :latest_twice, do: last_of_each(rows, flaw), else: rows
 
       {:ok,
-       Delivery.new(rows,
+       Delivery.new!(rows,
          types: %{t: :number, car: :text, x: :number, y: :number},
          served: [window: [lo, hi]],
          schema: Schema.version(schema())
@@ -432,7 +432,7 @@ defmodule Macaw.Data.Test.Sources do
           else: Enum.filter(@places, &Window.in_box?(&1.at, request.box))
 
       {:ok,
-       Delivery.new(rows,
+       Delivery.new!(rows,
          types: %{at: :point, name: :text},
          served: [window: request.box],
          schema: Schema.version(schema())

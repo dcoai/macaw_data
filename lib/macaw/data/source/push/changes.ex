@@ -24,7 +24,7 @@ defmodule Macaw.Data.Source.Push.Changes do
         {kept ++ [%{r | rows: inside}], faults ++ Enum.map(out, &{:outside, &1})}
       end)
 
-    {others, after_} = timely(Delivery.named_rows(increment), ctx, after_)
+    {others, after_} = timely(Delivery.named_rows!(increment), ctx, after_)
     {others, after_} = outside(others, replacements, ctx, after_)
 
     {%{retract: retractions, replace: replacements, insert: others}, before, after_}

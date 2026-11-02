@@ -25,7 +25,7 @@ defmodule Macaw.Data.PushTest do
 
     @impl true
     def fetch(_source, _request),
-      do: {:ok, Delivery.new([], types: %{"t" => :number, "v" => :number})}
+      do: {:ok, Delivery.new!([], types: %{"t" => :number, "v" => :number})}
 
     @impl true
     def subscribe(%__MODULE__{rows: rows}, pid) do
@@ -43,14 +43,14 @@ defmodule Macaw.Data.PushTest do
 
     def increment(rows),
       do:
-        Delivery.new(rows,
+        Delivery.new!(rows,
           types: %{"t" => :number, "v" => :number},
           schema: Schema.version(@schema)
         )
   end
 
   defp increment(rows, served \\ []),
-    do: Delivery.new(rows, types: @types, schema: Schema.version(@schema), served: served)
+    do: Delivery.new!(rows, types: @types, schema: Schema.version(@schema), served: served)
 
   defp no_describe(_name), do: flunk("describe asked although the schema was pushed")
 
@@ -175,7 +175,7 @@ defmodule Macaw.Data.PushTest do
     push =
       Enum.reduce(1..5, push, fn i, push ->
         d =
-          Delivery.new([%{"msg" => "m#{i}"}],
+          Delivery.new!([%{"msg" => "m#{i}"}],
             types: %{"msg" => :text},
             schema: Schema.version(schema)
           )

@@ -47,7 +47,7 @@ defmodule Macaw.Data.Derived.EngineChangeTest do
     engine =
       engine
       |> Engine.push(
-        %{given: Delivery.new(rows, served: [note: "#{now}"])},
+        %{given: Delivery.new!(rows, served: [note: "#{now}"])},
         %{given: @given},
         now
       )

@@ -64,21 +64,21 @@ defmodule Macaw.Data.Source.Finish do
 
     delivery
     |> step(:window in supports or request.window == nil or field == nil, fn d ->
-      rows = Window.trim(Delivery.named_rows(d), field, request.window)
+      rows = Window.trim(Delivery.named_rows!(d), field, request.window)
       d |> rebuild(rows) |> serve(:window, Window.intersect(d.served.window, request.window))
     end)
     |> step(:box in supports or request.box == nil, fn d ->
       d
-      |> rebuild(Window.trim_box(Delivery.named_rows(d), field, request.box))
+      |> rebuild(Window.trim_box(Delivery.named_rows!(d), field, request.box))
       |> serve(:window, request.box)
     end)
     |> step(:region in supports or request.region == nil, fn d ->
-      rebuild(d, Window.trim_region(Delivery.named_rows(d), request.region))
+      rebuild(d, Window.trim_region(Delivery.named_rows!(d), request.region))
     end)
     |> step(:latest in supports or not request.latest, fn d ->
       rows =
         Window.latest_rows(
-          Delivery.named_rows(d),
+          Delivery.named_rows!(d),
           &Window.position(Table.get(&1, field)),
           &Schema.identity(schema, &1)
         )
@@ -87,7 +87,7 @@ defmodule Macaw.Data.Source.Finish do
     end)
     |> step(:order in supports or request.order == [], fn d ->
       d
-      |> rebuild(Order.sort(Delivery.named_rows(d), request.order, schema))
+      |> rebuild(Order.sort(Delivery.named_rows!(d), request.order, schema))
       |> serve(:ordered, ordered_by(d.served))
     end)
     |> step(
@@ -138,7 +138,7 @@ defmodule Macaw.Data.Source.Finish do
 
       iex> alias Macaw.Data.{Delivery, Schema, Source.Finish}
       iex> schema = Schema.new!(%{t: %{type: :number, window: true}, v: %{type: :number}})
-      iex> reduced = Finish.reduce(Delivery.new(for t <- 1..100, do: %{t: t, v: rem(t * 7, 5)}), schema, 10)
+      iex> reduced = Finish.reduce(Delivery.new!(for t <- 1..100, do: %{t: t, v: rem(t * 7, 5)}), schema, 10)
       iex> {length(Delivery.rows(reduced)), reduced.served.reduced_by}
       {10, :runtime}
   """
@@ -154,7 +154,7 @@ defmodule Macaw.Data.Source.Finish do
   def reduce(%Delivery{served: %{ordered: by}} = delivery, %Schema{}, budget, method, registry)
       when by != nil and is_integer(budget) and budget > 0 do
     reducer!(registry, method)
-    rows = Delivery.named_rows(delivery)
+    rows = Delivery.named_rows!(delivery)
 
     if length(rows) <= budget,
       do: delivery,
@@ -164,7 +164,7 @@ defmodule Macaw.Data.Source.Finish do
   def reduce(%Delivery{} = delivery, %Schema{} = schema, budget, method, %Registry{} = registry)
       when is_integer(budget) and budget > 0 do
     method = reducer!(registry, method)
-    rows = Delivery.named_rows(delivery)
+    rows = Delivery.named_rows!(delivery)
     clock = Schema.window_field(schema)
     numbers = for {name, %{type: :number}} <- schema.fields, name != clock, do: name
 

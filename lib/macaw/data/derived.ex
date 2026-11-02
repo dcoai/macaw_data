@@ -534,7 +534,7 @@ defmodule Macaw.Data.Derived do
   def window(rows, %{} = window, schema) when is_list(rows) do
     {:ok, request} = request(window)
     description = %Description{schema: schema}
-    %Delivery{rows: rows} = Finish.finish(Delivery.new(rows), description, request)
+    %Delivery{rows: rows} = Finish.finish(Delivery.new!(rows), description, request)
     rows
   end
 

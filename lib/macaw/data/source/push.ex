@@ -373,7 +373,7 @@ defmodule Macaw.Data.Source.Push do
   # edge packs them, in the window field's order with rows of no window value last, on the
   # source's origin. `{:ok, held}` or the packing's faults.
   defp holding(push, %Delivery{} = delivery, schema) do
-    rows = delivery |> Delivery.named_rows() |> ordered(Schema.window_field(schema))
+    rows = delivery |> Delivery.named_rows!() |> ordered(Schema.window_field(schema))
     header = header(schema)
 
     columns =

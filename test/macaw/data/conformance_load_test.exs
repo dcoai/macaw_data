@@ -37,7 +37,7 @@ defmodule Macaw.Data.ConformanceLoadTest do
       do: receive(do: (:never_sent -> {:ok, delivery(0)}))
 
     defp delivery(n),
-      do: Delivery.new([%{n: n}], types: %{n: :number}, schema: Schema.version(schema()))
+      do: Delivery.new!([%{n: n}], types: %{n: :number}, schema: Schema.version(schema()))
 
     defp sum(n), do: Enum.reduce(1..n, 0, &(&1 + &2))
     defp forever(n), do: forever(rem(n + 1, 7))

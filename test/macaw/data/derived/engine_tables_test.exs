@@ -50,7 +50,7 @@ defmodule Macaw.Data.Derived.EngineTablesTest do
   end
 
   defp pushed(engine, rows, now),
-    do: Engine.push(engine, %{hosts: Delivery.new(rows)}, %{hosts: @hosts}, now)
+    do: Engine.push(engine, %{hosts: Delivery.new!(rows)}, %{hosts: @hosts}, now)
 
   defp answer(engine, rows) do
     engine = engine |> pushed(rows, 0) |> Engine.run(0)

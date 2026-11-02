@@ -18,7 +18,7 @@ defmodule Macaw.Data.PushChangelogTest do
   defp rows(ts), do: for(t <- ts, do: %{"t" => t, "v" => t})
 
   defp delivery(rows, served \\ []),
-    do: Delivery.new(rows, schema: @version, served: served)
+    do: Delivery.new!(rows, schema: @version, served: served)
 
   defp snapshot(rows, position), do: delivery(rows, position: position)
 
@@ -43,7 +43,7 @@ defmodule Macaw.Data.PushChangelogTest do
 
       delivery ->
         delivery
-        |> Delivery.named_rows()
+        |> Delivery.named_rows!()
         |> Enum.map(&Map.new(&1, fn {k, v} -> {to_string(k), v} end))
         |> Enum.sort_by(&{&1["t"], &1["v"]})
     end
@@ -165,13 +165,13 @@ defmodule Macaw.Data.PushChangelogTest do
   defp change({push, served}, seq, opts) do
     {rows, opts} = Keyword.pop(opts, :rows, [])
     opts = Keyword.put_new(opts, :served, served)
-    d = Delivery.new(rows, [schema: Schema.version(@tapped)] ++ opts)
+    d = Delivery.new!(rows, [schema: Schema.version(@tapped)] ++ opts)
     {send_in(push, Push.increment_message(push.ref, seq, d)) |> drain(), served}
   end
 
   defp start({push, served}, rows, served_snapshot \\ []) do
     d =
-      Delivery.new(rows,
+      Delivery.new!(rows,
         schema: Schema.version(@tapped),
         served: Keyword.merge([position: 0], served_snapshot ++ served)
       )
@@ -223,7 +223,7 @@ defmodule Macaw.Data.PushChangelogTest do
 
     # With no identity declared, by the whole row.
     plain = push() |> increment(1, rows([1, 1, 2])) |> drain()
-    gone = Delivery.new([], schema: @version, retracted: rows([1]))
+    gone = Delivery.new!([], schema: @version, retracted: rows([1]))
     {:ok, plain} = Push.receive(plain, Push.increment_message(plain.ref, 2, gone))
 
     plain = drain(plain)
@@ -295,7 +295,7 @@ defmodule Macaw.Data.PushChangelogTest do
     # A schema with no window field takes only the whole range.
     log = Schema.new!(%{"msg" => %{type: :text}})
     lp = Push.new(:log, make_ref(), cache: Cache.new([{:log, log}]))
-    inc = fn rows, opts -> Delivery.new(rows, [schema: Schema.version(log)] ++ opts) end
+    inc = fn rows, opts -> Delivery.new!(rows, [schema: Schema.version(log)] ++ opts) end
     {:ok, lp} = Push.receive(lp, Push.increment_message(lp.ref, 1, inc.([%{"msg" => "x"}], [])))
 
     {:ok, lp} =
@@ -338,7 +338,7 @@ defmodule Macaw.Data.PushChangelogTest do
 
     # The snapshot at the subscription's resolution hands off by position and clears it.
     snap =
-      Delivery.new([tap("a", 1, 1), tap("a", 2, 2)],
+      Delivery.new!([tap("a", 1, 1), tap("a", 2, 2)],
         schema: Schema.version(@tapped),
         served: [position: 1, resolution: 1]
       )
@@ -396,7 +396,7 @@ defmodule Macaw.Data.PushChangelogTest do
               assert Push.refetch(push) == {:resolution, 60, nil}
 
               snapshot =
-                Delivery.new(Enum.at(models, seq),
+                Delivery.new!(Enum.at(models, seq),
                   schema: Schema.version(@tapped),
                   served: [position: seq]
                 )
@@ -496,7 +496,7 @@ defmodule Macaw.Data.PushChangelogTest do
   # A snapshot at another resolution: what a holder fetched at another window.
   defp junk(position),
     do:
-      Delivery.new([tap("q", 0, 0)],
+      Delivery.new!([tap("q", 0, 0)],
         schema: Schema.version(@tapped),
         served: [position: position, resolution: 60]
       )
@@ -511,7 +511,7 @@ defmodule Macaw.Data.PushChangelogTest do
         {opts, model} = step(step, model)
 
         d =
-          Delivery.new(
+          Delivery.new!(
             Keyword.get(opts, :rows, []),
             [schema: Schema.version(@tapped)] ++ Keyword.delete(opts, :rows)
           )
@@ -608,7 +608,7 @@ defmodule Macaw.Data.PushChangelogTest do
     {push, _} = s
 
     back =
-      Delivery.new([tap("a", 1, 1)],
+      Delivery.new!([tap("a", 1, 1)],
         schema: Schema.version(@tapped),
         served: [position: 3, complete_until: 4]
       )
@@ -663,7 +663,7 @@ defmodule Macaw.Data.PushChangelogTest do
     {push, _} = s
 
     snap =
-      Delivery.new([tap("a", 1, 7)],
+      Delivery.new!([tap("a", 1, 7)],
         schema: Schema.version(@tapped),
         served: [position: 0, complete_until: 100]
       )
@@ -682,24 +682,24 @@ defmodule Macaw.Data.PushChangelogTest do
       )
 
     snap =
-      Delivery.new([], schema: Schema.version(timed), served: [position: 0, complete_until: t0])
+      Delivery.new!([], schema: Schema.version(timed), served: [position: 0, complete_until: t0])
 
     rows = [
       %{"at" => ~U[2026-10-30 10:59:59Z], "v" => 1},
       %{"at" => ~U[2026-10-30 11:00:00Z], "v" => 2}
     ]
 
-    inc = Delivery.new(rows, schema: Schema.version(timed))
+    inc = Delivery.new!(rows, schema: Schema.version(timed))
     p = p |> Push.snapshot(snap) |> send_in(Push.increment_message(p.ref, 1, inc)) |> drain()
     assert p.errors == [{:late, hd(rows), ~U[2026-10-30 11:00:00Z]}]
-    assert Delivery.named_rows(Push.held(p)) == tl(rows)
+    assert Delivery.named_rows!(Push.held(p)) == tl(rows)
 
     # A lateness that can't be taken from the claim (a number from a time) is recorded,
     # and bounds nothing.
     q = Push.new(:timed, make_ref(), cache: Cache.new([{:timed, timed}]), lateness: 10)
     q = q |> Push.snapshot(snap) |> send_in(Push.increment_message(q.ref, 1, inc)) |> drain()
     assert q.errors == [{:lateness, :incompatible, t0}]
-    assert Delivery.named_rows(Push.held(q)) == rows
+    assert Delivery.named_rows!(Push.held(q)) == rows
 
     # A description's lateness: a Duration over a time window field, a number over a
     # number one, refused with no window field.

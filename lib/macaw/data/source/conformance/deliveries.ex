@@ -141,16 +141,17 @@ defmodule Macaw.Data.Source.Conformance.Deliveries do
   defp malformed(_field, true, _value, _probe), do: []
   defp malformed(field, false, value, probe), do: [{:malformed, probe, field, value}]
 
-  # Rows are read in a process of their own: rows that cannot be read by name raise.
+  # Rows are read in a process of their own: a source's own reader may raise. Rows that
+  # cannot be read by name are malformed as rows that raise are.
   defp read_rows(%Delivery{rows: source} = delivery, probe, o) do
     case call(fn -> Delivery.named_rows(delivery) end, :rows, o) do
-      {:ok, rows} when is_list(rows) ->
+      {:ok, {:ok, rows}} when is_list(rows) ->
         case Enum.find(rows, &(not is_map(&1))) do
           nil -> {rows, []}
           row -> {[], [{:malformed, probe, :rows, row}]}
         end
 
-      _raised ->
+      _unread ->
         {[], [{:malformed, probe, :rows, source}]}
     end
   end

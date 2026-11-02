@@ -19,7 +19,7 @@ defmodule Macaw.Data.Derived.Engine do
       ...>   schema: %{n: %{type: :number}}, elixir: "fn %{hosts: rows} -> [%{n: Enum.count(rows)}] end")
       iex> {:ok, engine} = Engine.new(%{["count"] => count}, sources: [:hosts], debounce: 0)
       iex> hosts = Schema.new!(%{host: %{type: :category}})
-      iex> engine = Engine.push(engine, %{hosts: Delivery.new([%{host: "a"}, %{host: "b"}])}, %{hosts: hosts}, 0)
+      iex> engine = Engine.push(engine, %{hosts: Delivery.new!([%{host: "a"}, %{host: "b"}])}, %{hosts: hosts}, 0)
       iex> engine = Engine.run(engine, 0)
       iex> Delivery.rows(Engine.outputs(engine)[["count"]])
       [%{"n" => 2}]
@@ -539,7 +539,7 @@ defmodule Macaw.Data.Derived.Engine do
             previous.served.complete_until !== watermark
 
         delivery =
-          Delivery.new(table,
+          Delivery.new!(table,
             schema: Schema.version(source.schema),
             served: [complete_until: watermark]
           )

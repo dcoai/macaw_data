@@ -74,7 +74,7 @@ defmodule Macaw.Data.Derived.EngineContextTest do
 
   # The source's answer at 0, with every fact a delivery carries.
   defp push(engine) do
-    delivery = Delivery.new(@rows, served: [window: [0, 10], resolution: 5, capped: true])
+    delivery = Delivery.new!(@rows, served: [window: [0, 10], resolution: 5, capped: true])
     Engine.push(engine, %{hosts: delivery}, %{hosts: @hosts}, 0)
   end
 
@@ -194,7 +194,7 @@ defmodule Macaw.Data.Derived.EngineContextTest do
 
       engine =
         engine(%{["a"] => stored, ["b"] => hosted})
-        |> Engine.push(%{hosts: Delivery.new(rows)}, %{hosts: schema}, 0)
+        |> Engine.push(%{hosts: Delivery.new!(rows)}, %{hosts: schema}, 0)
         |> Engine.run(0)
 
       assert Engine.faults(engine) == %{}

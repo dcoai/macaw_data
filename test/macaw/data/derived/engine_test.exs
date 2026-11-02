@@ -36,7 +36,7 @@ defmodule Macaw.Data.Derived.EngineTest do
   defp rows(n), do: for(i <- 1..n, do: %{t: i, host: "h#{rem(i, 2)}", cpu: i * 10})
 
   defp push(engine, rows, now \\ 0),
-    do: Engine.push(engine, %{hosts: Delivery.new(rows)}, %{hosts: @hosts}, now)
+    do: Engine.push(engine, %{hosts: Delivery.new!(rows)}, %{hosts: @hosts}, now)
 
   defp count, do: "fn %{hosts: rows} -> [%{n: Enum.count(rows)}] end"
 
@@ -190,7 +190,7 @@ defmodule Macaw.Data.Derived.EngineTest do
 
       engine =
         engine
-        |> Engine.push(%{checks: Delivery.new(rows)}, %{checks: checks}, 0)
+        |> Engine.push(%{checks: Delivery.new!(rows)}, %{checks: checks}, 0)
         |> Engine.run(0)
 
       assert Delivery.rows(Engine.outputs(engine)[["a"]]) == [%{"n" => 2}]
@@ -366,7 +366,7 @@ defmodule Macaw.Data.Derived.EngineTest do
           idle_after: %{b: 1_000}
         )
 
-      at = fn cu, rows -> Delivery.new(rows, served: [complete_until: cu]) end
+      at = fn cu, rows -> Delivery.new!(rows, served: [complete_until: cu]) end
       row = fn t -> %{t: t, host: "h", cpu: 1} end
       schemas = %{a: @hosts, b: @hosts}
       watermark = fn engine, path -> Engine.outputs(engine)[path].served.complete_until end

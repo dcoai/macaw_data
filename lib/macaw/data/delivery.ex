@@ -51,7 +51,7 @@ defmodule Macaw.Data.Delivery do
 
       iex> alias Macaw.Data.Delivery
       iex> rows = [%{t: 1, v: 3}, %{t: 2, v: nil}]
-      iex> d = Delivery.new(rows, served: [window: [0, 10]], schema: "ab12")
+      iex> {:ok, d} = Delivery.new(rows, served: [window: [0, 10]], schema: "ab12")
       iex> Delivery.rows(d) === rows
       true
       iex> {d.served.window, d.served.capped, d.served.reduced_by}
@@ -78,6 +78,10 @@ defmodule Macaw.Data.Delivery do
     retracted: [],
     replace: []
   ]
+
+  @options [:served, :schema, :origin, :types, :names, :retracted, :replace]
+  @reduced_by [nil, :source, :runtime]
+  @ordered [nil, :source, :runtime, :sample]
 
   @served_defaults %{
     window: nil,
@@ -113,6 +117,9 @@ defmodule Macaw.Data.Delivery do
   @typedoc "A range replacement (spec/01 §4.2): over `[from, to)`, limited to `identities`, exactly `rows`."
   @type replacement :: %{from: term(), to: term(), identities: [term()] | nil, rows: [map()]}
 
+  @typedoc "A fault in a delivery's arguments: where it is, and why (`format_error/1`)."
+  @type fault :: {[atom() | non_neg_integer()], term()}
+
   @typedoc "Where an answer came from."
   @type origin :: %{source: term(), request: String.t(), as_of: DateTime.t() | nil} | nil
 
@@ -131,35 +138,70 @@ defmodule Macaw.Data.Delivery do
   A delivery of `rows`, any source `Macaw.Data.Table.rows/1` reads, kept as given, with
   `served:` (a keyword list or map of the served facts), `schema:` (a version), `origin:`,
   `names:` (tuple rows' or a tensor's column names, in order) and `types:` (for
-  `table/2`).
+  `table/2`): `{:ok, delivery}`, or every fault, `{path, reason}` (spec/01 §3):
 
-  Raises `ArgumentError` naming the fault: a key that is not a delivery's or a served
-  fact, a value a field does not take, a delivery of a delivery, or rows of no shape a
-  source has. The rows themselves are not read: a source's rows are its own until a
-  reader reads them.
+  - `{[:rows], :delivery}`: a delivery of a delivery;
+  - `{[:rows], {:type, :rows}}`: rows of no shape a source has;
+  - `{[key], :unknown_key}`: an option that is not a delivery's, and
+    `{[:opts], {:type, :keyword}}` options that are not a keyword list;
+  - `{[:served, fact], :unknown_key}`: a fact that is not a served fact, and
+    `{[:served, fact], reason}` a value it does not take: `{:type, :window}`,
+    `{:type, :boolean}`, `{:enum, values}`, `{:type, :map}`, `{:type, :string}`,
+    `{:type, :non_neg_integer}` or `{:type, :instant}`; `{[:served], {:type, :keyword}}`
+    for served facts that are neither a keyword list nor a map;
+  - `{[:names], {:type, :names}}`, `{[:types], {:type, :map}}`,
+    `{[:schema], {:type, :version}}` and `{[:origin], {:type, :origin}}`;
+  - `{[:retracted], {:type, :list}}` and `{[:retracted, i], {:type, :row}}`;
+    `{[:replace], {:type, :list}}` and `{[:replace, i], {:type, :replacement}}`.
+
+  `format_error/1` gives a fault's words. The rows themselves are not read: a source's
+  rows are its own until a reader reads them.
   """
-  @spec new(Table.source() | Table.t(), keyword()) :: t()
+  @spec new(Table.source() | Table.t(), keyword()) :: {:ok, t()} | {:error, [fault(), ...]}
   def new(rows, opts \\ [])
 
-  def new(%__MODULE__{}, _opts),
-    do: raise(ArgumentError, "a delivery carries rows, not another delivery")
-
   def new(rows, opts) when is_list(opts) do
-    opts =
-      Keyword.validate!(opts, [:served, :schema, :origin, :types, :names, :retracted, :replace])
+    names = Keyword.get(opts, :names)
+    types = Keyword.get(opts, :types, %{})
+    {served, served_faults} = served(Keyword.get(opts, :served, []))
+    schema = Keyword.get(opts, :schema)
+    {origin, origin_faults} = origin(Keyword.get(opts, :origin))
+    retracted = Keyword.get(opts, :retracted, [])
+    {replace, replace_faults} = replace(Keyword.get(opts, :replace, []))
 
-    source!(rows)
+    case source(rows) ++
+           options(opts) ++
+           names(names) ++
+           types(types) ++
+           served_faults ++
+           schema(schema) ++ origin_faults ++ retracted(retracted) ++ replace_faults do
+      [] ->
+        {:ok,
+         %__MODULE__{
+           rows: rows,
+           names: names,
+           types: Map.new(types),
+           served: served,
+           schema: schema,
+           origin: origin,
+           retracted: retracted,
+           replace: replace
+         }}
 
-    %__MODULE__{
-      rows: rows,
-      names: names(Keyword.get(opts, :names)),
-      types: types(Keyword.get(opts, :types, %{})),
-      served: served(Keyword.get(opts, :served, [])),
-      schema: schema(Keyword.get(opts, :schema)),
-      origin: origin(Keyword.get(opts, :origin)),
-      retracted: retracted(Keyword.get(opts, :retracted, [])),
-      replace: replace(Keyword.get(opts, :replace, []))
-    }
+      faults ->
+        {:error, faults}
+    end
+  end
+
+  def new(_rows, _opts), do: {:error, [{[:opts], {:type, :keyword}}]}
+
+  @doc "As `new/2`, raising `ArgumentError` in `format_error/1`'s words."
+  @spec new!(Table.source() | Table.t(), keyword()) :: t()
+  def new!(rows, opts \\ []) do
+    case new(rows, opts) do
+      {:ok, delivery} -> delivery
+      {:error, faults} -> raise ArgumentError, "not a delivery: " <> words(faults)
+    end
   end
 
   @doc """
@@ -172,25 +214,39 @@ defmodule Macaw.Data.Delivery do
 
   @doc """
   The rows as maps, for a reader that reads them by name (finishing, push, a reducer):
-  `rows/1`, with tuple rows and a tensor's named by `names` (`Macaw.Data.Table.named/2`).
-  Tuple rows without names raise `ArgumentError`: they cannot be read by name, and are
-  never dropped for it.
+  `{:ok, rows}`, `rows/1` with tuple rows and a tensor's named by `names`
+  (`Macaw.Data.Table.named/2`). Tuple rows without names are `{:error, [{[:names],
+  :required}]}`: they cannot be read by name, and are never dropped for it. Rows that do
+  not fit their names are `{[:names], reason}`, `Macaw.Data.Table.named/2`'s reason
+  (`{:width, names, width}`, `{:rank, rank}`).
   """
-  @spec named_rows(t()) :: [map()]
+  @spec named_rows(t()) :: {:ok, [map()]} | {:error, [fault(), ...]}
   def named_rows(%__MODULE__{rows: rows, names: names}) do
-    source =
-      case {Table.unnamed?(rows), names} do
-        {false, _names} ->
-          rows
+    case {Table.unnamed?(rows), names} do
+      {false, _names} ->
+        {:ok, Table.rows(rows)}
 
-        {true, nil} ->
-          raise ArgumentError, "tuple rows have no names: give Delivery.new/2 names: [...]"
+      {true, nil} ->
+        {:error, [{[:names], :required}]}
 
-        {true, names} ->
-          named!(rows, names)
-      end
+      {true, names} ->
+        case Table.named(rows, names) do
+          {:ok, named} -> {:ok, Table.rows(named)}
+          {:error, why} -> {:error, [{[:names], why}]}
+        end
+    end
+  end
 
-    Table.rows(source)
+  @doc "As `named_rows/1`, raising `ArgumentError` in `format_error/1`'s words."
+  @spec named_rows!(t()) :: [map()]
+  def named_rows!(%__MODULE__{} = delivery) do
+    case named_rows(delivery) do
+      {:ok, rows} ->
+        rows
+
+      {:error, faults} ->
+        raise ArgumentError, "the rows cannot be read by name: " <> words(faults)
+    end
   end
 
   @doc """
@@ -233,110 +289,175 @@ defmodule Macaw.Data.Delivery do
   defp named(source, nil), do: {:ok, source}
   defp named(source, names), do: Table.named(source, names)
 
-  defp named!(source, names) do
-    case Table.named(source, names) do
-      {:ok, named} ->
-        named
+  @doc """
+  A delivery's fault in words: where it is, its path read as `served.position` or
+  `replace[2]`, and what is wrong there.
 
-      {:error, why} ->
-        raise ArgumentError, "the tuple rows do not fit their names: #{inspect(why)}"
-    end
+      iex> Macaw.Data.Delivery.format_error({[:served, :position], {:type, :non_neg_integer}})
+      "served.position: not a non-negative integer"
+  """
+  @spec format_error(fault()) :: String.t()
+  def format_error({path, reason}), do: "#{where(path)}: #{why(path, reason)}"
+
+  defp words(faults), do: Enum.map_join(faults, "; ", &format_error/1)
+
+  defp where(path) do
+    path
+    |> Enum.map_join(".", fn
+      i when is_integer(i) -> "[#{i}]"
+      key when is_atom(key) or is_binary(key) -> to_string(key)
+      other -> inspect(other)
+    end)
+    |> String.replace(".[", "[")
+  end
+
+  defp why([:rows], :delivery), do: "a delivery carries rows, not another delivery"
+  defp why([:rows], {:type, :rows}), do: "not a delivery's rows: no shape a source's rows have"
+  defp why([:served, _fact], :unknown_key), do: "not a served fact (spec/01 §3)"
+  defp why(_path, :unknown_key), do: "not a delivery's option"
+  defp why([:names], :required), do: "tuple rows have no names: give Delivery.new/2 names: [...]"
+
+  defp why([:names], {:width, n, width}),
+    do: "the tuple rows do not fit their names: #{n} names, a row of #{width}"
+
+  defp why([:names], {:rank, rank}),
+    do: "the tensor does not fit its names: rank #{rank}, not 1 or 2"
+
+  defp why(_path, {:enum, values}), do: "not one of #{inspect(values)}"
+  defp why(_path, {:type, :keyword}), do: "not a keyword list or a map"
+  defp why(_path, {:type, :window}), do: "not a range [from, to], a box or nil (spec/01 §3)"
+  defp why(_path, {:type, :boolean}), do: "not a boolean"
+  defp why(_path, {:type, :map}), do: "not a map"
+  defp why(_path, {:type, :string}), do: "not a string or nil"
+  defp why(_path, {:type, :non_neg_integer}), do: "not a non-negative integer"
+
+  defp why(_path, {:type, :instant}),
+    do: "not a time, a number or nil, below which no change is expected (spec/01 §4.4)"
+
+  defp why(_path, {:type, :names}), do: "not a list of atoms or strings"
+  defp why(_path, {:type, :version}), do: "not a schema version, a string or nil"
+
+  defp why(_path, {:type, :origin}),
+    do: "not an origin, %{source: name, request: digest, as_of: time | nil}"
+
+  defp why(_path, {:type, :list}), do: "not a list"
+  defp why(_path, {:type, :row}), do: "not a row map"
+
+  defp why(_path, {:type, :replacement}),
+    do: "not a range replacement, %{from, to, identities, rows} (spec/01 §4.2)"
+
+  # Every option not a delivery's, or the options not a keyword list.
+  defp options(opts) do
+    Enum.flat_map(opts, fn
+      {key, _value} when key in @options -> []
+      {key, _value} when is_atom(key) -> [{[key], :unknown_key}]
+      _other -> [{[:opts], {:type, :keyword}}]
+    end)
   end
 
   # The shapes a source's rows come in, told apart without reading them.
-  defp source!(rows) when is_list(rows), do: :ok
-  defp source!(%Table{}), do: :ok
-  defp source!(%{__struct__: Nx.Tensor}), do: :ok
+  defp source(rows) when is_list(rows), do: []
+  defp source(%__MODULE__{}), do: [{[:rows], :delivery}]
+  defp source(%Table{}), do: []
+  defp source(%{__struct__: Nx.Tensor}), do: []
 
-  defp source!(%_{} = struct) do
+  defp source(%_{} = struct) do
     if Code.ensure_loaded?(Elixir.Table.Reader) and Elixir.Table.Reader.impl_for(struct) != nil,
-      do: :ok,
-      else: raise(ArgumentError, "not a delivery's rows: #{inspect(struct, limit: 5)}")
+      do: [],
+      else: [{[:rows], {:type, :rows}}]
   end
 
-  defp source!(map) when is_map(map), do: :ok
+  defp source(map) when is_map(map), do: []
+  defp source(_other), do: [{[:rows], {:type, :rows}}]
 
-  defp source!(other),
-    do: raise(ArgumentError, "not a delivery's rows: #{inspect(other, limit: 5)}")
-
-  defp names(nil), do: nil
+  defp names(nil), do: []
 
   defp names(names) when is_list(names) do
     if Enum.all?(names, &(is_atom(&1) or is_binary(&1))),
-      do: names,
-      else: raise(ArgumentError, "not a delivery's names: #{inspect(names)}")
+      do: [],
+      else: [{[:names], {:type, :names}}]
   end
 
-  defp names(other), do: raise(ArgumentError, "not a delivery's names: #{inspect(other)}")
+  defp names(_other), do: [{[:names], {:type, :names}}]
 
-  defp types(%{} = types) when not is_struct(types), do: types
-  defp types(types) when is_list(types), do: Map.new(types)
-  defp types(other), do: raise(ArgumentError, "not a delivery's types: #{inspect(other)}")
+  defp types(%{} = types) when not is_struct(types), do: []
 
-  defp served(facts) when is_list(facts) or is_map(facts) do
-    Enum.reduce(facts, @served_defaults, fn {key, value}, acc ->
-      if Map.has_key?(@served_defaults, key) do
-        check(key, value)
-        Map.put(acc, key, value)
-      else
-        raise ArgumentError, "not a served fact: #{inspect(key)}"
+  defp types(types) when is_list(types) do
+    if Enum.all?(types, &match?({_, _}, &1)), do: [], else: [{[:types], {:type, :map}}]
+  end
+
+  defp types(_other), do: [{[:types], {:type, :map}}]
+
+  # The served facts over their defaults, and every fault among them.
+  defp served(facts) when is_list(facts) or (is_map(facts) and not is_struct(facts)) do
+    Enum.reduce(facts, {@served_defaults, []}, fn
+      {key, value}, {acc, faults} when is_map_key(@served_defaults, key) ->
+        {Map.put(acc, key, value), faults ++ check(key, value)}
+
+      {key, _value}, {acc, faults} ->
+        {acc, faults ++ [{[:served, key], :unknown_key}]}
+
+      _other, {acc, faults} ->
+        {acc, faults ++ [{[:served], {:type, :keyword}}]}
+    end)
+  end
+
+  defp served(_other), do: {@served_defaults, [{[:served], {:type, :keyword}}]}
+
+  defp check(:window, nil), do: []
+  defp check(:window, [_from, _to]), do: []
+
+  defp check(:window, %{} = box) do
+    if Request.box?(box), do: [], else: [{[:served, :window], {:type, :window}}]
+  end
+
+  defp check(:window, _other), do: [{[:served, :window], {:type, :window}}]
+  defp check(:resolution, _any), do: []
+  defp check(:capped, capped) when is_boolean(capped), do: []
+  defp check(:capped, _other), do: [{[:served, :capped], {:type, :boolean}}]
+  defp check(:reduced_by, by) when by in @reduced_by, do: []
+  defp check(:reduced_by, _other), do: [{[:served, :reduced_by], {:enum, @reduced_by}}]
+  defp check(:ordered, by) when by in @ordered, do: []
+  defp check(:ordered, _other), do: [{[:served, :ordered], {:enum, @ordered}}]
+  defp check(:params, params) when is_map(params) and not is_struct(params), do: []
+  defp check(:params, _other), do: [{[:served, :params], {:type, :map}}]
+  defp check(:note, note) when is_nil(note) or is_binary(note), do: []
+  defp check(:note, _other), do: [{[:served, :note], {:type, :string}}]
+  defp check(:position, p) when is_nil(p) or (is_integer(p) and p >= 0), do: []
+  defp check(:position, _other), do: [{[:served, :position], {:type, :non_neg_integer}}]
+  defp check(:complete_until, t) when is_nil(t) or is_number(t), do: []
+
+  defp check(:complete_until, t) do
+    if Window.instant?(t), do: [], else: [{[:served, :complete_until], {:type, :instant}}]
+  end
+
+  defp schema(version) when is_nil(version) or is_binary(version), do: []
+  defp schema(_other), do: [{[:schema], {:type, :version}}]
+
+  defp retracted([]), do: []
+
+  defp retracted(rows) when is_list(rows) do
+    for {row, i} <- Enum.with_index(rows), not row?(row), do: {[:retracted, i], {:type, :row}}
+  end
+
+  defp retracted(_other), do: [{[:retracted], {:type, :list}}]
+
+  @replacement %{from: nil, to: nil, identities: nil, rows: []}
+
+  defp replace([]), do: {[], []}
+
+  defp replace(list) when is_list(list) do
+    list
+    |> Enum.with_index()
+    |> Enum.map_reduce([], fn {given, i}, faults ->
+      case replacement(given) do
+        {:ok, replacement} -> {replacement, faults}
+        :error -> {given, faults ++ [{[:replace, i], {:type, :replacement}}]}
       end
     end)
   end
 
-  defp served(other), do: raise(ArgumentError, "not a delivery's served: #{inspect(other)}")
-
-  defp check(:window, nil), do: :ok
-  defp check(:window, [_from, _to]), do: :ok
-
-  defp check(:window, %{} = box) do
-    if Request.box?(box), do: :ok, else: check(:bad_window, box)
-  end
-
-  defp check(:bad_window, box),
-    do: raise(ArgumentError, "not a delivery's served window: #{inspect(box)} (spec/01 §3)")
-
-  defp check(:resolution, _any), do: :ok
-  defp check(:capped, capped) when is_boolean(capped), do: :ok
-  defp check(:reduced_by, by) when by in [nil, :source, :runtime], do: :ok
-  defp check(:ordered, by) when by in [nil, :source, :runtime, :sample], do: :ok
-  defp check(:params, params) when is_map(params) and not is_struct(params), do: :ok
-  defp check(:note, note) when is_nil(note) or is_binary(note), do: :ok
-  defp check(:position, p) when is_nil(p) or (is_integer(p) and p >= 0), do: :ok
-
-  defp check(:complete_until, t) when is_nil(t) or is_number(t), do: :ok
-
-  defp check(:complete_until, t) do
-    if Window.instant?(t),
-      do: :ok,
-      else:
-        raise(
-          ArgumentError,
-          "not a delivery's served complete_until: #{inspect(t)} (spec/01 §4.4)"
-        )
-  end
-
-  defp check(key, value),
-    do: raise(ArgumentError, "not a delivery's served #{key}: #{inspect(value)} (spec/01 §3)")
-
-  defp schema(version) when is_nil(version) or is_binary(version), do: version
-  defp schema(other), do: raise(ArgumentError, "not a schema version: #{inspect(other)}")
-
-  defp retracted(rows) when is_list(rows) do
-    if Enum.all?(rows, &row?/1),
-      do: rows,
-      else: raise(ArgumentError, "not a delivery's retracted rows: #{inspect(rows, limit: 5)}")
-  end
-
-  defp retracted(other),
-    do: raise(ArgumentError, "not a delivery's retracted rows: #{inspect(other, limit: 5)}")
-
-  @replacement %{from: nil, to: nil, identities: nil, rows: []}
-
-  defp replace(list) when is_list(list), do: Enum.map(list, &replacement/1)
-
-  defp replace(other),
-    do: raise(ArgumentError, "not a delivery's replacements: #{inspect(other, limit: 5)}")
+  defp replace(other), do: {other, [{[:replace], {:type, :list}}]}
 
   defp replacement(%{} = given) when not is_struct(given) do
     replacement = Map.merge(@replacement, given)
@@ -344,21 +465,15 @@ defmodule Macaw.Data.Delivery do
     if Map.keys(given) -- Map.keys(@replacement) == [] and
          (is_nil(replacement.identities) or is_list(replacement.identities)) and
          is_list(replacement.rows) and Enum.all?(replacement.rows, &row?/1),
-       do: replacement,
-       else:
-         raise(
-           ArgumentError,
-           "not a range replacement: #{inspect(given, limit: 5)} (spec/01 §4.2)"
-         )
+       do: {:ok, replacement},
+       else: :error
   end
 
-  defp replacement(other),
-    do:
-      raise(ArgumentError, "not a range replacement: #{inspect(other, limit: 5)} (spec/01 §4.2)")
+  defp replacement(_other), do: :error
 
   defp row?(row), do: is_map(row) and not is_struct(row)
 
-  defp origin(nil), do: nil
+  defp origin(nil), do: {nil, []}
 
   defp origin(%{source: _, request: request} = origin)
        when is_binary(request) and map_size(origin) in [2, 3] do
@@ -366,9 +481,9 @@ defmodule Macaw.Data.Delivery do
 
     if (is_nil(as_of) or match?(%DateTime{}, as_of)) and
          Map.keys(origin) -- [:source, :request, :as_of] == [],
-       do: Map.put_new(origin, :as_of, nil),
-       else: raise(ArgumentError, "not a delivery's origin: #{inspect(origin)}")
+       do: {Map.put_new(origin, :as_of, nil), []},
+       else: {origin, [{[:origin], {:type, :origin}}]}
   end
 
-  defp origin(other), do: raise(ArgumentError, "not a delivery's origin: #{inspect(other)}")
+  defp origin(other), do: {other, [{[:origin], {:type, :origin}}]}
 end

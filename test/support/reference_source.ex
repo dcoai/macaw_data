@@ -39,7 +39,7 @@ defmodule Macaw.Data.Test.Reference do
     rows = if request.budget, do: Enum.take(all, request.budget), else: all
 
     {:ok,
-     Delivery.new(rows,
+     Delivery.new!(rows,
        types: %{"t" => :number, "v" => :number, "who" => :text},
        schema: Schema.version(@schema),
        served: [

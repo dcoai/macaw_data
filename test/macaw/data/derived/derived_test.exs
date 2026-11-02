@@ -900,7 +900,7 @@ defmodule Macaw.Data.DerivedTest do
   @tag verifies: "derived-context-facts"
   test "the context: each input's schema as data and its delivery's facts; no clock, no variables" do
     delivery =
-      Delivery.new([%{cpu: 1}], served: [window: [0, 10], resolution: :minute, capped: true])
+      Delivery.new!([%{cpu: 1}], served: [window: [0, 10], resolution: :minute, capped: true])
 
     context = Context.new([%{key: :hosts, delivery: delivery, schema: @hosts}])
 
@@ -918,7 +918,7 @@ defmodule Macaw.Data.DerivedTest do
            } = context
 
     # A derived input: its output schema, and a delivery with no facts.
-    output = Delivery.new([%{n: 1}])
+    output = Delivery.new!([%{n: 1}])
 
     derived =
       Context.new([

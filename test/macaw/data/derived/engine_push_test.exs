@@ -111,8 +111,8 @@ defmodule Macaw.Data.Derived.EnginePushTest do
             {a, b, Table.size(a) != Table.size(b) or Table.column(a, :n) !== Table.column(b, :n)}
         end
 
-      a = Delivery.new(rows_a, served: [note: note_a])
-      b = Delivery.new(rows_b, served: [note: note_b])
+      a = Delivery.new!(rows_a, served: [note: note_a])
+      b = Delivery.new!(rows_b, served: [note: note_b])
 
       assert marked?(a, b) == (rows_differ? or note_a != note_b)
     end
@@ -120,13 +120,13 @@ defmodule Macaw.Data.Derived.EnginePushTest do
 
   @tag verifies: "derived-engine-push"
   test "1 then 1.0 marks the readers, and the answer downstream changes" do
-    assert marked?(Delivery.new([%{n: 1}]), Delivery.new([%{n: 1.0}]))
+    assert marked?(Delivery.new!([%{n: 1}]), Delivery.new!([%{n: 1.0}]))
 
     engine =
       engine()
-      |> push(Delivery.new([%{n: 1}]), 0)
+      |> push(Delivery.new!([%{n: 1}]), 0)
       |> Engine.run(0)
-      |> push(Delivery.new([%{n: 1.0}]), 1)
+      |> push(Delivery.new!([%{n: 1.0}]), 1)
       |> Engine.run(1)
 
     assert Table.column(Engine.outputs(engine)[["a"]].rows, "n") === [1.0]
@@ -137,16 +137,16 @@ defmodule Macaw.Data.Derived.EnginePushTest do
   test "one table chunked two ways marks nothing, and its rows as a list are another form" do
     table = table(Enum.map(1..10, &(&1 * 1.0)))
 
-    refute marked?(Delivery.new(table), Delivery.new(recut(table, 4)))
-    refute marked?(Delivery.new([%{n: 1}]), Delivery.new([%{n: 1}]))
-    assert marked?(Delivery.new(table), Delivery.new(Table.rows(table)))
+    refute marked?(Delivery.new!(table), Delivery.new!(recut(table, 4)))
+    refute marked?(Delivery.new!([%{n: 1}]), Delivery.new!([%{n: 1}]))
+    assert marked?(Delivery.new!(table), Delivery.new!(Table.rows(table)))
   end
 
   @tag verifies: "derived-engine-push"
   test "a retracted row's 1 then 1.0 marks the readers" do
     assert marked?(
-             Delivery.new([%{n: 2}], retracted: [%{n: 1}]),
-             Delivery.new([%{n: 2}], retracted: [%{n: 1.0}])
+             Delivery.new!([%{n: 2}], retracted: [%{n: 1}]),
+             Delivery.new!([%{n: 2}], retracted: [%{n: 1.0}])
            )
   end
 
@@ -154,7 +154,7 @@ defmodule Macaw.Data.Derived.EnginePushTest do
   # runs again (spec/02 §8.6).
   @tag verifies: "derived-engine-push"
   test "a served watermark of 1 then 1.0 is a change, to the push and to the answer" do
-    at = fn cu -> Delivery.new([%{n: 2}], served: [complete_until: cu]) end
+    at = fn cu -> Delivery.new!([%{n: 2}], served: [complete_until: cu]) end
     assert marked?(at.(1), at.(1.0))
 
     engine =

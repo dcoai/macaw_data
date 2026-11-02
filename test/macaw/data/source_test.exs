@@ -34,7 +34,7 @@ defmodule Macaw.Data.SourceTest do
       do:
         (
           send(self(), {:fetched, request})
-          {:ok, Delivery.new([%{v: 1}])}
+          {:ok, Delivery.new!([%{v: 1}])}
         )
 
     @impl true
