@@ -145,5 +145,27 @@ defmodule Macaw.Data.Table.Bitmap do
 
   def take(bitmap, indexes, nil), do: pack(for(i <- indexes, do: at(bitmap, i)))
 
+  @doc false
+  # Bitmaps of `n` bits each, `[{bitmap, n}]`, as one bitmap of their bits in order, its
+  # padding 0: each read as one little-endian integer, shifted past the bits before it. Ones
+  # throughout give ones, read from nothing.
+  @spec concat([{binary(), non_neg_integer()}]) :: binary()
+  def concat(pieces) do
+    total = Enum.sum(for {_bitmap, n} <- pieces, do: n)
+
+    if Enum.all?(pieces, fn {bitmap, n} -> all?(bitmap, n) end) do
+      ones(total)
+    else
+      {x, _at} =
+        Enum.reduce(pieces, {0, 0}, fn {bitmap, n}, {x, at} ->
+          size = byte_size(bitmap)
+          <<y::little-size(^size * 8)>> = bitmap
+          {x ||| (y &&& (1 <<< n) - 1) <<< at, at + n}
+        end)
+
+      <<x::little-size(bytes(total) * 8)>>
+    end
+  end
+
   defp bytes(n), do: div(n + 7, 8)
 end

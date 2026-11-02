@@ -4,8 +4,9 @@ defmodule Macaw.Data.FinishColumnsCostTest do
   # test loads or purges code.
   use ExUnit.Case, async: false
 
-  alias Macaw.Data.{Delivery, Derived, Schema, Table}
+  alias Macaw.Data.{Delivery, Derived, Native, Schema, Table}
   alias Macaw.Data.Source.{Description, Finish, Request}
+  alias Macaw.Data.Table.Subset
   alias Macaw.Data.Test.Work
 
   @base ~U[2026-01-01 00:00:00Z]
@@ -154,5 +155,42 @@ defmodule Macaw.Data.FinishColumnsCostTest do
     assert Table.size(windowed) == 25_000
     assert reductions < 400_000
     assert reductions < transpose
+  end
+
+  # Rows in another order across chunks are gathered by their slots, each fixed-width column
+  # joined across the chunks (macaw_data#128): a random permutation of 50k rows of an int64,
+  # a float64 and a UTC column cost 1,228,251 reductions on the Elixir path when this was
+  # written (448,160 with the kernels), against 4,088,217 when every column was decoded and
+  # packed again. A full order by cpu: 3,040,751 (2,520,795 with the kernels; its sort
+  # 1,471,715), against 5,316,721; the category column is still packed again
+  # (macaw_data#138). Counted on the Elixir path, which every job runs alike.
+  @tag verifies: "finish-columns-cost"
+  test "rows in another order across chunks are gathered by their slots, a full order too" do
+    n = 50_000
+    table = readings()
+
+    fixed =
+      Table.new!([
+        {:a, :number, Enum.to_list(1..n)},
+        {:b, :number, Enum.map(1..n, &(&1 * 0.5))},
+        {:t, :time, Table.column(table, :t)}
+      ])
+
+    :rand.seed(:exsss, {1, 2, 3})
+    shuffled = Enum.shuffle(0..(n - 1))
+
+    {gather, taken} =
+      Work.reductions(fn -> Native.elixir(fn -> Subset.at(fixed, shuffled) end) end)
+
+    assert Table.column(taken, :a) == Enum.map(shuffled, &(&1 + 1))
+    assert gather < 1_400_000
+
+    {order, {:ok, ordered}} =
+      Work.reductions(fn ->
+        Native.elixir(fn -> finish(table, order: [{:cpu, :desc}]) end)
+      end)
+
+    assert Table.size(ordered.rows) == n
+    assert order < 3_300_000
   end
 end

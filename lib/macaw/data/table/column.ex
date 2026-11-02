@@ -946,6 +946,54 @@ defmodule Macaw.Data.Table.Column do
      dictionary, slice_booleans(booleans, first, n)}
   end
 
+  # -- concatenating ----------------------------------------------------------------------
+
+  @doc false
+  # Columns of `n` values each, `[{column, n}]`, as one column of their values in order,
+  # nothing decoded (macaw_data#128): fixed-width buffers of one form (int64, float64, date,
+  # utc, naive) joined as binaries, their validity bitmaps joined bit by bit, a time's
+  # precision kept where every piece shares it and spelled per value where not. `:general`
+  # for any other form, or pieces of different forms, which a caller reads value by value.
+  @spec concat([{t(), non_neg_integer()}]) :: {:ok, t()} | :general
+  def concat([{_column, _n} | _] = pieces) do
+    case Enum.uniq_by(pieces, fn {column, _n} -> shape(column) end) do
+      [{column, _n}] -> joined(shape(column), pieces)
+      _shapes -> :general
+    end
+  end
+
+  def concat([]), do: :general
+
+  defp shape({form, _data, _validity}) when form in [:int64, :float64, :date], do: form
+  defp shape({form, _us, _validity, _precision}) when form in [:utc, :naive], do: form
+  defp shape(_column), do: :general
+
+  defp joined(:general, _pieces), do: :general
+
+  defp joined(form, pieces) when form in [:int64, :float64, :date] do
+    data = IO.iodata_to_binary(for {{_form, data, _validity}, _n} <- pieces, do: data)
+    {:ok, {form, data, Bitmap.concat(for {{_f, _d, validity}, n} <- pieces, do: {validity, n})}}
+  end
+
+  defp joined(form, pieces) when form in [:utc, :naive] do
+    us = IO.iodata_to_binary(for {{_form, us, _validity, _precision}, _n} <- pieces, do: us)
+    validity = Bitmap.concat(for {{_f, _us, validity, _p}, n} <- pieces, do: {validity, n})
+
+    precision =
+      case Enum.uniq(for {{_f, _us, _v, precision}, _n} <- pieces, do: precision) do
+        [p] when is_integer(p) ->
+          p
+
+        _several ->
+          IO.iodata_to_binary(
+            for {{_f, _us, _v, p}, n} <- pieces,
+                do: if(is_integer(p), do: :binary.copy(<<p>>, n), else: p)
+          )
+      end
+
+    {:ok, {form, us, validity, precision}}
+  end
+
   # -- gathering --------------------------------------------------------------------------
 
   @doc false

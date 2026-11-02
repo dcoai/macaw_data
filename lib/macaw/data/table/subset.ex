@@ -5,14 +5,15 @@ defmodule Macaw.Data.Table.Subset do
   # chunks, a contiguous run read where it lies as a view and any other gathered by its
   # slots (`Chunk.gather/5`), nothing decoded. Rows in another order from one view are
   # gathered from its chunk in that order, nothing decoded either; across views they are
-  # gathered in the table's order, then each column read in theirs and packed again: only
-  # the kept rows are decoded.
+  # gathered in the table's order, then each column joined across those views and gathered
+  # in theirs, nothing decoded where its views share a form a join takes (`Column.concat/1`),
+  # only the kept rows of any other column decoded and packed again.
   #
   # `last: n` (`Macaw.Data.Derived.Last`) and finishing (`Macaw.Data.Source.Finish`) keep
   # rows so.
 
   alias Macaw.Data.Table
-  alias Macaw.Data.Table.Chunk
+  alias Macaw.Data.Table.{Chunk, Column}
 
   @doc false
   # The table with its cold chunks fetched when one's count is pending (spec/01 §1.1.4),
@@ -65,22 +66,61 @@ defmodule Macaw.Data.Table.Subset do
 
   defp one_view(_views, _start, _low, _high, _indexes), do: nil
 
-  # Rows in another order across views: gathered in the table's order, then each column
-  # read in theirs and packed again. Only the kept rows are decoded.
+  # Rows in another order across views (macaw_data#128): each column joined across views
+  # into one storage (`Column.concat/1`) and its slots gathered in their order
+  # (`Column.gather/2`), nothing decoded, then cut into chunks of `Table.chunk_rows/0`. When
+  # the rows kept are a quarter of the table's or more, the join is of the table's views as
+  # they lie and the slots are the indexes themselves; for fewer, the kept rows are first
+  # gathered in the table's order (`runs/2`), so a join copies only them. A column whose
+  # views hold no one form a join takes is read value by value and packed again, that
+  # column alone.
   defp repacked(header, views, indexes) do
-    in_order = Enum.sort(indexes)
-    {:ok, gathered} = Table.from_chunks(header, runs(views, in_order))
-    place = in_order |> Enum.with_index() |> Map.new()
-    at = Enum.map(indexes, &Map.fetch!(place, &1))
+    size = Enum.sum(for {_chunk, _first, count} <- views, do: count)
+    kept = length(indexes)
 
-    columns =
-      for {name, type} <- header do
-        values = gathered |> Table.column(name) |> List.to_tuple()
-        {name, type, Enum.map(at, &elem(values, &1))}
+    {views, slots} =
+      if 4 * kept >= size do
+        {views, indexes}
+      else
+        in_order = Enum.sort(indexes)
+        place = in_order |> Enum.with_index() |> Map.new()
+        {runs(views, in_order), Enum.map(indexes, &Map.fetch!(place, &1))}
       end
 
-    {:ok, taken} = Table.new(columns)
+    columns = Map.new(header, fn {name, type} -> {name, gathered(views, name, type, slots)} end)
+
+    chunks =
+      for first <- 0..(kept - 1)//Table.chunk_rows() do
+        n = min(Table.chunk_rows(), kept - first)
+        packed = Map.new(columns, fn {name, column} -> {name, Column.slice(column, first, n)} end)
+        Chunk.build(header, packed, n)
+      end
+
+    {:ok, taken} = Table.from_chunks(header, chunks)
     taken
+  end
+
+  # A column's values at the slots of the views' rows, as one storage: the views' storages
+  # joined and gathered, or, where their forms don't join, their values read and packed.
+  defp gathered(views, name, type, slots) do
+    pieces =
+      for {chunk, first, count} <- views, do: {Chunk.storage(chunk, name, first, count), count}
+
+    case Column.concat(pieces) do
+      {:ok, column} ->
+        Column.gather(column, slots)
+
+      :general ->
+        values =
+          views
+          |> Enum.flat_map(fn {chunk, first, count} ->
+            Chunk.values(chunk, name, first, count)
+          end)
+          |> List.to_tuple()
+
+        {:ok, column} = Column.piece(type, Enum.map(slots, &elem(values, &1)), name, 0)
+        column
+    end
   end
 
   defp ascending?([a | [b | _] = rest]), do: a < b and ascending?(rest)
