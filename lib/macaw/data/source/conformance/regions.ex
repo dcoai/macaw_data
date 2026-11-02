@@ -161,7 +161,7 @@ defmodule Macaw.Data.Source.Conformance.Regions do
             do: [],
             else: [{:order_unstated, probe, delivery.served.ordered}]
 
-        sorted = readings(rows, order) == readings(Order.sort(rows, order, schema), order)
+        sorted = readings(rows, order) == readings(Order.sort!(rows, order, schema), order)
         in_order = if sorted, do: [], else: [{:not_ordered, probe}]
 
         stated ++
@@ -177,7 +177,7 @@ defmodule Macaw.Data.Source.Conformance.Regions do
   defp first(fetch, {ask, _asked} = probe, rows, _budget, {order, schema}) do
     case fetch.({ask, nil}) do
       {:ok, _whole, all} ->
-        head = all |> Order.sort(order, schema) |> Enum.take(length(rows))
+        head = all |> Order.sort!(order, schema) |> Enum.take(length(rows))
         if readings(rows, order) == readings(head, order), do: [], else: [{:not_first, probe}]
 
       _unanswered ->

@@ -298,6 +298,13 @@ defmodule Macaw.Data.DeliveryTest do
                 {[:schema], {:type, :version}}
               ]}
 
+    # A column map's lengths and a tensor's rank are its shape, read without a value.
+    assert Delivery.new(%{"a" => [1, 2], "b" => [3]}) == {:error, [{[:rows, "b"], {:length, 2}}]}
+    assert Delivery.new(Nx.iota({2, 2, 2})) == {:error, [{[:rows], {:rank, 3}}]}
+
+    assert Delivery.format_error({[:rows, :b], {:length, 2}}) ==
+             "rows.b: a column of another length than the first's 2"
+
     assert Delivery.new(@rows, :served) == {:error, [{[:opts], {:type, :keyword}}]}
     assert Delivery.new(@rows, [:served]) == {:error, [{[:opts], {:type, :keyword}}]}
 

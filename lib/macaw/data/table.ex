@@ -326,13 +326,39 @@ defmodule Macaw.Data.Table do
   else the one `column_types/1` infers, else `:term`. A time column's values become
   `DateTime`s here, at the edge: a `Date` at midnight UTC, a `NaiveDateTime` as UTC, an
   ISO 8601 string parsed. A source whose rows are tuples has
-  no names; `named/2` gives it some first. `{:ok, table}` or `new/1`'s faults.
+  no names; `named/2` gives it some first. `{:ok, table}`, `source/1`'s faults for a source
+  of no shape it reads, or `new/1`'s faults.
   """
   @spec from(source() | t(), keyword()) :: {:ok, t()} | {:error, [{list(), term()}, ...]}
   def from(source, opts \\ [])
   def from(%__MODULE__{} = table, _opts), do: {:ok, table}
 
   def from(source, opts) do
+    with :ok <- source(source), do: from_rows(source, opts)
+  end
+
+  @doc """
+  Whether `source` is of a shape `from/2` and `rows/1` read (spec/01 §1.1, spec/00 §5):
+  `:ok`, or every fault, `{path, reason}`. `rows/1` reads a source this accepts.
+
+  - a list of row maps, of tuple rows, or a keyword list of columns; else
+    `{[], {:type, :rows}}`;
+  - a map of columns, each a list (or a rank-1 tensor) of the first column's length:
+    `{[name], {:length, n}}` for another length, `{[name], {:type, :column}}` for a column
+    that is no list;
+  - a tensor of rank 1 or 2: `{[], {:rank, rank}}` otherwise;
+  - a table, a delivery of such rows, or a `Table.Reader` source; any other term
+    `{[], {:type, :source}}`.
+
+      iex> Macaw.Data.Table.source(%{t: [1, 2], v: [3, 4]})
+      :ok
+      iex> Macaw.Data.Table.source([%{t: 1}, 2])
+      {:error, [{[], {:type, :rows}}]}
+  """
+  @spec source(term()) :: :ok | {:error, [{list(), term()}, ...]}
+  def source(source), do: Edge.source(source)
+
+  defp from_rows(source, opts) do
     rows = rows(source)
     given = Keyword.get(opts, :types, %{})
 

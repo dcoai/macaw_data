@@ -24,18 +24,18 @@ defmodule Macaw.Data.FinishTest do
 
   @tag verifies: "finish-window"
   test "a window the source did not honor is trimmed and served; an honored one is not" do
-    d = Finish.finish(hundred(), described(@numbers), request(window: [10, 15]))
+    d = Finish.finish!(hundred(), described(@numbers), request(window: [10, 15]))
     assert ts(d) == Enum.to_list(10..15)
     assert d.served.window == [10, 15]
 
-    open = Finish.finish(hundred(), described(@numbers), request(window: [98, nil]))
+    open = Finish.finish!(hundred(), described(@numbers), request(window: [98, nil]))
     assert ts(open) == [98, 99, 100]
     assert open.served.window == [98, 100]
 
-    assert Finish.finish(hundred(), described(@numbers, [:window]), request(window: [10, 15])) ==
+    assert Finish.finish!(hundred(), described(@numbers, [:window]), request(window: [10, 15])) ==
              hundred()
 
-    assert Finish.finish(hundred(), described(@numbers), request([])) == hundred()
+    assert Finish.finish!(hundred(), described(@numbers), request([])) == hundred()
   end
 
   @tag verifies: "finish-window"
@@ -44,7 +44,7 @@ defmodule Macaw.Data.FinishTest do
     rows = for h <- 0..5, do: %{"at" => DateTime.add(@now, h * 3600), "v" => h}
 
     d =
-      Finish.finish(
+      Finish.finish!(
         Delivery.new!(rows),
         described(schema),
         request(window: [DateTime.add(@now, 3600), DateTime.add(@now, 7200)])
@@ -52,9 +52,18 @@ defmodule Macaw.Data.FinishTest do
 
     assert Table.column(d |> Delivery.table!(), "v") == [1, 2]
 
-    assert_raise ArgumentError, ~r/cannot answer/, fn ->
-      Finish.finish(Delivery.new!(rows), described(schema), request(window: [0, 1]))
+    assert Finish.finish(Delivery.new!(rows), described(schema), request(window: [0, 1])) ==
+             {:error, [{[:window], {:type, :time}}]}
+
+    assert_raise ArgumentError, ~r/cannot be finished/, fn ->
+      Finish.finish!(Delivery.new!(rows), described(schema), request(window: [0, 1]))
     end
+
+    # finish/4's own options, and its answer for a request it can answer.
+    assert {:ok, %Delivery{}} = Finish.finish(Delivery.new!(rows), described(schema), request([]))
+
+    assert Finish.finish(Delivery.new!(rows), described(schema), request([]), budget: 3) ==
+             {:error, [{[:budget], :unknown_key}]}
   end
 
   @tag verifies: "finish-box"
@@ -74,29 +83,28 @@ defmodule Macaw.Data.FinishTest do
     fiji = %{west: 175, south: -20, east: -175, north: -15}
 
     assert Table.column(
-             Finish.finish(d, described(schema), request(box: europe)) |> Delivery.table!(),
+             Finish.finish!(d, described(schema), request(box: europe)) |> Delivery.table!(),
              "name"
            ) ==
              ["Paris"]
 
     assert Table.column(
-             Finish.finish(d, described(schema), request(box: fiji)) |> Delivery.table!(),
+             Finish.finish!(d, described(schema), request(box: fiji)) |> Delivery.table!(),
              "name"
            ) ==
              ["Suva", "Taveuni"]
 
-    assert Finish.finish(d, described(schema), request(box: europe)).served.window == europe
-    assert Finish.finish(d, described(schema, [:box]), request(box: europe)) == d
+    assert Finish.finish!(d, described(schema), request(box: europe)).served.window == europe
+    assert Finish.finish!(d, described(schema, [:box]), request(box: europe)) == d
 
-    assert_raise ArgumentError, fn ->
-      Finish.finish(hundred(), described(@numbers), request(box: europe))
-    end
+    assert Finish.finish(hundred(), described(@numbers), request(box: europe)) ==
+             {:error, [{[:box], {:invalid_for, :number}}]}
   end
 
   @tag verifies: "finish-region"
   test "a region trims each ranged field, the window field among them; a refused region names why" do
     d =
-      Finish.finish(
+      Finish.finish!(
         hundred(),
         described(@numbers),
         request(region: %{"t" => [1, 20], "v" => [3, 4]})
@@ -105,7 +113,7 @@ defmodule Macaw.Data.FinishTest do
     assert Enum.all?(Delivery.rows(d), &(&1["t"] <= 20 and &1["v"] in [3, 4]))
     assert length(Delivery.rows(d)) == 8
 
-    assert Finish.finish(
+    assert Finish.finish!(
              hundred(),
              described(@numbers, [:region]),
              request(region: %{"v" => [3, 4]})
@@ -141,14 +149,18 @@ defmodule Macaw.Data.FinishTest do
       %{"t" => 3, "host" => nil, "v" => 9}
     ]
 
-    d = Finish.finish(Delivery.new!(rows), described(schema), request(latest: true))
+    d = Finish.finish!(Delivery.new!(rows), described(schema), request(latest: true))
 
     assert Delivery.rows(d) == [
              %{"t" => 2, "host" => "b", "v" => 2},
              %{"t" => 3, "host" => "a", "v" => 3}
            ]
 
-    assert Finish.finish(Delivery.new!(rows), described(schema, [:latest]), request(latest: true)) ==
+    assert Finish.finish!(
+             Delivery.new!(rows),
+             described(schema, [:latest]),
+             request(latest: true)
+           ) ==
              Delivery.new!(rows)
 
     assert Window.check(request(latest: true), @numbers) ==
@@ -172,15 +184,15 @@ defmodule Macaw.Data.FinishTest do
 
   @tag verifies: "finish-budget"
   test "a budget the source did not honor is reduced by Macaw, recorded :runtime; series share it" do
-    d = Finish.finish(hundred(), described(@numbers), request(budget: 10))
+    d = Finish.finish!(hundred(), described(@numbers), request(budget: 10))
     assert Table.size(d |> Delivery.table!()) == 10
     assert d.served.reduced_by == :runtime
     assert hd(ts(d)) == 1 and List.last(ts(d)) == 100
 
-    assert Finish.finish(hundred(), described(@numbers, [:budget]), request(budget: 10)) ==
+    assert Finish.finish!(hundred(), described(@numbers, [:budget]), request(budget: 10)) ==
              hundred()
 
-    assert Finish.finish(hundred(), described(@numbers), request(budget: 500)) == hundred()
+    assert Finish.finish!(hundred(), described(@numbers), request(budget: 500)) == hundred()
 
     by_host =
       Schema.new!(%{
@@ -190,18 +202,18 @@ defmodule Macaw.Data.FinishTest do
       })
 
     rows = for t <- 1..100, s <- ["a", "b"], do: %{"t" => t, "s" => s, "v" => :math.sin(t / 5)}
-    d = Finish.finish(Delivery.new!(rows), described(by_host), request(budget: 20))
+    d = Finish.finish!(Delivery.new!(rows), described(by_host), request(budget: 20))
     counts = d |> Delivery.rows() |> Enum.frequencies_by(& &1["s"])
     assert counts["a"] > 0 and counts["b"] > 0 and Table.size(d |> Delivery.table!()) <= 20
 
-    m4 = Finish.reduce(hundred(), @numbers, 12, :m4)
+    m4 = Finish.reduce!(hundred(), @numbers, 12, :m4)
     assert Table.size(m4 |> Delivery.table!()) <= 12 and m4.served.reduced_by == :runtime
   end
 
   @tag verifies: "finish-order"
   test "an order the source did not honor is sorted; with a budget, its first rows are kept" do
     # "Slowest first": the true top rows, where LTTB would keep a shape of the series.
-    d = Finish.finish(hundred(), described(@numbers), request(order: [{"v", :desc}], budget: 10))
+    d = Finish.finish!(hundred(), described(@numbers), request(order: [{"v", :desc}], budget: 10))
     rows = Delivery.rows(d)
 
     assert length(rows) == 10
@@ -210,14 +222,14 @@ defmodule Macaw.Data.FinishTest do
     assert {d.served.ordered, d.served.reduced_by} == {:runtime, :runtime}
 
     # Without a budget: every row, in the order, nothing reduced.
-    all = Finish.finish(hundred(), described(@numbers), request(order: [{"t", :desc}]))
+    all = Finish.finish!(hundred(), described(@numbers), request(order: [{"t", :desc}]))
     assert ts(all) == Enum.to_list(100..1//-1)
     assert {all.served.ordered, all.served.reduced_by} == {:runtime, nil}
 
     # An order the source honored is not redone; it said so itself.
     honored = Delivery.new!(Delivery.rows(hundred()), served: [ordered: :source])
 
-    assert Finish.finish(honored, described(@numbers, [:order]), request(order: [{"t", :desc}])) ==
+    assert Finish.finish!(honored, described(@numbers, [:order]), request(order: [{"t", :desc}])) ==
              honored
 
     # A source that cut the rows to its own budget, or short of the window, gives a sample:
@@ -226,7 +238,7 @@ defmodule Macaw.Data.FinishTest do
       Delivery.new!(Enum.take_every(Delivery.rows(hundred()), 10), served: [reduced_by: :source])
 
     sample =
-      Finish.finish(
+      Finish.finish!(
         cut,
         described(@numbers, [:budget]),
         request(order: [{"v", :desc}], budget: 10)
@@ -239,18 +251,18 @@ defmodule Macaw.Data.FinishTest do
 
     capped = Delivery.new!(Delivery.rows(hundred()), served: [capped: true])
 
-    assert Finish.finish(capped, described(@numbers), request(order: [{"v", :asc}])).served.ordered ==
+    assert Finish.finish!(capped, described(@numbers), request(order: [{"v", :asc}])).served.ordered ==
              :sample
 
     # A request with no order is finished as before.
-    assert Finish.finish(hundred(), described(@numbers), request(budget: 10)).served.ordered ==
+    assert Finish.finish!(hundred(), described(@numbers), request(budget: 10)).served.ordered ==
              nil
   end
 
   @tag verifies: "finish-order"
   test "reduce/5 of an ordered delivery keeps its head, so each pooled reader gets its own" do
     pooled =
-      Finish.finish(
+      Finish.finish!(
         hundred(),
         described(@numbers),
         request(order: [{"t", :desc}], budget: Finish.pooled([60, 15]))
@@ -259,17 +271,21 @@ defmodule Macaw.Data.FinishTest do
     assert ts(pooled) == Enum.to_list(100..41//-1)
 
     for method <- ["lttb", "m4"] do
-      reader = Finish.reduce(pooled, @numbers, 15, method)
+      reader = Finish.reduce!(pooled, @numbers, 15, method)
       assert ts(reader) == Enum.to_list(100..86//-1)
       assert {reader.served.ordered, reader.served.reduced_by} == {:runtime, :runtime}
     end
 
-    assert Finish.reduce(pooled, @numbers, 500) == pooled
-    assert_raise ArgumentError, fn -> Finish.reduce(pooled, @numbers, 15, "nope") end
+    assert Finish.reduce!(pooled, @numbers, 500) == pooled
+
+    assert Finish.reduce(pooled, @numbers, 15, "nope") ==
+             {:error, [{[:reduce], {:unknown, :reducer, "nope"}}]}
+
+    assert_raise ArgumentError, fn -> Finish.reduce!(pooled, @numbers, 15, "nope") end
 
     # A table stays a table of the same columns.
     table = Delivery.new!(Delivery.table!(hundred()))
-    head = Finish.finish(table, described(@numbers), request(order: [{"t", :desc}], budget: 3))
+    head = Finish.finish!(table, described(@numbers), request(order: [{"t", :desc}], budget: 3))
     assert %Table{} = head.rows
     assert ts(head) == [100, 99, 98]
   end
@@ -285,8 +301,8 @@ defmodule Macaw.Data.FinishTest do
       d = Delivery.new!(rows, types: %{"t" => :number, "v" => :number})
       order = [{"v", direction}]
 
-      finished = Finish.finish(d, described(@numbers), request(order: order, budget: budget))
-      expected = rows |> Macaw.Data.Source.Order.sort(order, @numbers) |> Enum.take(budget)
+      finished = Finish.finish!(d, described(@numbers), request(order: order, budget: budget))
+      expected = rows |> Macaw.Data.Source.Order.sort!(order, @numbers) |> Enum.take(budget)
 
       assert Delivery.rows(finished) == expected
       assert finished.served.ordered == :runtime
@@ -305,7 +321,7 @@ defmodule Macaw.Data.FinishTest do
       d = Delivery.new!(rows, types: %{"t" => :number, "v" => :number})
 
       finished =
-        Finish.finish(d, described(@numbers), request(window: [from, to], budget: budget))
+        Finish.finish!(d, described(@numbers), request(window: [from, to], budget: budget))
 
       kept = Delivery.rows(finished)
 
@@ -328,9 +344,9 @@ defmodule Macaw.Data.FinishTest do
 
     # Each reader of a pooled delivery is reduced to its own budget.
     pooled =
-      Finish.finish(hundred(), described(@numbers), request(budget: Finish.pooled([60, 15])))
+      Finish.finish!(hundred(), described(@numbers), request(budget: Finish.pooled([60, 15])))
 
-    assert Table.size(Finish.reduce(pooled, @numbers, 15) |> Delivery.table!()) == 15
+    assert Table.size(Finish.reduce!(pooled, @numbers, 15) |> Delivery.table!()) == 15
   end
 
   @tag verifies: "window-arithmetic"
@@ -357,7 +373,7 @@ defmodule Macaw.Data.FinishTest do
   @tag verifies: "finish-keeps-form"
   test "finishing keeps the rows' form: a row list stays rows, values untouched; tuple rows are named" do
     rows = for t <- 1..20, do: %{"t" => t, "v" => t * 2, "at" => ~N[2026-10-29 00:00:00]}
-    d = Finish.finish(Delivery.new!(rows), described(@numbers), request(window: [5, 7]))
+    d = Finish.finish!(Delivery.new!(rows), described(@numbers), request(window: [5, 7]))
 
     assert is_list(d.rows)
     assert d.rows == Enum.slice(rows, 4, 3)
@@ -367,7 +383,7 @@ defmodule Macaw.Data.FinishTest do
     tuples = for t <- 1..20, do: {t, t * 2}
 
     named =
-      Finish.finish(
+      Finish.finish!(
         Delivery.new!(tuples, names: ["t", "v"]),
         described(@numbers),
         request(window: [5, 7])
@@ -377,12 +393,11 @@ defmodule Macaw.Data.FinishTest do
 
     # Nothing to do: the rows as they came, tuples and all.
     untouched = Delivery.new!(tuples)
-    assert Finish.finish(untouched, described(@numbers), request([])) == untouched
+    assert Finish.finish!(untouched, described(@numbers), request([])) == untouched
 
     # A step that must read tuple rows by name, with no names: refused, never dropped.
-    assert_raise ArgumentError, ~r/tuple rows have no names/, fn ->
-      Finish.finish(Delivery.new!(tuples), described(@numbers), request(window: [5, 7]))
-    end
+    assert Finish.finish(Delivery.new!(tuples), described(@numbers), request(window: [5, 7])) ==
+             {:error, [{[:names], :required}]}
 
     # A table stays a table, its columns and types.
     table =
@@ -391,7 +406,7 @@ defmodule Macaw.Data.FinishTest do
         {"v", :number, Enum.map(1..20, &(&1 * 1.0))}
       ])
 
-    kept = Finish.finish(Delivery.new!(table), described(@numbers), request(window: [5, 7]))
+    kept = Finish.finish!(Delivery.new!(table), described(@numbers), request(window: [5, 7]))
     assert %Table{} = kept.rows
     assert Table.column(kept.rows, "v") == [5.0, 6.0, 7.0]
   end

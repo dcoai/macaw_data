@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- **Breaking:** `Macaw.Data.Source.Finish.finish/4` answers `{:ok, delivery}` or `{:error, faults}` instead of a delivery or a raise (#114, #119, spec/01 §2.4, spec/04 §7). Every fault is answered before any step runs:
+  - a request the schema cannot answer: `Macaw.Data.Window.check/2`'s faults;
+  - `{[:reduce], {:unknown, :reducer, name}}`;
+  - `{[key], :unknown_key}` for an option it does not take;
+  - tuple rows without names: `{[:names], :required}`;
+  - a number field's reading the reducer cannot place: `{[:rows, field], {:reads, :number}}`.
+
+  `Macaw.Data.Source.Finish.reduce/5` answers the same way. `Macaw.Data.Source.Finish.finish!/4` and `Macaw.Data.Source.Finish.reduce!/5` keep the old returns.
+- **Breaking:** `Macaw.Data.Source.Order.sort/3` answers `{:ok, rows}`, or `{:error, faults}` (`Macaw.Data.Source.Order.faults/2`'s: an unknown field, a field of a type with no order, an order of the wrong shape) instead of raising (#119, spec/01 §2.3). `Macaw.Data.Source.Order.sort!/3` keeps the old return.
+- **Added:** `Macaw.Data.Table.source/1` checks a source's shape: `:ok`, or every fault (#119, spec/01 §1.1):
+  - `{[], {:type, :rows}}`: a list mixing row maps and other terms;
+  - `{[name], {:length, n}}`, `{[name], {:type, :column}}`: a column map's unequal or non-list column;
+  - `{[], {:rank, rank}}`: a tensor of rank other than 1 or 2;
+  - `{[], {:type, :source}}`: any other term.
+
+  `Macaw.Data.Table.from/2` answers those faults where it raised. `Macaw.Data.Delivery.new/2` answers a column map's or a tensor's shape faults under `[:rows]`, and `Macaw.Data.Operations.apply/4` answers them under `"source"`. `Macaw.Data.Table.rows/1` reads a source that `source/1` accepts.
 - **Breaking:** `Macaw.Data.Operations.apply/4` keeps its own contract: it answers `{:ok, table}` or `{:error, faults}` and never raises (#114, #118, spec/04 §3.1). A step that refuses its input at run time stops the run with a fault at its index, where it raised `ArgumentError` before:
   - `{[i, key], {:reads, kind}}`: a column holds a reading of the wrong kind (`:number`, `:time`, `:positive`, `:comparable`, `:point`);
   - `{[i, "value"], {:reading, type}}`: filter's cross-kind value (#100, #109);

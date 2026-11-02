@@ -105,6 +105,12 @@ slice/3 is the rows from start, count of them, for generated tables, chunkings a
 - each column's type is the one `types:` gives, else the one `column_types/1` infers, else `:term`;
 - a time column's values become `DateTime`s at the edge: a `Date` at midnight UTC, a `NaiveDateTime` as UTC, an ISO 8601 string parsed; a `DateTime` keeps its zone, and every value its precision. `new/1` takes `NaiveDateTime`s and `Date`s as themselves.
 
+**A source of no shape `from/2` reads is a fault, never a raise** (00 §5). `Table.source/1` answers `:ok` or every fault: a list of row maps, of tuple rows, or a keyword list of columns, else `{[], {:type, :rows}}`; a map of columns each a list (or rank-1 tensor) of the first's length, else `{[name], {:length, n}}` or `{[name], {:type, :column}}`; a tensor of rank 1 or 2, else `{[], {:rank, rank}}`; and a table, a delivery or a `Table.Reader` source, any other term `{[], {:type, :source}}`. `from/2` answers its faults before it reads a row, and `rows/1` reads a source it accepts. `Delivery.new/2` checks a column map's lengths and a tensor's rank the same way, under `[:rows]` (§3).
+
+```test:table-edge-source
+source/1 accepts every shape from/2 reads and answers every fault of another, a list neither of row maps nor of tuple rows, a column map of unequal or non-list columns, a tensor of rank 3 and any other term; from/2 answers those faults instead of raising
+```
+
 The `table` package and Nx are optional dependencies: without them lists and column maps still work, and a struct source or a tensor raises `UndefinedFunctionError` where it is read.
 
 ```test:table-edge-names
@@ -635,7 +641,7 @@ given values are checked by name, every fault at once, defaults filled in; a val
 
 - **Its shape is the request's:** `new/1` refuses a key that is no `{field, :asc | :desc}` with a name for its field as `{[:order, i], {:type, :order}}`, a field named twice (by either spelling) as `{[:order, i], {:duplicate, field}}`, and an order that is no list as `{[:order], {:type, :order}}`.
 - **Its fields are the schema's**, checked against the description as parameters are: `Window.check/2` gives `{[:order, i], {:unknown_field, name}}` for a field the schema does not describe and `{[:order, i], {:invalid_for, type}}` for a `:point` or `:color` field, which have no order. `Source.fetch/3` refuses such an order before calling the source, `{:error, {:order, faults}}`, as it refuses parameters (§2.2).
-- **Rows compare by their field's type, never by term order:** a `:time` by its instant, one scale for every kind of time (`Order.instant/1`: a `DateTime`'s UTC instant, a `NaiveDateTime`'s wall clock, a `Date` at midnight, in Unix microseconds; term order would put a `%DateTime{}` by its day before its year), a `:number` by its value, a `:text` by its string, a `:category` by its place in the field's declared `order` (§1.2) and then by its spelling, its atom and its string alike. A `nil`, and a value with no reading for its type, sorts **last in either direction**: absence is no value, and a reader's first rows are rows that have one. The sort is stable, so rows the order cannot tell apart keep their order (`Order.sort/3`). `filter`'s orderings compare by the same keys (04 §4.1).
+- **Rows compare by their field's type, never by term order:** a `:time` by its instant, one scale for every kind of time (`Order.instant/1`: a `DateTime`'s UTC instant, a `NaiveDateTime`'s wall clock, a `Date` at midnight, in Unix microseconds; term order would put a `%DateTime{}` by its day before its year), a `:number` by its value, a `:text` by its string, a `:category` by its place in the field's declared `order` (§1.2) and then by its spelling, its atom and its string alike. A `nil`, and a value with no reading for its type, sorts **last in either direction**: absence is no value, and a reader's first rows are rows that have one. The sort is stable, so rows the order cannot tell apart keep their order (`Order.sort/3`, `{:ok, rows}`; an order the schema cannot sort by is `{:error, faults}`, `Order.faults/2`'s, and `sort!/3` raises). `filter`'s orderings compare by the same keys (04 §4.1).
 
 ```test:request-order
 a request's order defaults to [], its shape faults are reported with every other fault (a bad key, a field twice, a non-list), its fields are checked against the schema by Window.check/2 (unknown, point, color) and fetch/3 refuses such an order without calling the source
@@ -662,14 +668,14 @@ a request carries every axis with its defaults; every fault of a bad window, box
 
 A source naming `:order` serves its rows in the order asked, under a budget its first `budget` rows in it, and says so: `served.ordered: :source`. A source that doesn't name it serves as it would without one, capped or reduced as before, and finishing orders what it served (step 5).
 
-A step the source honored is not done again. **Finishing only removes rows,** so it never widens the window and never adds a row, and it **keeps the rows' form** (macaw#185): a table stays a table of the same columns and types, and any other source becomes the rows it kept, read by name (`Delivery.named_rows/1`), never packed; a delivery no step acts on comes back as it is. A request the schema cannot answer (`Macaw.Data.Window.check/2`) raises `ArgumentError`: a window not of the window field's type or with no window field, a box with no `:point` window field, a region field not described, not `:time` or `:number`, mixed or inverted, or `latest` with no declared identity or no `:time` or `:number` window field to order by; the request is the caller's. `Macaw.Data.Window` holds the comparisons, trims and positions it uses, ported from visualize's `Visualize.Feed.Window`, and **what a source steps its window by** (macaw#185): `before/4`, the rows in `[from, upper)` (the seam of a combination, an open bound open); `region/2`, the region a window asks of a schema (a range `[from, to]` the window field's region where it applies, else `nil`, the source's own span; a region as it is); `range/2`, a field's range of a window or a region, by either spelling; and `check/2` of the axes alone, a map of `window`, `box`, `region` and `latest`, as well as of a request, any other key `{[key], :unknown_key}`. visualize's box `%{ranges, latest}` (its D-168) is a request's `region` and `latest` here.
+A step the source honored is not done again. **Finishing only removes rows,** so it never widens the window and never adds a row, and it **keeps the rows' form** (macaw#185): a table stays a table of the same columns and types, and any other source becomes the rows it kept, read by name (`Delivery.named_rows/1`), never packed; a delivery no step acts on comes back as it is. **`finish/4` answers `{:ok, delivery}` or `{:error, faults}`** (macaw_data#114, [00 §5](00-overview.md#data-errors)); `finish!/4` raises. Every fault of the request is answered before any step runs. A request the schema cannot answer is `Macaw.Data.Window.check/2`'s faults, `{path, reason}`: a window not of the window field's type or with no window field, a box with no `:point` window field, a region field not described, not `:time` or `:number`, mixed or inverted, or `latest` with no declared identity or no `:time` or `:number` window field to order by; the request is the caller's. A `reduce:` naming no registered reducer is `{[:reduce], {:unknown, :reducer, name}}` ([04 §7](04-operations.md#operations-reducers)), an option `finish/4` does not take `{[key], :unknown_key}`, a step that must read tuple rows without names `Delivery.named_rows/1`'s `{[:names], :required}`, and a number field's reading the reducer cannot place `{[:rows, field], {:reads, :number}}`. `Macaw.Data.Window` holds the comparisons, trims and positions it uses, ported from visualize's `Visualize.Feed.Window`, and **what a source steps its window by** (macaw#185): `before/4`, the rows in `[from, upper)` (the seam of a combination, an open bound open); `region/2`, the region a window asks of a schema (a range `[from, to]` the window field's region where it applies, else `nil`, the source's own span; a region as it is); `range/2`, a field's range of a window or a region, by either spelling; and `check/2` of the axes alone, a map of `window`, `box`, `region` and `latest`, as well as of a request, any other key `{[key], :unknown_key}`. visualize's box `%{ranges, latest}` (its D-168) is a request's `region` and `latest` here.
 
 ```test:finish-window
-a window the source did not honor is trimmed, an open bound open, the served window intersected; an honored window, and no window, leave the delivery as it is; a time window trims by DateTime, and a number window on a time field is the caller's error
+a window the source did not honor is trimmed, an open bound open, the served window intersected; an honored window, and no window, leave the delivery as it is; a time window trims by DateTime, and a number window on a time field is the caller's fault, {[:window], {:type, :time}}; an option finish does not take is a fault too
 ```
 
 ```test:finish-box
-a box keeps the positions in it, across the antimeridian too, a missing position dropped; the served window is the box; an honored box is not redone; a box with no point window field is the caller's error
+a box keeps the positions in it, across the antimeridian too, a missing position dropped; the served window is the box; an honored box is not redone; a box with no point window field is the caller's fault
 ```
 
 ```test:finish-region
@@ -689,7 +695,7 @@ an order the source did not honor is sorted, ordered runtime, and under a budget
 ```
 
 ```test:finish-keeps-form
-a row list finished by a window stays a list of the same rows, integers and naive times untouched; tuple rows with names come back named; with nothing to do, tuple rows come back as they are; a step that must read tuple rows without names raises; a table stays a table
+a row list finished by a window stays a list of the same rows, integers and naive times untouched; tuple rows with names come back named; with nothing to do, tuple rows come back as they are; a step that must read tuple rows without names is the fault {[:names], :required}; a table stays a table
 ```
 
 ```test:finish-only-removes
@@ -763,6 +769,7 @@ held/1's rows are a chunked table of the source's origin, its columns the schema
 |---|---|
 | `{[:rows], :delivery}` | a delivery of a delivery |
 | `{[:rows], {:type, :rows}}` | rows of no shape a source has |
+| `{[:rows \| path], reason}` | a column map's columns of unequal length, or a tensor of rank other than 1 or 2: `Table.source/1`'s fault (§1.1), told without reading a value |
 | `{[key], :unknown_key}` | an option that is not a delivery's (`{[:opts], {:type, :keyword}}`: options that are not a keyword list) |
 | `{[:served, fact], :unknown_key}` | a fact that is not a served fact (`{[:served], {:type, :keyword}}`: served facts that are neither a keyword list nor a map) |
 | `{[:served, fact], reason}` | a value the fact does not take: `window` `{:type, :window}`, `capped` `{:type, :boolean}`, `reduced_by` and `ordered` `{:enum, values}`, `params` `{:type, :map}`, `note` `{:type, :string}`, `position` `{:type, :non_neg_integer}`, `complete_until` `{:type, :instant}` |

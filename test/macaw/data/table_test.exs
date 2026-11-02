@@ -457,6 +457,34 @@ defmodule Macaw.Data.TableTest do
                {:error, [{[:t, 0], {:type, :time}}]}
     end
 
+    @tag verifies: "table-edge-source"
+    test "a source of no shape from/2 reads is every fault, answered and never raised" do
+      for ok <- [
+            [],
+            [%{a: 1}],
+            [{1, 2}],
+            [a: [1, 2], b: [3, 4]],
+            %{},
+            %{a: [1], b: [2]},
+            Table.new!([])
+          ] do
+        assert Table.source(ok) == :ok
+      end
+
+      assert Table.source([%{a: 1}, {1, 2}]) == {:error, [{[], {:type, :rows}}]}
+      assert Table.source([1, 2]) == {:error, [{[], {:type, :rows}}]}
+      assert Table.source(%{"a" => [1, 2], "b" => :x}) == {:error, [{["b"], {:type, :column}}]}
+      assert Table.source(%{"a" => [1, 2], "b" => [3]}) == {:error, [{["b"], {:length, 2}}]}
+      assert Table.source(Nx.iota({2, 2, 2})) == {:error, [{[], {:rank, 3}}]}
+      assert Table.source(:rows) == {:error, [{[], {:type, :source}}]}
+      assert Table.source(%URI{}) == {:error, [{[], {:type, :source}}]}
+
+      assert Table.from(%{"a" => [1, 2], "b" => [3]}) == {:error, [{["b"], {:length, 2}}]}
+      assert Table.from(Nx.iota({2, 2, 2})) == {:error, [{[], {:rank, 3}}]}
+      assert Table.from([%{a: 1}, 2]) == {:error, [{[], {:type, :rows}}]}
+      assert Table.from(42) == {:error, [{[], {:type, :source}}]}
+    end
+
     @tag verifies: "table-edge"
     test "a Table.Reader source yields its rows, keyed as the reader names its columns" do
       reader = %Macaw.Data.Test.Reader{columns: ["t", "v"], rows: [[1, 10.0], [2, 20.0]]}

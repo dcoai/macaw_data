@@ -21,6 +21,10 @@ defmodule Macaw.Data.Operations.FaultsTest do
 
     assert Operations.format_error({["source"], :not_a_table}) == "source: is not a table"
 
+    # A column map of unequal columns is Table.from/2's fault, under "source".
+    assert Operations.apply(@registry, [%{op: "take", n: 1}], %{"a" => [1, 2], "b" => [3]}) ==
+             {:error, [{["source", "b"], {:length, 2}}]}
+
     {:ok, junk} = Operations.registry([Macaw.Data.Test.Ops.Junk])
 
     assert Operations.apply(junk, [%{op: "take", n: 5}, %{op: "junk"}], [%{a: 1}]) ==

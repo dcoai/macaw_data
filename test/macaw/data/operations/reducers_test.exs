@@ -13,7 +13,7 @@ defmodule Macaw.Data.Operations.ReducersTest do
   defp finish(opts) do
     {:ok, description} = Description.new(schema: @schema)
 
-    Finish.finish(
+    Finish.finish!(
       delivery(),
       description,
       Request.new!(budget: 20, now: ~U[2026-10-27 00:00:00Z]),
@@ -50,19 +50,30 @@ defmodule Macaw.Data.Operations.ReducersTest do
     assert length(ts(every)) == 20
     assert hd(ts(every)) == 1 and List.last(ts(every)) == 200
 
-    assert Finish.reduce(delivery(), @schema, 10, "every", hosted) |> ts() |> length() == 10
+    assert Finish.reduce!(delivery(), @schema, 10, "every", hosted) |> ts() |> length() == 10
   end
 
   @tag verifies: "operations-reducers-named"
-  test "an unknown name and a transform that does not reduce each raise naming it" do
-    for {name, opts} <- [{"every", []}, {"sort", []}, {"frobnicate", []}, {42, []}] do
-      assert_raise ArgumentError, ~r/^reduce: #{inspect(name)} names no registered reducer/, fn ->
-        finish([reduce: name] ++ opts)
-      end
+  test "an unknown name and a transform that does not reduce are each a fault naming it" do
+    {:ok, description} = Description.new(schema: @schema)
+    request = Request.new!(budget: 20, now: ~U[2026-10-27 00:00:00Z])
+
+    for name <- ["every", "sort", "frobnicate", 42] do
+      assert Finish.finish(delivery(), description, request, reduce: name) ==
+               {:error, [{[:reduce], {:unknown, :reducer, name}}]}
     end
 
-    assert_raise ArgumentError, ~r/names no registered reducer/, fn ->
-      Finish.reduce(delivery(), @schema, nil, "sort")
+    assert Finish.reduce(delivery(), @schema, nil, "sort") ==
+             {:error, [{[:reduce], {:unknown, :reducer, "sort"}}]}
+
+    assert_raise ArgumentError, ~r/cannot be reduced/, fn ->
+      Finish.reduce!(delivery(), @schema, nil, "sort")
     end
+
+    # A number field holding a string is the reducer's fault at the field.
+    rows = [%{t: 1, v: 2}, %{t: 2, v: "x"}] ++ for(t <- 3..30, do: %{t: t, v: t})
+
+    assert Finish.reduce(Delivery.new!(rows), @schema, 5) ==
+             {:error, [{[:rows, "v"], {:reads, :number}}]}
   end
 end

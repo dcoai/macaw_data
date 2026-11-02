@@ -135,40 +135,25 @@
     reason: "bad input it answers with a raise; #120 converts it"
   },
   %{
-    site: "Macaw.Data.Source.Finish.finish/4",
-    count: 1,
-    class: :convert,
-    reason: "bad input it answers with a raise; #119 converts it"
-  },
-  %{
-    site: "Macaw.Data.Source.Finish.reducer!/2",
-    count: 1,
-    class: :convert,
-    reason: "bad input it answers with a raise; #119 converts it"
-  },
-  %{
-    site: "Macaw.Data.Source.Order.schema_key/2",
-    count: 2,
-    class: :convert,
-    reason: "bad input it answers with a raise; #119 converts it"
-  },
-  %{
     site: "Macaw.Data.Table.Digest.not_data/1",
     count: 1,
-    class: :convert,
-    reason: "bad input it answers with a raise; #119 converts it"
+    class: :invariant,
+    reason:
+      "a value that is not data in a digest: Table.new/2 refuses one ({[name, i], :not_data}) before any chunk is built, so a chunk's canonical form never holds one (spec/01 §1.1.2)"
   },
   %{
     site: "Macaw.Data.Table.Edge.column_rows/1",
     count: 1,
-    class: :convert,
-    reason: "bad input it answers with a raise; #119 converts it"
+    class: :invariant,
+    reason:
+      "a column map whose columns differ in length: Table.source/1 refuses one ({[name], {:length, n}}) before Table.from/2, Delivery.new/2 and Operations.apply/4 read it; Table.rows/1 reads a source source/1 accepts (spec/01 §1.1)"
   },
   %{
     site: "Macaw.Data.Table.Edge.tensor_rows/2",
     count: 1,
-    class: :convert,
-    reason: "bad input it answers with a raise; #119 converts it"
+    class: :invariant,
+    reason:
+      "a tensor of rank other than 1 or 2: Table.source/1 refuses one ({[], {:rank, r}}) before Table.from/2, Delivery.new/2 and Operations.apply/4 read it; Table.rows/1 reads a source source/1 accepts (spec/01 §1.1)"
   },
   %{
     site: "Macaw.Data.Unit.convert/3",

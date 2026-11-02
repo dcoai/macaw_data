@@ -108,9 +108,11 @@ defmodule Macaw.Data.Source.Order do
 
   @doc """
   The rows sorted by the order under the schema's types, stably, each row read by name
-  (`Macaw.Data.Table.get/2`, either spelling). `[]` leaves them as they are. The order is
-  the caller's to have checked (`faults/2`); a field the schema lacks raises
-  `ArgumentError`.
+  (`Macaw.Data.Table.get/2`, either spelling): `{:ok, rows}`. `[]` leaves them as they
+  are. An order the schema cannot sort by is `{:error, faults}`, `faults/2`'s: a field the
+  schema lacks, `{[:order, i], {:unknown_field, name}}`, one whose type has no order,
+  `{[:order, i], {:invalid_for, type}}`, and an order of the wrong shape, `shape/1`'s.
+  `sort!/3` answers the rows or raises.
 
       iex> alias Macaw.Data.Schema
       iex> schema = Schema.new!(%{t: %{type: :time}, sev: %{type: :category, order: ["ok", "warn", "bad"]}})
@@ -119,21 +121,42 @@ defmodule Macaw.Data.Source.Order do
       ...>   %{t: ~U[2025-12-31 00:00:00Z], sev: "bad"},
       ...>   %{t: nil, sev: "warn"}
       ...> ]
-      iex> Macaw.Data.Source.Order.sort(rows, [{:t, :desc}], schema) |> Enum.map(& &1.sev)
+      iex> {:ok, sorted} = Macaw.Data.Source.Order.sort(rows, [{:t, :desc}], schema)
+      iex> Enum.map(sorted, & &1.sev)
       ["ok", "bad", "warn"]
-      iex> Macaw.Data.Source.Order.sort(rows, [{:sev, :desc}], schema) |> Enum.map(& &1.sev)
+      iex> Macaw.Data.Source.Order.sort!(rows, [{:sev, :desc}], schema) |> Enum.map(& &1.sev)
       ["bad", "warn", "ok"]
+      iex> Macaw.Data.Source.Order.sort(rows, [{:at, :asc}], schema)
+      {:error, [{[:order, 0], {:unknown_field, "at"}}]}
   """
-  @spec sort([map()], t(), Schema.t()) :: [map()]
-  def sort(rows, [], _schema), do: rows
+  @spec sort([map()], t(), Schema.t()) :: {:ok, [map()]} | {:error, [{list(), term()}, ...]}
+  def sort(rows, [], _schema), do: {:ok, rows}
 
   def sort(rows, order, %Schema{} = schema) do
-    keys =
-      Enum.map(order, fn {field, direction} ->
-        {direction, schema_key(schema, field), &Table.get(&1, field)}
-      end)
+    case faults(order, schema) do
+      [] ->
+        keys =
+          Enum.map(order, fn {field, direction} ->
+            {direction, schema_key(schema, field), &Table.get(&1, field)}
+          end)
 
-    sort_by(rows, keys)
+        {:ok, sort_by(rows, keys)}
+
+      faults ->
+        {:error, faults}
+    end
+  end
+
+  @doc "As `sort/3`, the rows alone, raising `ArgumentError` naming the faults."
+  @spec sort!([map()], t(), Schema.t()) :: [map()]
+  def sort!(rows, order, %Schema{} = schema) do
+    case sort(rows, order, schema) do
+      {:ok, sorted} ->
+        sorted
+
+      {:error, faults} ->
+        raise ArgumentError, "an order the schema cannot sort by: #{inspect(faults)}"
+    end
   end
 
   @doc """
@@ -204,24 +227,18 @@ defmodule Macaw.Data.Source.Order do
   defp compare_keys(a, b) when a > b, do: :gt
   defp compare_keys(_a, _b), do: :eq
 
-  # A schema field's sort key: its type's, a category's under its declared `order`.
+  # A schema field's sort key: its type's, a category's under its declared `order`. The
+  # field is one `faults/2` passed: described, of a type with an order.
   defp schema_key(schema, field) do
-    case Schema.fetch(schema, field, :type) do
-      {:ok, type} when type in @ordered ->
-        states =
-          case Schema.fetch(schema, field, :order) do
-            {:ok, states} when type == :category -> states
-            _none -> []
-          end
+    {:ok, type} = Schema.fetch(schema, field, :type)
 
-        key(type, states)
+    states =
+      case Schema.fetch(schema, field, :order) do
+        {:ok, states} when type == :category -> states
+        _none -> []
+      end
 
-      {:ok, type} ->
-        raise ArgumentError, "a #{inspect(type)} field has no order: #{inspect(field)}"
-
-      :error ->
-        raise ArgumentError, "an order names a field the schema lacks: #{inspect(field)}"
-    end
+    key(type, states)
   end
 
   @doc """

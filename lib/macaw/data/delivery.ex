@@ -323,6 +323,9 @@ defmodule Macaw.Data.Delivery do
   defp why([:names], {:rank, rank}),
     do: "the tensor does not fit its names: rank #{rank}, not 1 or 2"
 
+  defp why(_path, {:rank, rank}), do: "a tensor of rank #{rank}, not 1 or 2"
+  defp why(_path, {:length, n}), do: "a column of another length than the first's #{n}"
+  defp why(_path, {:type, :column}), do: "not a column: a list of values"
   defp why(_path, {:enum, values}), do: "not one of #{inspect(values)}"
   defp why(_path, {:type, :keyword}), do: "not a keyword list or a map"
   defp why(_path, {:type, :window}), do: "not a range [from, to], a box or nil (spec/01 §3)"
@@ -359,7 +362,7 @@ defmodule Macaw.Data.Delivery do
   defp source(rows) when is_list(rows), do: []
   defp source(%__MODULE__{}), do: [{[:rows], :delivery}]
   defp source(%Table{}), do: []
-  defp source(%{__struct__: Nx.Tensor}), do: []
+  defp source(%{__struct__: Nx.Tensor} = tensor), do: shape(tensor)
 
   defp source(%_{} = struct) do
     if Code.ensure_loaded?(Elixir.Table.Reader) and Elixir.Table.Reader.impl_for(struct) != nil,
@@ -367,8 +370,17 @@ defmodule Macaw.Data.Delivery do
       else: [{[:rows], {:type, :rows}}]
   end
 
-  defp source(map) when is_map(map), do: []
+  defp source(map) when is_map(map), do: shape(map)
   defp source(_other), do: [{[:rows], {:type, :rows}}]
+
+  # A column map's columns of one length, and a tensor of rank 1 or 2
+  # (`Macaw.Data.Table.source/1`), told from their lengths and rank, no value read.
+  defp shape(columns) do
+    case Table.source(columns) do
+      :ok -> []
+      {:error, faults} -> for {path, reason} <- faults, do: {[:rows | path], reason}
+    end
+  end
 
   defp names(nil), do: []
 

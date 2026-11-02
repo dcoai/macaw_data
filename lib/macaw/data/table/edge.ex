@@ -7,9 +7,54 @@ defmodule Macaw.Data.Table.Edge do
 
   alias Macaw.Data.Schema
 
-  @compile {:no_warn_undefined, [Table, Nx]}
+  @compile {:no_warn_undefined, [Table, Table.Reader, Nx]}
 
   # -- rows of any source -----------------------------------------------------------------
+
+  # Whether a source is of a shape `rows/1` reads, as `Macaw.Data.Table.source/1`
+  # documents: `:ok`, or its faults. A row list's rows are all maps or all tuples; a column
+  # map's every column a list (or a rank-1 tensor) of the first's length; a tensor of rank
+  # 1 or 2; any other struct a `Table.Reader` source.
+  def source(%Macaw.Data.Table{}), do: :ok
+  def source(%{__struct__: Macaw.Data.Delivery, rows: rows}), do: source(rows)
+  def source([]), do: :ok
+
+  def source(list) when is_list(list) do
+    if Enum.all?(list, &is_map/1) or Enum.all?(list, &is_tuple/1),
+      do: :ok,
+      else: {:error, [{[], {:type, :rows}}]}
+  end
+
+  def source(%{__struct__: Nx.Tensor} = tensor) do
+    case Nx.rank(tensor) do
+      rank when rank in [1, 2] -> :ok
+      rank -> {:error, [{[], {:rank, rank}}]}
+    end
+  end
+
+  def source(%_{} = struct) do
+    if Code.ensure_loaded?(Table.Reader) and Table.Reader.impl_for(struct) != nil,
+      do: :ok,
+      else: {:error, [{[], {:type, :source}}]}
+  end
+
+  def source(map) when map_size(map) == 0, do: :ok
+
+  def source(map) when is_map(map) do
+    [{_, first} | _] =
+      columns = Enum.map(map, fn {name, values} -> {name, column_length(values)} end)
+
+    n = first || 0
+
+    faults =
+      for {name, length} <- columns, length != n do
+        if length == nil, do: {[name], {:type, :column}}, else: {[name], {:length, n}}
+      end
+
+    if faults == [], do: :ok, else: {:error, faults}
+  end
+
+  def source(_other), do: {:error, [{[], {:type, :source}}]}
 
   # The rows of a source that is not a table, as `Macaw.Data.Table.rows/1` documents.
   def rows([]), do: []

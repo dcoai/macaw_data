@@ -57,16 +57,16 @@ defmodule Macaw.Data.ConformanceOrderTest do
     # The rows as each flaw serves them, and what it states.
     defp served(_flaw, rows, %{order: []}), do: {rows, nil}
     defp served(:ignores, rows, _request), do: {rows, :source}
-    defp served(:unstated, rows, request), do: {Order.sort(rows, request.order, @schema), nil}
+    defp served(:unstated, rows, request), do: {Order.sort!(rows, request.order, @schema), nil}
 
     defp served(:claims_runtime, rows, request),
-      do: {Order.sort(rows, request.order, @schema), :runtime}
+      do: {Order.sort!(rows, request.order, @schema), :runtime}
 
     # A sample, sorted: in the order, but not its first rows.
     defp served(:samples, rows, %{budget: budget} = request) when budget != nil,
-      do: {rows |> Enum.take_every(2) |> Order.sort(request.order, @schema), :source}
+      do: {rows |> Enum.take_every(2) |> Order.sort!(request.order, @schema), :source}
 
-    defp served(_honest, rows, request), do: {Order.sort(rows, request.order, @schema), :source}
+    defp served(_honest, rows, request), do: {Order.sort!(rows, request.order, @schema), :source}
   end
 
   @requests [
