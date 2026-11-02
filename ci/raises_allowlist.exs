@@ -6,8 +6,8 @@
 #   :bang       a private helper the bang twins share to raise their twin's reason
 #   :compile    a macro's misuse, which fails the build: there is no caller to answer
 #   :invariant  a broken internal invariant: a bug in this library, never bad input
-#   :convert    bad input still answered with a raise; the reason names the work item
-#               of the "Errors are values" milestone (#114) that converts it
+#
+# Bad input has no class: a function answers it with {:error, reason} (spec/00 §5).
 #
 # An entry whose function holds a different number of sites fails the check too.
 [
@@ -115,5 +115,12 @@
     class: :bang,
     reason:
       "the Unit bang twins' one raise (dimension!/1, factor!/1, kind!/1, symbol!/2, convert!/3, minor_units!/1): their twin's reason in format_error/1's words"
+  },
+  %{
+    site: "Macaw.Data.Quantity.value!/1",
+    count: 1,
+    class: :bang,
+    reason:
+      "the Quantity bang twins' one raise (base_unit!/1, kind!/1, bounds!/1,2, additivity!/2, family!/2,3): their twin's reason, worded"
   }
 ]

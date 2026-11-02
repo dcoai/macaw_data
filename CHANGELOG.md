@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- **Breaking:** a quantity's facts answer `{:ok, fact}` or `{:error, reason}` where a map read raised (#114, #121, spec/03 §9–§11). The functions are `Macaw.Data.Quantity.base_unit/1`, `Macaw.Data.Quantity.kind/1`, `Macaw.Data.Quantity.bounds/1`, `Macaw.Data.Quantity.additivity/2`, `Macaw.Data.Quantity.family/2` and `Macaw.Data.Quantity.family/3`, and the reasons are:
+  - `{:unknown_quantity, quantity}` for a quantity not in `all/0`;
+  - `{:unknown_metric_kind, kind}`;
+  - `{:unknown_system, system}`;
+  - `Macaw.Data.Unit.parse/1`'s reason for a unit that is no code.
+
+  Each has a `!` twin with the old return (`Macaw.Data.Quantity.base_unit!/1`, `Macaw.Data.Quantity.kind!/1`, `Macaw.Data.Quantity.bounds!/1`, `Macaw.Data.Quantity.additivity!/2`, `Macaw.Data.Quantity.family!/2`, `Macaw.Data.Quantity.family!/3`).
+- **Breaking:** `Macaw.Data.Source.Push.new/3` answers `{:ok, push}`, `Macaw.Data.Derived.Engine.source/2,3` `{:ok, output}` and `Macaw.Data.Source.Finish.ceiling/2` `{:ok, {budget, clamped?}}`, or `{:error, faults}` (#121, spec/00 §5):
+  - an option a function does not take is `{[key], :unknown_key}`;
+  - a missing `host:` is `{[:host], :required}`;
+  - a path the engine does not define is `{[:path], :unknown_path}`.
+
+  `Macaw.Data.Source.Push.new!/3`, `Macaw.Data.Derived.Engine.source!/3` and `Macaw.Data.Source.Finish.ceiling!/2` keep the old returns.
+- **Changed:** `Macaw.Data.Delivery.table/2`, `Macaw.Data.Derived.validate/2` and `Macaw.Data.Derived.Engine.new/2` answer an option they do not take as a fault, `{[key], :unknown_key}` (the engine's `{[], [key], :unknown_key}`), where `Keyword.validate!/2` raised (#121).
+- **Changed:** the raise guard's allowlist holds only bang helpers, compile-time code and named invariants. The `:convert` class is refused (#121, spec/00 §5).
 - **Breaking:** the functions of a unit code answer `{:ok, value}` or `{:error, reason}` instead of raising (#114, #120, spec/03 §2, §5, §6):
   - `Macaw.Data.Unit.dimension/1`, `Macaw.Data.Unit.factor/1`, `Macaw.Data.Unit.kind/1` and `Macaw.Data.Unit.symbol/2`: `parse/1`'s reason for a string that is not a code, and `{:syntax, text}` for a term that is no string;
   - `Macaw.Data.Unit.convert/3`: `conversion/2`'s reason, or `:not_a_number`;

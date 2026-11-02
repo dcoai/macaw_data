@@ -38,10 +38,10 @@ defmodule Macaw.Data.Quantity do
 
   ## Examples
 
-      iex> Macaw.Data.Quantity.family(:mass, "kg", :us)
+      iex> Macaw.Data.Quantity.family!(:mass, "kg", :us)
       ["[oz_av]", "[lb_av]"]
 
-      iex> Macaw.Data.Quantity.additivity(:data_rate)
+      iex> Macaw.Data.Quantity.additivity!(:data_rate)
       %{across: true, over_time: false}
 
       iex> Macaw.Data.Quantity.label!(%{unit: "{request}"})
@@ -114,10 +114,16 @@ defmodule Macaw.Data.Quantity do
 
   @doc """
   A quantity's base unit, the unit its values are in when no unit is given; `nil` for a
-  `:currency`, whose code the data must say.
+  `:currency`, whose code the data must say. `{:ok, unit}`, or `{:error,
+  {:unknown_quantity, quantity}}` for a quantity not in `all/0` (spec/00 §5);
+  `base_unit!/1` answers the unit or raises.
   """
-  @spec base_unit(t()) :: Unit.code() | nil
-  def base_unit(quantity), do: Facts.fetch!(quantity).base
+  @spec base_unit(t()) :: {:ok, Unit.code() | nil} | {:error, reason()}
+  def base_unit(quantity), do: with({:ok, facts} <- facts(quantity), do: {:ok, facts.base})
+
+  @doc "As `base_unit/1`, the unit alone, raising `ArgumentError` naming the quantity."
+  @spec base_unit!(t()) :: Unit.code() | nil
+  def base_unit!(quantity), do: value!(base_unit(quantity))
 
   @doc """
   How a quantity's values combine (spec/03 §9): `:linear`, `:affine` (a temperature),
@@ -126,11 +132,20 @@ defmodule Macaw.Data.Quantity do
   ## Examples
 
       iex> Macaw.Data.Quantity.kind(:angle)
-      :cyclic
+      {:ok, :cyclic}
 
+      iex> Macaw.Data.Quantity.kind(:vibes)
+      {:error, {:unknown_quantity, :vibes}}
+
+  `{:error, {:unknown_quantity, quantity}}` for a quantity not in `all/0`; `kind!/1`
+  answers the kind or raises.
   """
-  @spec kind(t()) :: kind()
-  def kind(quantity), do: Facts.fetch!(quantity).kind
+  @spec kind(t()) :: {:ok, kind()} | {:error, reason()}
+  def kind(quantity), do: with({:ok, facts} <- facts(quantity), do: {:ok, facts.kind})
+
+  @doc "As `kind/1`, the kind alone, raising `ArgumentError` naming the quantity."
+  @spec kind!(t()) :: kind()
+  def kind!(quantity), do: value!(kind(quantity))
 
   @doc """
   Where a quantity's values physically lie, in its base unit, `{min | nil, max | nil}`
@@ -140,11 +155,17 @@ defmodule Macaw.Data.Quantity do
   ## Examples
 
       iex> Macaw.Data.Quantity.bounds(:duration)
-      {0, nil}
+      {:ok, {0, nil}}
 
+  `{:error, {:unknown_quantity, quantity}}` for a quantity not in `all/0`; `bounds!/1`
+  answers the bounds or raises.
   """
-  @spec bounds(t()) :: {number() | nil, number() | nil}
-  def bounds(quantity), do: Facts.fetch!(quantity).bounds
+  @spec bounds(t()) :: {:ok, {number() | nil, number() | nil}} | {:error, reason()}
+  def bounds(quantity), do: with({:ok, facts} <- facts(quantity), do: {:ok, facts.bounds})
+
+  @doc "As `bounds/1`, the bounds alone, raising `ArgumentError` naming the quantity."
+  @spec bounds!(t()) :: {number() | nil, number() | nil}
+  def bounds!(quantity), do: value!(bounds(quantity))
 
   @doc """
   A quantity's bounds in a unit of it: the base's, converted, as `{:ok, bounds}`. A unit
@@ -163,10 +184,8 @@ defmodule Macaw.Data.Quantity do
   """
   @spec bounds(t(), Unit.code()) :: {:ok, {number() | nil, number() | nil}} | {:error, term()}
   def bounds(quantity, unit) do
-    {min, max} = bounds(quantity)
-    base = base_unit(quantity)
-
-    with {:ok, factor} <- if(base == nil or base == unit, do: {:ok, nil}, else: Unit.factor(unit)) do
+    with {:ok, %{bounds: {min, max}, base: base}} <- facts(quantity),
+         {:ok, factor} <- if(base == nil or base == unit, do: {:ok, nil}, else: Unit.factor(unit)) do
       if base == nil or base == unit or factor == nil do
         {:ok, {min, max}}
       else
@@ -179,12 +198,7 @@ defmodule Macaw.Data.Quantity do
 
   @doc "As `bounds/2`, the bounds alone, raising `ArgumentError` in `Macaw.Data.Unit.format_error/1`'s words."
   @spec bounds!(t(), Unit.code()) :: {number() | nil, number() | nil}
-  def bounds!(quantity, unit) do
-    case bounds(quantity, unit) do
-      {:ok, bounds} -> bounds
-      {:error, reason} -> raise ArgumentError, Unit.format_error(reason)
-    end
-  end
+  def bounds!(quantity, unit), do: value!(bounds(quantity, unit))
 
   @doc """
   Whether a sum of the quantity's values means anything (spec/03 §10, D-155):
@@ -197,26 +211,44 @@ defmodule Macaw.Data.Quantity do
   ## Examples
 
       iex> Macaw.Data.Quantity.additivity(:count, :gauge)
-      %{across: true, over_time: false}
+      {:ok, %{across: true, over_time: false}}
 
-      iex> Macaw.Data.Quantity.additivity(:temperature, :counter)
+      iex> Macaw.Data.Quantity.additivity!(:temperature, :counter)
       %{across: false, over_time: false}
 
+  `{:error, {:unknown_quantity, quantity}}` for a quantity not in `all/0`, and
+  `{:error, {:unknown_metric_kind, kind}}` for a metric kind not `:gauge`, `:counter` or
+  `:rate`; `additivity!/2` answers the map or raises.
+
   """
-  @spec additivity(t() | nil, metric_kind() | nil) :: %{across: boolean(), over_time: boolean()}
-  def additivity(quantity, metric_kind \\ nil) when metric_kind in [nil | @metric_kinds] do
+  @spec additivity(t() | nil, metric_kind() | nil) ::
+          {:ok, %{across: boolean(), over_time: boolean()}} | {:error, reason()}
+  def additivity(quantity, metric_kind \\ nil)
+
+  def additivity(quantity, metric_kind) when metric_kind in [nil | @metric_kinds] do
     defaults =
       case quantity do
-        nil -> %{across: true, over_time: true}
-        quantity -> Map.take(Facts.fetch!(quantity), [:across, :over_time])
+        nil ->
+          {:ok, %{across: true, over_time: true}}
+
+        quantity ->
+          with {:ok, facts} <- facts(quantity), do: {:ok, Map.take(facts, [:across, :over_time])}
       end
 
-    case metric_kind do
-      nil -> defaults
-      :counter -> %{defaults | over_time: defaults.across}
-      _gauge_or_rate -> %{defaults | over_time: false}
+    with {:ok, defaults} <- defaults do
+      case metric_kind do
+        nil -> {:ok, defaults}
+        :counter -> {:ok, %{defaults | over_time: defaults.across}}
+        _gauge_or_rate -> {:ok, %{defaults | over_time: false}}
+      end
     end
   end
+
+  def additivity(_quantity, metric_kind), do: {:error, {:unknown_metric_kind, metric_kind}}
+
+  @doc "As `additivity/2`, the map alone, raising `ArgumentError` naming the reason."
+  @spec additivity!(t() | nil, metric_kind() | nil) :: %{across: boolean(), over_time: boolean()}
+  def additivity!(quantity, metric_kind \\ nil), do: value!(additivity(quantity, metric_kind))
 
   @doc """
   The display family a unit of the quantity belongs to, smallest first; `[]` for a unit
@@ -229,14 +261,20 @@ defmodule Macaw.Data.Quantity do
   ## Examples
 
       iex> Macaw.Data.Quantity.family(:information, "MiBy")
-      ["By", "KiBy", "MiBy", "GiBy", "TiBy"]
+      {:ok, ["By", "KiBy", "MiBy", "GiBy", "TiBy"]}
 
-      iex> Macaw.Data.Quantity.family(:length, "[ft_i]")
+      iex> Macaw.Data.Quantity.family!(:length, "[ft_i]")
       ["[in_i]", "[ft_i]", "[mi_i]"]
 
+  `{:error, reason}` for a quantity not in `all/0` (`{:unknown_quantity, quantity}`) or a
+  unit that is no code (`Macaw.Data.Unit.parse/1`'s reason); `family!/2` raises it.
   """
-  @spec family(t(), Unit.code() | nil) :: [Unit.code()]
+  @spec family(t(), Unit.code() | nil) :: {:ok, [Unit.code()]} | {:error, term()}
   def family(quantity, unit), do: family(quantity, unit, :as_posted)
+
+  @doc "As `family/2`, the family alone, raising `ArgumentError` naming the reason."
+  @spec family!(t(), Unit.code() | nil) :: [Unit.code()]
+  def family!(quantity, unit), do: value!(family(quantity, unit))
 
   @doc """
   The display family a system shows a unit of the quantity in (spec/03 §11, D-158): the
@@ -252,31 +290,68 @@ defmodule Macaw.Data.Quantity do
   ## Examples
 
       iex> Macaw.Data.Quantity.family(:mass, "kg", :uk)
-      ["[oz_av]", "[lb_av]", "[stone_av]"]
+      {:ok, ["[oz_av]", "[lb_av]", "[stone_av]"]}
 
-      iex> Macaw.Data.Quantity.family(:duration, "ms", :us)
+      iex> Macaw.Data.Quantity.family!(:duration, "ms", :us)
       ["ns", "us", "ms", "s", "min", "h", "d"]
 
-      iex> Macaw.Data.Quantity.family(:pressure, "hPa", :us)
+      iex> Macaw.Data.Quantity.family!(:pressure, "hPa", :us)
       ["[in_i'Hg]"]
 
+      iex> Macaw.Data.Quantity.family(:mass, "kg", :imperial)
+      {:error, {:unknown_system, :imperial}}
+
+  A quantity, a unit or a system none of `systems/0` is `{:error, reason}`, as `family/2`
+  answers, `{:unknown_system, system}` for the system; `family!/3` raises it.
+
   """
-  @spec family(t(), Unit.code() | nil, system()) :: [Unit.code()]
+  @spec family(t(), Unit.code() | nil, system()) :: {:ok, [Unit.code()]} | {:error, term()}
+  def family(_quantity, _unit, system) when system not in @systems,
+    do: {:error, {:unknown_system, system}}
+
   def family(quantity, nil, system) do
     case base_unit(quantity) do
-      nil -> []
-      base -> family(quantity, base, system)
+      {:ok, nil} -> {:ok, []}
+      {:ok, base} -> family(quantity, base, system)
+      {:error, _reason} = error -> error
     end
   end
 
-  def family(quantity, unit, system) when system in @systems do
-    families = convention(quantity, unit)
+  def family(quantity, unit, system) do
+    with {:ok, facts} <- facts(quantity),
+         {:ok, _components} <-
+           if(is_binary(unit), do: Unit.parse(unit), else: {:error, {:syntax, inspect(unit)}}) do
+      families = convention(facts, unit)
 
-    case List.keyfind(families, system, 0) do
-      {^system, ladder} -> ladder
-      nil -> own_family(families, unit)
+      case List.keyfind(families, system, 0) do
+        {^system, ladder} -> {:ok, ladder}
+        nil -> {:ok, own_family(families, unit)}
+      end
     end
   end
+
+  @doc "As `family/3`, the family alone, raising `ArgumentError` naming the reason."
+  @spec family!(t(), Unit.code() | nil, system()) :: [Unit.code()]
+  def family!(quantity, unit, system), do: value!(family(quantity, unit, system))
+
+  # A quantity's facts, or the reason it has none (spec/03 §8).
+  defp facts(quantity) when quantity in @all, do: {:ok, Facts.fetch!(quantity)}
+  defp facts(quantity), do: {:error, {:unknown_quantity, quantity}}
+
+  # The bang twins' one raise: their twin's reason, worded.
+  defp value!({:ok, value}), do: value
+  defp value!({:error, reason}), do: raise(ArgumentError, words(reason))
+
+  defp words({:unknown_quantity, quantity}),
+    do: "#{inspect(quantity)} is not a quantity of Macaw.Data.Quantity.all/0"
+
+  defp words({:unknown_system, system}),
+    do: "#{inspect(system)} is not a unit system of Macaw.Data.Quantity.systems/0"
+
+  defp words({:unknown_metric_kind, kind}),
+    do: "#{inspect(kind)} is not a metric kind: :gauge, :counter or :rate"
+
+  defp words(reason), do: Unit.format_error(reason)
 
   @doc """
   The quantity a code's dimension implies, or `nil` when none of the list has it. A
@@ -302,7 +377,7 @@ defmodule Macaw.Data.Quantity do
         if Unit.currency(unit),
           do: {:ok, :currency},
           else:
-            {:ok, Enum.find(@all -- @dimensionless, &(Unit.dimension!(base_unit(&1)) == dims))}
+            {:ok, Enum.find(@all -- @dimensionless, &(Unit.dimension!(base_unit!(&1)) == dims))}
 
       {:error, _reason} = error ->
         error
@@ -344,7 +419,7 @@ defmodule Macaw.Data.Quantity do
       case {unit, quantity} do
         {nil, nil} -> {:ok, %{unit: nil, quantity: nil}}
         {unit, nil} -> {:ok, %{unit: unit, quantity: of_unit!(unit)}}
-        {nil, quantity} -> {:ok, %{unit: base_unit(quantity), quantity: quantity}}
+        {nil, quantity} -> {:ok, %{unit: base_unit!(quantity), quantity: quantity}}
         {unit, quantity} -> pair(unit, quantity)
       end
     end
@@ -415,7 +490,7 @@ defmodule Macaw.Data.Quantity do
       case quantity do
         :currency -> Unit.currency(unit) != nil
         quantity when quantity in @dimensionless -> Unit.dimension!(unit) == %{}
-        quantity -> Unit.dimension!(unit) == Unit.dimension!(base_unit(quantity))
+        quantity -> Unit.dimension!(unit) == Unit.dimension!(base_unit!(quantity))
       end
 
     if fits?,
@@ -429,8 +504,8 @@ defmodule Macaw.Data.Quantity do
   # claiming its exact code, else the first claiming a code of its shape, else the first.
   # Shape alone cannot choose, since `hPa` and `kPa` are one shape; a quantity of one
   # convention has no choice to make.
-  defp convention(quantity, unit) do
-    case Facts.fetch!(quantity).conventions do
+  defp convention(facts, unit) do
+    case facts.conventions do
       [{_name, only}] ->
         Keyword.fetch!(only, :families)
 

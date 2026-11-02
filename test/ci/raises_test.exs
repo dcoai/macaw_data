@@ -80,15 +80,15 @@ defmodule RaiseGateTest do
   end
 
   @tag verifies: "data-errors-guard"
-  test "an entry of an unknown class, with no site, or a :convert entry naming no issue, fails and allows nothing",
+  test "an entry of an unknown class, with no site, or of the retired :convert class fails and allows nothing",
        %{tmp_dir: dir} do
     lib(dir, "defmodule X do\n  def f(a), do: a || raise(\"no\")\nend\n")
 
     assert [unknown, _unallowed] = RaiseGate.run(dir, [entry("X.f/1", 1, :later)])
     assert unknown =~ "an entry needs site, count, a class of"
-    assert RaiseGate.run(dir, [entry("X.f/1", 1, :convert, "#117 converts it")]) == []
-    assert [unnamed, _unallowed] = RaiseGate.run(dir, [entry("X.f/1", 1, :convert, "later")])
-    assert unnamed =~ "a :convert entry names the issue that converts it"
+    # Bad input is no class: the milestone's :convert class is refused now it is done.
+    assert [convert, _unallowed] = RaiseGate.run(dir, [entry("X.f/1", 1, :convert, "#117")])
+    assert convert =~ "a class of [:bang, :compile, :invariant]"
     assert [malformed, unallowed] = RaiseGate.run(dir, [%{class: :invariant}])
     assert malformed =~ "an entry needs site"
     assert unallowed =~ "X.f/1 raises"

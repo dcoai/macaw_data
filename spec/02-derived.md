@@ -704,7 +704,7 @@ an engine run end to end answers each source's output as a delivery naming its s
 
 ### 8.5 A derived source as a source {#derived-as-source}
 
-A derived source's answer is read as any source's: `Engine.source(engine, path)` is a `%Macaw.Data.Derived.Output{}`, a struct implementing `Macaw.Data.Source` ([01 §2](01-sources.md#sources-contract)) over the engine's last good output at that path:
+A derived source's answer is read as any source's: `Engine.source(engine, path)` is `{:ok, output}`, a `%Macaw.Data.Derived.Output{}` (a path the engine does not define `{:error, [{[:path], :unknown_path}]}`, `source!/3` raising, [00 §5](00-overview.md#data-errors)), a struct implementing `Macaw.Data.Source` ([01 §2](01-sources.md#sources-contract)) over the engine's last good output at that path:
 
 - **`describe/2`** answers its output schema, `supports: []`, no parameters, and `viewer_independent:` as its owner declares it (`Engine.source(engine, path, viewer_independent: true)`, `false` by default). A derived source answers from its inputs alone, so it is viewer independent when every input is, but the engine sees its inputs' deliveries, not their descriptions, so only the owner can say;
 - **`fetch/2`** answers the last good output whole, or `{:error, :loading}` before the first good output. It honors nothing, so the runtime finishes it as any such delivery ([01 §2.4](01-sources.md#sources-finishing));

@@ -343,24 +343,45 @@ defmodule Macaw.Data.Source.Finish do
   end
 
   @doc """
-  A budget clamped to the host's ceiling (spec/01 §6, macaw_compose 05 §1.2): `{budget,
-  clamped?}`. A `nil` budget reads at the ceiling; a page's ceiling, given as `page:`,
-  may lower the host's, never raise it.
+  A budget clamped to the host's ceiling (spec/01 §6, macaw_compose 05 §1.2): `{:ok,
+  {budget, clamped?}}`. A `nil` budget reads at the ceiling; a page's ceiling, given as
+  `page:`, may lower the host's, never raise it. `host:` is required: without it,
+  `{:error, [{[:host], :required}]}`; an option it does not take is `{[key],
+  :unknown_key}` (spec/00 §5). `ceiling!/2` answers the pair or raises.
 
       iex> Macaw.Data.Source.Finish.ceiling(50_000, host: 10_000)
-      {10_000, true}
-      iex> Macaw.Data.Source.Finish.ceiling(nil, host: 10_000, page: 2_000)
+      {:ok, {10_000, true}}
+      iex> Macaw.Data.Source.Finish.ceiling!(nil, host: 10_000, page: 2_000)
       {2_000, false}
+      iex> Macaw.Data.Source.Finish.ceiling(5, page: 2_000)
+      {:error, [{[:host], :required}]}
   """
-  @spec ceiling(pos_integer() | nil, keyword()) :: {pos_integer(), boolean()}
+  @spec ceiling(pos_integer() | nil, keyword()) ::
+          {:ok, {pos_integer(), boolean()}} | {:error, [{list(), term()}, ...]}
   def ceiling(budget, opts) do
-    host = Keyword.fetch!(opts, :host)
-    limit = min(host, Keyword.get(opts, :page, host))
+    with {:ok, opts} <- Macaw.Data.Options.known(opts, host: nil, page: nil) do
+      case opts[:host] do
+        nil ->
+          {:error, [{[:host], :required}]}
 
-    case budget do
-      nil -> {limit, false}
-      n when n > limit -> {limit, true}
-      n -> {n, false}
+        host ->
+          limit = min(host, opts[:page] || host)
+
+          case budget do
+            nil -> {:ok, {limit, false}}
+            n when n > limit -> {:ok, {limit, true}}
+            n -> {:ok, {n, false}}
+          end
+      end
+    end
+  end
+
+  @doc "As `ceiling/2`, the pair alone, raising `ArgumentError` naming the faults."
+  @spec ceiling!(pos_integer() | nil, keyword()) :: {pos_integer(), boolean()}
+  def ceiling!(budget, opts) do
+    case ceiling(budget, opts) do
+      {:ok, pair} -> pair
+      {:error, faults} -> raise ArgumentError, "not a ceiling: #{inspect(faults)}"
     end
   end
 

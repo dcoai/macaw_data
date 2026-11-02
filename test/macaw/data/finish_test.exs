@@ -333,11 +333,11 @@ defmodule Macaw.Data.FinishTest do
 
   @tag verifies: "finish-ceiling-pool"
   test "the host ceiling clamps a budget, a page may lower it, and a pooled fetch asks the largest" do
-    assert Finish.ceiling(500, host: 10_000) == {500, false}
-    assert Finish.ceiling(50_000, host: 10_000) == {10_000, true}
-    assert Finish.ceiling(nil, host: 10_000) == {10_000, false}
-    assert Finish.ceiling(5_000, host: 10_000, page: 2_000) == {2_000, true}
-    assert Finish.ceiling(5_000, host: 1_000, page: 2_000) == {1_000, true}
+    assert Finish.ceiling!(500, host: 10_000) == {500, false}
+    assert Finish.ceiling!(50_000, host: 10_000) == {10_000, true}
+    assert Finish.ceiling!(nil, host: 10_000) == {10_000, false}
+    assert Finish.ceiling!(5_000, host: 10_000, page: 2_000) == {2_000, true}
+    assert Finish.ceiling!(5_000, host: 1_000, page: 2_000) == {1_000, true}
 
     assert Finish.pooled([100, 4_000, 250]) == 4_000
     assert Finish.pooled([100, nil]) == nil

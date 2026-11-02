@@ -58,9 +58,16 @@ Each module's `format_error/1` gives a reason's words, and each converted functi
 **The guard**, `ci/raises.exs`, holds the library to this. It reads every `.ex` file under `lib/` as code, so a raise in a doc or a comment is no site, and finds each `raise`, `reraise` and `throw` with the function it sits in, `Module.name/arity`. A public `name!` whose module also defines `name` of the same arity is a twin and passes. Every other site must be named in `ci/raises_allowlist.exs` with how many sites its function holds, a class and a reason, and an entry whose count is not what its function holds fails too. The classes are:
 - `:bang`: a private helper the twins share;
 - `:compile`: compile-time code;
-- `:invariant`: a named invariant;
-- `:convert`: while the "Errors are values" milestone lasts, a site still to convert, naming its issue.
+- `:invariant`: a named invariant.
+
+Bad input has no class: the milestone's `:convert` class, which listed each site still to convert, is retired and refused (macaw_data#121).
 
 ```test:data-errors-guard
-the raise guard passes this library; it fails on a raise outside a bang twin and the allowlist, at its line, and on an allowlist entry whose count is stale, whose class is unknown, or that is a :convert entry naming no issue; a raise in a doc or a comment is no site
+the raise guard passes this library; it fails on a raise outside a bang twin and the allowlist, at its line, and on an allowlist entry whose count is stale, whose class is unknown (the retired :convert among them), or that names no site; a raise in a doc or a comment is no site
+```
+
+**What once raised implicitly answers too** (macaw_data#121). A function's option it does not take is `{[key], :unknown_key}` and a missing required one `{[key], :required}`, where `Keyword.validate!/2` and `Keyword.fetch!/2` would raise; a quantity not in `Macaw.Data.Quantity.all/0` is `{:unknown_quantity, quantity}`, a system none of `systems/0` `{:unknown_system, system}` and a metric kind none of `:gauge`, `:counter` and `:rate` `{:unknown_metric_kind, kind}`, where a map read would raise. What stays an implicit raise reads only what the library itself built: an engine's map by a path it defined, a chunk's column by its header's name, a word table by a word the checker produced. **`Macaw.Data.Table.rows/1` reads a source `Table.source/1` accepts**: every entry that takes a caller's rows (`Table.from/2`, `Delivery.new/2`, `Operations.apply/4`) checks it first, and an aggregate's `reduce/2` and `step/3` take readings as its `reads/0` declares, checked by `Operations.aggregate/4` and the steps. Those three are named invariants in the guard's allowlist.
+
+```test:data-errors-implicit
+an option Delivery.table/2, Derived.validate/2, Engine.new/2, Engine.source/3, Push.new/3 and Finish.ceiling/2 do not take is {[key], :unknown_key}, a missing required one {[key], :required}, an unknown engine path {[:path], :unknown_path}; a quantity, unit, system or metric kind outside Quantity's vocabulary is its fault; none raises, and the ! twins raise them
 ```

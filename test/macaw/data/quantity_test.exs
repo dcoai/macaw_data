@@ -37,15 +37,15 @@ defmodule Macaw.Data.QuantityTest do
              ]
 
       for q <- Quantity.all() -- [:currency],
-          do: assert(Unit.valid?(Quantity.base_unit(q)), "#{q}")
+          do: assert(Unit.valid?(Quantity.base_unit!(q)), "#{q}")
 
-      assert Quantity.base_unit(:currency) == nil
+      assert Quantity.base_unit!(:currency) == nil
     end
 
     @tag verifies: "quantities-list"
     test "each base unit implies its own quantity; a ratio is the percent" do
       for q <- Quantity.all() -- [:ratio, :currency],
-          do: assert(Quantity.of_unit!(Quantity.base_unit(q)) == q, "#{q}")
+          do: assert(Quantity.of_unit!(Quantity.base_unit!(q)) == q, "#{q}")
 
       assert Quantity.of_unit!("%") == :ratio
       assert Quantity.of_unit!("{request}") == :count
@@ -73,32 +73,32 @@ defmodule Macaw.Data.QuantityTest do
       }
 
       for q <- Quantity.all(),
-          unit <- Map.get(units, q, [Quantity.base_unit(q)]),
-          member <- Quantity.family(q, unit) do
-        assert Unit.dimension!(member) == Unit.dimension!(Quantity.base_unit(q)), member
+          unit <- Map.get(units, q, [Quantity.base_unit!(q)]),
+          member <- Quantity.family!(q, unit) do
+        assert Unit.dimension!(member) == Unit.dimension!(Quantity.base_unit!(q)), member
       end
     end
 
     @tag verifies: "quantities-families-conventions"
     test "the unit picks the family: decimal by default, binary, bits, hertz, watt-hours" do
-      assert Quantity.family(:information, "By") == ~w(By kBy MBy GBy TBy)
-      assert Quantity.family(:information, "kBy") == ~w(By kBy MBy GBy TBy)
-      assert Quantity.family(:information, nil) == ~w(By kBy MBy GBy TBy)
-      assert Quantity.family(:information, "MiBy") == ~w(By KiBy MiBy GiBy TiBy)
-      assert Quantity.family(:information, "Mbit") == ~w(bit kbit Mbit Gbit Tbit)
-      assert Quantity.family(:data_rate, "KiBy/s") == ~w(By/s KiBy/s MiBy/s GiBy/s TiBy/s)
-      assert Quantity.family(:frequency, "kHz") == ~w(Hz kHz MHz GHz)
-      assert Quantity.family(:frequency, "{request}/s") == ~w(/h /min /s)
-      assert Quantity.family(:energy, "kW.h") == ~w(W.h kW.h MW.h GW.h)
-      assert Quantity.family(:energy, "J") == ~w(J kJ MJ GJ)
+      assert Quantity.family!(:information, "By") == ~w(By kBy MBy GBy TBy)
+      assert Quantity.family!(:information, "kBy") == ~w(By kBy MBy GBy TBy)
+      assert Quantity.family!(:information, nil) == ~w(By kBy MBy GBy TBy)
+      assert Quantity.family!(:information, "MiBy") == ~w(By KiBy MiBy GiBy TiBy)
+      assert Quantity.family!(:information, "Mbit") == ~w(bit kbit Mbit Gbit Tbit)
+      assert Quantity.family!(:data_rate, "KiBy/s") == ~w(By/s KiBy/s MiBy/s GiBy/s TiBy/s)
+      assert Quantity.family!(:frequency, "kHz") == ~w(Hz kHz MHz GHz)
+      assert Quantity.family!(:frequency, "{request}/s") == ~w(/h /min /s)
+      assert Quantity.family!(:energy, "kW.h") == ~w(W.h kW.h MW.h GW.h)
+      assert Quantity.family!(:energy, "J") == ~w(J kJ MJ GJ)
 
       for q <- [:ratio, :count, :angle, :currency, :sound_level, :mass_concentration],
-          do: assert(Quantity.family(q, nil) == [])
+          do: assert(Quantity.family!(q, nil) == [])
 
-      assert Quantity.family(:temperature, "K") == []
-      assert Quantity.family(:speed, "m/s") == []
-      assert Quantity.family(:pressure, "mbar") == []
-      assert Quantity.family(:length, "[nmi_i]") == []
+      assert Quantity.family!(:temperature, "K") == []
+      assert Quantity.family!(:speed, "m/s") == []
+      assert Quantity.family!(:pressure, "mbar") == []
+      assert Quantity.family!(:length, "[nmi_i]") == []
     end
   end
 

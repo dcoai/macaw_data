@@ -981,7 +981,7 @@ served holds complete_until, a time or a number, nil by default; any other value
 
 ### 6.1 Budgets: the ceiling and pooling {#sources-budgets}
 
-- **The host ceiling** clamps every slot's budget ([macaw_compose 05](https://github.com/dcoai/macaw/blob/main/spec/05-components.md#components-budget)). A host sets it once; a page may lower it, never raise it. `Finish.ceiling/2` is the rule: `{budget, clamped?}`, a `nil` budget reading at the ceiling.
+- **The host ceiling** clamps every slot's budget ([macaw_compose 05](https://github.com/dcoai/macaw/blob/main/spec/05-components.md#components-budget)). A host sets it once; a page may lower it, never raise it. `Finish.ceiling/2` is the rule: `{:ok, {budget, clamped?}}`, a `nil` budget reading at the ceiling; without `host:` it is `{:error, [{[:host], :required}]}` ([00 §5](00-overview.md#data-errors)), and `ceiling!/2` raises.
 - **Pooling:** several readers of one source and request cost one fetch, at the largest budget among them (`Finish.pooled/1`, `nil` when any reader wants every row), and each reader is reduced to its own budget (`Finish.reduce/4`, `reduced_by: :runtime`), an ordered delivery to its own head (§2.4). Readers pooled share one request, and so one order. (visualize.md C1.)
 
 ```test:finish-ceiling-pool

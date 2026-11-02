@@ -502,7 +502,7 @@ defmodule Macaw.Data.SchemaTest do
     @tag verifies: "schema-measure"
     test "every quantity in its base unit, and the units feeds write, pass" do
       for q <- Macaw.Data.Quantity.all() do
-        unit = Macaw.Data.Quantity.base_unit(q) || "{iso4217:USD}"
+        unit = Macaw.Data.Quantity.base_unit!(q) || "{iso4217:USD}"
         assert {:ok, _} = Schema.new(%{v: %{type: :number, unit: unit, quantity: q}})
       end
 

@@ -252,7 +252,8 @@ defmodule Macaw.Data.Delivery do
   @doc """
   The rows packed into a `Macaw.Data.Table` (spec/01 §1.1), for a reader that wants
   columns: `{:ok, table}` or `{:error, faults}`. A table passes as it is. The delivery's
-  `types:` and `names:` apply, and `opts` may give others (`types:` merged over them).
+  `types:` and `names:` apply, and `opts` may give others (`types:` merged over them); an
+  option it does not take is `{[key], :unknown_key}`.
   Packing normalizes (an integer beside floats reads back a float, a naive time a UTC
   `DateTime`); the delivery's rows are never changed by it.
   """
@@ -261,10 +262,8 @@ defmodule Macaw.Data.Delivery do
   def table(%__MODULE__{rows: %Table{} = table}, _opts), do: {:ok, table}
 
   def table(%__MODULE__{} = delivery, opts) do
-    opts = Keyword.validate!(opts, types: %{}, names: nil)
-    names = opts[:names] || delivery.names
-
-    with {:ok, source} <- named(delivery.rows, names),
+    with {:ok, opts} <- Macaw.Data.Options.known(opts, types: %{}, names: nil),
+         {:ok, source} <- named(delivery.rows, opts[:names] || delivery.names),
          do: Table.from(source, types: Map.merge(delivery.types, opts[:types]))
   end
 

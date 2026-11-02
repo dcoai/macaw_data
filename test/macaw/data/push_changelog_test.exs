@@ -13,7 +13,7 @@ defmodule Macaw.Data.PushChangelogTest do
   @schema Schema.new!(%{"t" => %{type: :number, window: true}, "v" => %{type: :number}})
   @version Schema.version(@schema)
 
-  defp push, do: Push.new(:ticks, make_ref(), cache: Cache.new([{:ticks, @schema}]))
+  defp push, do: Push.new!(:ticks, make_ref(), cache: Cache.new([{:ticks, @schema}]))
 
   defp rows(ts), do: for(t <- ts, do: %{"t" => t, "v" => t})
 
@@ -160,7 +160,7 @@ defmodule Macaw.Data.PushChangelogTest do
           })
 
   defp tapped(served \\ []),
-    do: Push.new(:taps, make_ref(), cache: Cache.new([{:taps, @tapped}])) |> then(&{&1, served})
+    do: Push.new!(:taps, make_ref(), cache: Cache.new([{:taps, @tapped}])) |> then(&{&1, served})
 
   defp change({push, served}, seq, opts) do
     {rows, opts} = Keyword.pop(opts, :rows, [])
@@ -294,7 +294,7 @@ defmodule Macaw.Data.PushChangelogTest do
 
     # A schema with no window field takes only the whole range.
     log = Schema.new!(%{"msg" => %{type: :text}})
-    lp = Push.new(:log, make_ref(), cache: Cache.new([{:log, log}]))
+    lp = Push.new!(:log, make_ref(), cache: Cache.new([{:log, log}]))
     inc = fn rows, opts -> Delivery.new!(rows, [schema: Schema.version(log)] ++ opts) end
     {:ok, lp} = Push.receive(lp, Push.increment_message(lp.ref, 1, inc.([%{"msg" => "x"}], [])))
 
@@ -372,7 +372,7 @@ defmodule Macaw.Data.PushChangelogTest do
       {changes, models} = changelog(steps)
       n = length(changes)
       ref = make_ref()
-      push = Push.new(:taps, ref, cache: Cache.new([{:taps, @tapped}]))
+      push = Push.new!(:taps, ref, cache: Cache.new([{:taps, @tapped}]))
       send = fn push, d -> send_in(push, Push.increment_message(ref, d.seq, d.delivery)) end
 
       {push, _drains} =
@@ -437,7 +437,7 @@ defmodule Macaw.Data.PushChangelogTest do
       ref = make_ref()
       # Spans of 5 over t in 0..25, settled as the changelog goes: most changes reach a
       # settled chunk's delta, and enough of them compact it.
-      push = Push.new(:taps, ref, cache: Cache.new([{:taps, @tapped}]), chunk_span: 5)
+      push = Push.new!(:taps, ref, cache: Cache.new([{:taps, @tapped}]), chunk_span: 5)
 
       {push, _drains} =
         Enum.reduce(changes, {push, drains}, fn %{seq: seq, delivery: d},
@@ -463,7 +463,7 @@ defmodule Macaw.Data.PushChangelogTest do
     {push, _} =
       tapped()
       |> then(fn {_push, served} ->
-        {Push.new(:taps, make_ref(), cache: Cache.new([{:taps, @tapped}]), chunk_span: 10),
+        {Push.new!(:taps, make_ref(), cache: Cache.new([{:taps, @tapped}]), chunk_span: 10),
          served}
       end)
       |> start(Enum.map(0..9, &tap("a", &1, &1)) ++ [tap("b", 12, 0)], complete_until: 10)
@@ -635,7 +635,7 @@ defmodule Macaw.Data.PushChangelogTest do
 
     # With lateness 10 and complete_until 100 the bound is 90.
     late = fn ->
-      {Push.new(:taps, make_ref(), cache: Cache.new([{:taps, @tapped}]), lateness: 10), []}
+      {Push.new!(:taps, make_ref(), cache: Cache.new([{:taps, @tapped}]), lateness: 10), []}
     end
 
     s = late.() |> start(base, complete_until: 100)
@@ -676,7 +676,7 @@ defmodule Macaw.Data.PushChangelogTest do
     t0 = ~U[2026-10-30 12:00:00Z]
 
     p =
-      Push.new(:timed, make_ref(),
+      Push.new!(:timed, make_ref(),
         cache: Cache.new([{:timed, timed}]),
         lateness: Duration.new!(hour: 1)
       )
@@ -696,7 +696,7 @@ defmodule Macaw.Data.PushChangelogTest do
 
     # A lateness that can't be taken from the claim (a number from a time) is recorded,
     # and bounds nothing.
-    q = Push.new(:timed, make_ref(), cache: Cache.new([{:timed, timed}]), lateness: 10)
+    q = Push.new!(:timed, make_ref(), cache: Cache.new([{:timed, timed}]), lateness: 10)
     q = q |> Push.snapshot(snap) |> send_in(Push.increment_message(q.ref, 1, inc)) |> drain()
     assert q.errors == [{:lateness, :incompatible, t0}]
     assert Delivery.named_rows!(Push.held(q)) == rows

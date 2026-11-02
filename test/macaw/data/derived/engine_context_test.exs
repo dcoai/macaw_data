@@ -302,7 +302,7 @@ defmodule Macaw.Data.Derived.EngineContextTest do
     test "it describes its output schema, fetches its last good output, or loading before" do
       a = stored(:a, "fn %{hosts: rows} -> [%{n: Enum.count(rows)}] end")
       before = engine(%{["a"] => a})
-      loading = Engine.source(before, ["a"])
+      loading = Engine.source!(before, ["a"])
 
       assert {:ok, description} = Source.describe(loading, nil)
       assert description.schema == a.schema
@@ -314,7 +314,7 @@ defmodule Macaw.Data.Derived.EngineContextTest do
       assert Source.subscribe(loading, self()) == {:error, :no_push}
 
       engine = before |> push() |> Engine.run(0)
-      source = Engine.source(engine, [:a], viewer_independent: true)
+      source = Engine.source!(engine, [:a], viewer_independent: true)
       assert %Output{viewer_independent: true} = source
       assert {:ok, delivery} = Source.fetch(source, description, request)
       assert Delivery.rows(delivery) == [%{"n" => 2}]
@@ -325,7 +325,7 @@ defmodule Macaw.Data.Derived.EngineContextTest do
       a = stored(:a, "fn %{hosts: rows} -> [%{n: Enum.count(rows)}] end")
       engine = engine(%{["a"] => a}) |> push() |> Engine.run(0)
 
-      assert Conformance.check(Engine.source(engine, ["a"], viewer_independent: true),
+      assert Conformance.check(Engine.source!(engine, ["a"], viewer_independent: true),
                requests: [[]],
                budgets: [nil]
              ) == []

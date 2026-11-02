@@ -94,18 +94,22 @@ defmodule Macaw.Data.Derived.Engine do
   """
   @spec new(%{list() => Derived.t()}, keyword()) :: {:ok, t()} | {:error, [error(), ...]}
   def new(derived, opts) when is_map(derived) do
-    opts =
-      Keyword.validate!(opts,
-        sources: [],
-        functions: %{},
-        packages: [],
-        debounce: 250,
-        idle_after: %{},
-        max_reductions: 100_000_000,
-        timeout: 30_000,
-        max_heap: 10_000_000
-      )
+    case Macaw.Data.Options.known(opts,
+           sources: [],
+           functions: %{},
+           packages: [],
+           debounce: 250,
+           idle_after: %{},
+           max_reductions: 100_000_000,
+           timeout: 30_000,
+           max_heap: 10_000_000
+         ) do
+      {:ok, opts} -> defined(derived, opts)
+      {:error, faults} -> {:error, for({at, why} <- faults, do: {[], at, why})}
+    end
+  end
 
+  defp defined(derived, opts) do
     {run_opts, bound_errors} =
       case opts |> Keyword.take([:max_reductions, :timeout, :max_heap]) |> Sandbox.tightened() do
         {:ok, run_opts} ->
@@ -700,25 +704,46 @@ defmodule Macaw.Data.Derived.Engine do
     do: Map.new(engine.derived, fn {path, _source} -> {path, Map.get(engine.runs, path, 0)} end)
 
   @doc "As `source/3` with no options."
-  @spec source(t(), list()) :: Output.t()
+  @spec source(t(), list()) :: {:ok, Output.t()} | {:error, [{list(), term()}, ...]}
   def source(engine, path), do: source(engine, path, [])
 
   @doc """
-  The derived source at `path` as a `Macaw.Data.Source` (spec/02 §8.5): a
-  `%Macaw.Data.Derived.Output{}` over its last good output and its output schema.
+  The derived source at `path` as a `Macaw.Data.Source` (spec/02 §8.5): `{:ok, output}`,
+  a `%Macaw.Data.Derived.Output{}` over its last good output and its output schema.
   `viewer_independent:` is the owner's to declare (`false`): the engine sees its inputs'
-  deliveries, not their descriptions.
+  deliveries, not their descriptions. A path the engine does not define is `{:error,
+  [{[:path], :unknown_path}]}`, and an option it does not take `{[key], :unknown_key}`
+  (spec/00 §5); `source!/3` answers the output or raises.
   """
-  @spec source(t(), list(), keyword()) :: Output.t()
+  @spec source(t(), list(), keyword()) :: {:ok, Output.t()} | {:error, [{list(), term()}, ...]}
   def source(%__MODULE__{} = engine, path, opts) when is_list(path) do
-    opts = Keyword.validate!(opts, viewer_independent: false)
     path = Enum.map(path, &Names.name/1)
-    %{schema: schema} = Map.fetch!(engine.derived, path)
 
-    %Output{
-      schema: schema,
-      delivery: Map.get(engine.outputs, path),
-      viewer_independent: opts[:viewer_independent]
-    }
+    with {:ok, opts} <- Macaw.Data.Options.known(opts, viewer_independent: false) do
+      case Map.fetch(engine.derived, path) do
+        {:ok, %{schema: schema}} ->
+          {:ok,
+           %Output{
+             schema: schema,
+             delivery: Map.get(engine.outputs, path),
+             viewer_independent: opts[:viewer_independent]
+           }}
+
+        :error ->
+          {:error, [{[:path], :unknown_path}]}
+      end
+    end
+  end
+
+  @doc "As `source/3`, the output alone, raising `ArgumentError` naming the faults."
+  @spec source!(t(), list(), keyword()) :: Output.t()
+  def source!(%__MODULE__{} = engine, path, opts \\ []) do
+    case source(engine, path, opts) do
+      {:ok, output} ->
+        output
+
+      {:error, faults} ->
+        raise ArgumentError, "not a derived source of the engine: #{inspect(faults)}"
+    end
   end
 end

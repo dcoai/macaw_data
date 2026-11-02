@@ -18,8 +18,9 @@
 #   :bang       a private helper the bang twins share to raise their twin's reason
 #   :compile    a macro's misuse, which fails the build: there is no caller to answer
 #   :invariant  a broken internal invariant: a bug in this library, never bad input
-#   :convert    bad input still answered with a raise, while the "Errors are values"
-#               milestone (#114) lasts: its reason names the issue that converts it
+#
+# Bad input is never a class: a site that raises on it is converted, not listed (the
+# "Errors are values" milestone, #114, removed the last such entry).
 #
 # An entry whose function holds a different number of sites fails too, so the list
 # cannot go stale. Its test loads this file with `:ci_no_main` set, so nothing runs on
@@ -28,7 +29,7 @@
 defmodule RaiseGate do
   @scanned "lib"
   @allowlist "ci/raises_allowlist.exs"
-  @classes [:bang, :compile, :invariant, :convert]
+  @classes [:bang, :compile, :invariant]
   @defs [:def, :defp, :defmacro, :defmacrop]
   @raising [:raise, :reraise, :throw]
 
@@ -140,18 +141,15 @@ defmodule RaiseGate do
     for entry <- entries, problem = malformed_entry(entry), do: problem
   end
 
-  defp malformed_entry(%{site: site, count: count, class: class, reason: reason} = entry)
+  defp malformed_entry(%{site: site, count: count, class: class, reason: reason})
        when is_binary(site) and is_integer(count) and count > 0 and class in @classes and
               is_binary(reason) and reason != "",
-       do: if(class == :convert and not (reason =~ ~r/#\d+/), do: unnamed(entry))
+       do: nil
 
   defp malformed_entry(entry),
     do:
       "#{@allowlist}: an entry needs site, count, a class of #{inspect(@classes)} and a " <>
         "reason; got #{inspect(entry)}"
-
-  defp unnamed(entry),
-    do: "#{@allowlist}: a :convert entry names the issue that converts it; got #{inspect(entry)}"
 
   defp unallowed(sites, entries) do
     listed = MapSet.new(entries, & &1.site)

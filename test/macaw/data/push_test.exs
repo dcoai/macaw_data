@@ -73,7 +73,7 @@ defmodule Macaw.Data.PushTest do
     source = %Ticker{rows: [%{"t" => 1, "v" => 10}, %{"t" => 2, "v" => 20}]}
     {:ok, ref} = Source.subscribe(source, self())
 
-    push = Push.new(:ticks, ref) |> received()
+    push = Push.new!(:ticks, ref) |> received()
     assert Cache.fetch(push.cache, :ticks, Schema.version(@schema)) == {:ok, @schema}
     assert length(push.pending) == 2
 
@@ -85,7 +85,7 @@ defmodule Macaw.Data.PushTest do
 
   @tag verifies: "push-handshake"
   test "a message of another subscription is ignored; one under this ref is not" do
-    push = Push.new(:ticks, make_ref())
+    push = Push.new!(:ticks, make_ref())
     assert Push.receive(push, Push.schema_message(make_ref(), @schema)) == :ignore
     assert Push.receive(push, {:other, 1}) == :ignore
     assert {:ok, _push} = Push.receive(push, Push.schema_message(push.ref, @schema))
@@ -94,7 +94,7 @@ defmodule Macaw.Data.PushTest do
   @tag verifies: "push-unknown-version"
   test "an increment naming a version not cached asks describe once, then caches it" do
     ref = make_ref()
-    push = Push.new(:ticks, ref)
+    push = Push.new!(:ticks, ref)
 
     {:ok, push} =
       Push.receive(push, Push.increment_message(ref, 1, increment([%{"t" => 1, "v" => 1}])))
@@ -114,7 +114,7 @@ defmodule Macaw.Data.PushTest do
     assert_received {:described, :ticks}
     refute_received {:described, _}
 
-    failing = Push.new(:gone, ref)
+    failing = Push.new!(:gone, ref)
 
     {:ok, failing} =
       Push.receive(failing, Push.increment_message(ref, 1, increment([%{"t" => 1, "v" => 1}])))
@@ -136,7 +136,7 @@ defmodule Macaw.Data.PushTest do
           increment([%{"t" => 2, "v" => 2}, %{"t" => 1, "v" => 1}])
         ]
         |> Enum.with_index(1),
-        Push.new(:ticks, ref, cache: cache),
+        Push.new!(:ticks, ref, cache: cache),
         fn {d, seq}, push ->
           {:ok, push} = Push.receive(push, Push.increment_message(ref, seq, d))
           Push.drain(push, &no_describe/1)
@@ -150,7 +150,7 @@ defmodule Macaw.Data.PushTest do
   @tag verifies: "push-coalesce"
   test "pushes between two pulses buffer, and one drain merges them all, in the order received" do
     ref = make_ref()
-    push = Push.new(:ticks, ref, cache: Cache.new([{:ticks, @schema}]))
+    push = Push.new!(:ticks, ref, cache: Cache.new([{:ticks, @schema}]))
 
     push =
       Enum.reduce(1..50, push, fn t, push ->
@@ -170,7 +170,7 @@ defmodule Macaw.Data.PushTest do
   test "with no window field the newest rows are kept up to the limit, the delivery marked capped" do
     schema = Schema.new!(%{"msg" => %{type: :text}})
     ref = make_ref()
-    push = Push.new(:log, ref, cache: Cache.new([{:log, schema}]), limit: 3)
+    push = Push.new!(:log, ref, cache: Cache.new([{:log, schema}]), limit: 3)
 
     push =
       Enum.reduce(1..5, push, fn i, push ->
@@ -197,7 +197,7 @@ defmodule Macaw.Data.PushTest do
           ) do
       rows = for t <- times, do: %{"t" => t, "v" => t * 2}
       ref = make_ref()
-      push = Push.new(:ticks, ref, cache: Cache.new([{:ticks, @schema}]))
+      push = Push.new!(:ticks, ref, cache: Cache.new([{:ticks, @schema}]))
 
       {chunks, _} =
         Enum.reduce(Stream.cycle(splits) |> Enum.take(length(rows)), {[], rows}, fn

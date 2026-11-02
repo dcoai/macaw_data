@@ -77,7 +77,7 @@ defmodule Macaw.Data.Unit.MetresisParityTest do
       quantities = MetresisParity.quantities()
 
       for family <- MetresisParity.families(), quantity = quantities[family], quantity != nil do
-        additive = Quantity.additivity(quantity)
+        additive = Quantity.additivity!(quantity)
         excluded? = not additive.across and not additive.over_time
 
         cond do
@@ -95,10 +95,10 @@ defmodule Macaw.Data.Unit.MetresisParityTest do
       for {family, {min, max}} <- MetresisParity.bounds(),
           family not in MetresisParity.bounds_differ() do
         quantity = quantities[family]
-        unit = if family == :percent, do: "%", else: Quantity.base_unit(quantity)
+        unit = if family == :percent, do: "%", else: Quantity.base_unit!(quantity)
 
         {vmin, vmax} =
-          if unit, do: Quantity.bounds!(quantity, unit), else: Quantity.bounds(quantity)
+          if unit, do: Quantity.bounds!(quantity, unit), else: Quantity.bounds!(quantity)
 
         assert {vmin && vmin * 1.0, vmax && vmax * 1.0} == {min, max}, "#{family}"
       end

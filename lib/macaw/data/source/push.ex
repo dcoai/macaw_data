@@ -102,19 +102,34 @@ defmodule Macaw.Data.Source.Push do
   age; `chunk_span:` the description's `chunk_span` (spec/01 §1.1.3), `nil` by default,
   derived from the resolution held.
   """
-  @spec new(term(), reference(), keyword()) :: t()
+  @spec new(term(), reference(), keyword()) :: {:ok, t()} | {:error, [{list(), term()}, ...]}
   def new(name, ref, opts \\ []) when is_reference(ref) do
-    opts =
-      Keyword.validate!(opts, cache: %Cache{}, limit: 100_000, lateness: nil, chunk_span: nil)
+    with {:ok, opts} <-
+           Macaw.Data.Options.known(opts,
+             cache: %Cache{},
+             limit: 100_000,
+             lateness: nil,
+             chunk_span: nil
+           ) do
+      {:ok,
+       %__MODULE__{
+         name: name,
+         ref: ref,
+         cache: opts[:cache],
+         limit: opts[:limit],
+         lateness: opts[:lateness],
+         chunk_span: opts[:chunk_span]
+       }}
+    end
+  end
 
-    %__MODULE__{
-      name: name,
-      ref: ref,
-      cache: opts[:cache],
-      limit: opts[:limit],
-      lateness: opts[:lateness],
-      chunk_span: opts[:chunk_span]
-    }
+  @doc "As `new/3`, the subscription alone, raising `ArgumentError` naming the faults."
+  @spec new!(term(), reference(), keyword()) :: t()
+  def new!(name, ref, opts \\ []) do
+    case new(name, ref, opts) do
+      {:ok, push} -> push
+      {:error, faults} -> raise ArgumentError, "not a subscription's options: #{inspect(faults)}"
+    end
   end
 
   @doc "The message a source sends with its schema, first and on every change."

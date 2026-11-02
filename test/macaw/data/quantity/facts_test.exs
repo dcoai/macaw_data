@@ -8,15 +8,15 @@ defmodule Macaw.Data.Quantity.FactsTest do
     @tag verifies: "quantities-list"
     test "a base unit of its own dimension, a kind, bounds and additivity" do
       for q <- Quantity.all() do
-        assert Quantity.kind(q) in [:linear, :affine, :logarithmic, :cyclic], "#{q}"
-        assert {min, max} = Quantity.bounds(q)
+        assert Quantity.kind!(q) in [:linear, :affine, :logarithmic, :cyclic], "#{q}"
+        assert {min, max} = Quantity.bounds!(q)
         assert min == nil or is_number(min)
         assert max == nil or is_number(max)
-        assert %{across: across, over_time: over_time} = Quantity.additivity(q)
+        assert %{across: across, over_time: over_time} = Quantity.additivity!(q)
         assert is_boolean(across) and is_boolean(over_time)
 
         if q != :currency do
-          base = Quantity.base_unit(q)
+          base = Quantity.base_unit!(q)
           assert Quantity.resolve(%{unit: base, quantity: q}) == {:ok, %{unit: base, quantity: q}}
         end
       end
@@ -24,7 +24,7 @@ defmodule Macaw.Data.Quantity.FactsTest do
 
     @tag verifies: "quantities-kind-bounds"
     test "the kinds: a temperature is affine, a sound level logarithmic, an angle cyclic" do
-      kinds = Map.new(Quantity.all(), &{&1, Quantity.kind(&1)})
+      kinds = Map.new(Quantity.all(), &{&1, Quantity.kind!(&1)})
       assert kinds.temperature == :affine
       assert kinds.sound_level == :logarithmic
       assert kinds.angle == :cyclic
@@ -39,15 +39,15 @@ defmodule Macaw.Data.Quantity.FactsTest do
     @tag verifies: "quantities-list"
     test "every family member reads, has its quantity's dimension and one shape in its family" do
       for q <- Quantity.all(), q != :currency, system <- Quantity.systems() do
-        family = Quantity.family(q, nil, system)
+        family = Quantity.family!(q, nil, system)
 
         for member <- family do
-          assert Unit.dimension!(member) == Unit.dimension!(Quantity.base_unit(q)),
+          assert Unit.dimension!(member) == Unit.dimension!(Quantity.base_unit!(q)),
                  "#{q} #{system} #{member}"
         end
 
-        if Quantity.kind(q) != :affine do
-          factors = Enum.map(family, &Unit.convert!(1, &1, Quantity.base_unit(q)))
+        if Quantity.kind!(q) != :affine do
+          factors = Enum.map(family, &Unit.convert!(1, &1, Quantity.base_unit!(q)))
           assert factors == Enum.sort(factors), "#{q} #{system}: smallest first"
         end
       end
@@ -57,9 +57,9 @@ defmodule Macaw.Data.Quantity.FactsTest do
   describe "bounds are a display hint" do
     @tag verifies: "quantities-kind-bounds"
     test "in the base unit, and converted into another unit of the quantity" do
-      assert Quantity.bounds(:angle) == {0, 360}
+      assert Quantity.bounds!(:angle) == {0, 360}
       assert Quantity.bounds!(:angle, "rad") == {0.0, 2 * :math.pi()}
-      assert Quantity.bounds(:ratio) == {0, 1}
+      assert Quantity.bounds!(:ratio) == {0, 1}
       assert Quantity.bounds!(:ratio, "%") == {0.0, 100.0}
       assert Quantity.bounds!(:duration, "ms") == {0.0, nil}
       assert Quantity.bounds!(:temperature, "[degF]") == {nil, nil}
@@ -75,26 +75,26 @@ defmodule Macaw.Data.Quantity.FactsTest do
       both = both ++ [:currency, :electric_charge]
 
       for q <- across_only,
-          do: assert(Quantity.additivity(q) == %{across: true, over_time: false})
+          do: assert(Quantity.additivity!(q) == %{across: true, over_time: false})
 
-      for q <- both, do: assert(Quantity.additivity(q) == %{across: true, over_time: true})
+      for q <- both, do: assert(Quantity.additivity!(q) == %{across: true, over_time: true})
 
       for q <- Quantity.all() -- (across_only ++ both),
-          do: assert(Quantity.additivity(q) == %{across: false, over_time: false}, "#{q}")
+          do: assert(Quantity.additivity!(q) == %{across: false, over_time: false}, "#{q}")
     end
 
     @tag verifies: "quantities-additivity-defaults"
     test "a metric kind refines the sum over time and never the sum across" do
       for q <- [nil | Quantity.all()] do
-        %{across: across} = Quantity.additivity(q)
-        assert Quantity.additivity(q, :gauge) == %{across: across, over_time: false}
-        assert Quantity.additivity(q, :rate) == %{across: across, over_time: false}
-        assert Quantity.additivity(q, :counter) == %{across: across, over_time: across}
+        %{across: across} = Quantity.additivity!(q)
+        assert Quantity.additivity!(q, :gauge) == %{across: across, over_time: false}
+        assert Quantity.additivity!(q, :rate) == %{across: across, over_time: false}
+        assert Quantity.additivity!(q, :counter) == %{across: across, over_time: across}
       end
 
-      assert Quantity.additivity(nil) == %{across: true, over_time: true}
-      assert Quantity.additivity(:count, :gauge) == %{across: true, over_time: false}
-      assert Quantity.additivity(:data_rate, :counter) == %{across: true, over_time: true}
+      assert Quantity.additivity!(nil) == %{across: true, over_time: true}
+      assert Quantity.additivity!(:count, :gauge) == %{across: true, over_time: false}
+      assert Quantity.additivity!(:data_rate, :counter) == %{across: true, over_time: true}
     end
   end
 
@@ -127,87 +127,87 @@ defmodule Macaw.Data.Quantity.FactsTest do
       ]
 
       for {unit, system, family} <- cases do
-        assert Quantity.family(Quantity.of_unit!(unit), unit, system) == family,
+        assert Quantity.family!(Quantity.of_unit!(unit), unit, system) == family,
                inspect({unit, system})
       end
     end
 
     @tag verifies: "quantities-systems-pick"
     test "as posted, a value keeps its unit's own family" do
-      assert Quantity.family(:mass, "[oz_av]", :as_posted) == ~w([oz_av] [lb_av])
-      assert Quantity.family(:length, "[ft_i]", :as_posted) == ~w([in_i] [ft_i] [mi_i])
-      assert Quantity.family(:volume, "[gal_br]", :as_posted) == ~w([foz_br] [pt_br] [gal_br])
-      assert Quantity.family(:mass, "g", :as_posted) == ~w(mg g kg t)
-      assert Quantity.family(:electric_charge, "mA.h", :as_posted) == ~w(mA.h A.h)
+      assert Quantity.family!(:mass, "[oz_av]", :as_posted) == ~w([oz_av] [lb_av])
+      assert Quantity.family!(:length, "[ft_i]", :as_posted) == ~w([in_i] [ft_i] [mi_i])
+      assert Quantity.family!(:volume, "[gal_br]", :as_posted) == ~w([foz_br] [pt_br] [gal_br])
+      assert Quantity.family!(:mass, "g", :as_posted) == ~w(mg g kg t)
+      assert Quantity.family!(:electric_charge, "mA.h", :as_posted) == ~w(mA.h A.h)
 
       # No family holds these: they are shown as given.
       for {quantity, unit} <- [pressure: "mbar", length: "[nmi_i]", temperature: "K"],
-          do: assert(Quantity.family(quantity, unit, :as_posted) == [], unit)
+          do: assert(Quantity.family!(quantity, unit, :as_posted) == [], unit)
     end
 
     @tag verifies: "quantities-systems-pick"
     test "a preference across dimensions is not a system: glucose stays as given" do
       for system <- Quantity.systems() do
-        assert Quantity.family(:mass_concentration, "mg/dl", system) == []
-        assert Quantity.family(:amount_concentration, "mmol/l", system) == []
+        assert Quantity.family!(:mass_concentration, "mg/dl", system) == []
+        assert Quantity.family!(:amount_concentration, "mmol/l", system) == []
       end
 
       # A speed is never shown as a pace, nor a pace as a speed.
-      assert Quantity.family(:speed, "km/h", :us) == ~w([mi_i]/h)
-      assert Quantity.family(:pace, "min/km", :us) == ~w(min/[mi_i])
+      assert Quantity.family!(:speed, "km/h", :us) == ~w([mi_i]/h)
+      assert Quantity.family!(:pace, "min/km", :us) == ~w(min/[mi_i])
     end
   end
 
   describe "conventions: a system picks within one, never across" do
     @tag verifies: "quantities-families-conventions"
     test "the proposal's four calls" do
-      assert Quantity.family(:pressure, "hPa", :us) == ~w([in_i'Hg])
-      assert Quantity.family(:pressure, "mm[Hg]", :metric) == ~w(mm[Hg])
-      assert Quantity.family(:pressure, "mm[Hg]", :us) == ~w(mm[Hg])
-      assert Quantity.family(:pressure, "kPa", :us) == ~w([psi])
+      assert Quantity.family!(:pressure, "hPa", :us) == ~w([in_i'Hg])
+      assert Quantity.family!(:pressure, "mm[Hg]", :metric) == ~w(mm[Hg])
+      assert Quantity.family!(:pressure, "mm[Hg]", :us) == ~w(mm[Hg])
+      assert Quantity.family!(:pressure, "kPa", :us) == ~w([psi])
     end
 
     @tag verifies: "quantities-families-conventions"
     test "barometric: hPa and mbar are hPa under metric and UK, inches of mercury under US" do
-      assert Quantity.family(:pressure, "mbar", :metric) == ~w(hPa)
-      assert Quantity.family(:pressure, "mbar", :uk) == ~w(hPa)
-      assert Quantity.family(:pressure, "mbar", :us) == ~w([in_i'Hg])
-      assert Quantity.family(:pressure, "hPa", :uk) == ~w(hPa)
-      assert Quantity.family(:pressure, "[in_i'Hg]", :metric) == ~w(hPa)
-      assert Quantity.family(:pressure, "[in_i'Hg]", :us) == ~w([in_i'Hg])
+      assert Quantity.family!(:pressure, "mbar", :metric) == ~w(hPa)
+      assert Quantity.family!(:pressure, "mbar", :uk) == ~w(hPa)
+      assert Quantity.family!(:pressure, "mbar", :us) == ~w([in_i'Hg])
+      assert Quantity.family!(:pressure, "hPa", :uk) == ~w(hPa)
+      assert Quantity.family!(:pressure, "[in_i'Hg]", :metric) == ~w(hPa)
+      assert Quantity.family!(:pressure, "[in_i'Hg]", :us) == ~w([in_i'Hg])
     end
 
     @tag verifies: "quantities-families-conventions"
     test "as posted keeps the unit's own ladder inside its convention" do
-      assert Quantity.family(:pressure, "hPa", :as_posted) == ~w(hPa)
-      assert Quantity.family(:pressure, "Pa", :as_posted) == ~w(Pa kPa MPa)
-      assert Quantity.family(:pressure, "mm[Hg]", :as_posted) == ~w(mm[Hg])
+      assert Quantity.family!(:pressure, "hPa", :as_posted) == ~w(hPa)
+      assert Quantity.family!(:pressure, "Pa", :as_posted) == ~w(Pa kPa MPa)
+      assert Quantity.family!(:pressure, "mm[Hg]", :as_posted) == ~w(mm[Hg])
       # bar and mbar are claimed by a convention but held by no ladder.
-      assert Quantity.family(:pressure, "bar", :as_posted) == []
-      assert Quantity.family(:pressure, "mbar", :as_posted) == []
+      assert Quantity.family!(:pressure, "bar", :as_posted) == []
+      assert Quantity.family!(:pressure, "mbar", :as_posted) == []
     end
 
     @tag verifies: "quantities-families-conventions"
     test "gauge: bar is gauge's but out of the metric ladder, so it is shown in kPa" do
-      assert Quantity.family(:pressure, "bar", :metric) == ~w(Pa kPa MPa)
-      assert Quantity.family(:pressure, "bar", :us) == ~w([psi])
-      assert Quantity.family(:pressure, "[psi]", :metric) == ~w(Pa kPa MPa)
+      assert Quantity.family!(:pressure, "bar", :metric) == ~w(Pa kPa MPa)
+      assert Quantity.family!(:pressure, "bar", :us) == ~w([psi])
+      assert Quantity.family!(:pressure, "[psi]", :metric) == ~w(Pa kPa MPa)
     end
 
     @tag verifies: "quantities-families-conventions"
     test "exact code first, then shape: a prefix no convention lists falls back to gauge" do
-      assert Quantity.family(:pressure, "hPa", :metric) == ~w(hPa)
-      assert Quantity.family(:pressure, "kPa", :metric) == ~w(Pa kPa MPa)
-      assert Quantity.family(:pressure, "dPa", :metric) == ~w(Pa kPa MPa)
-      assert Quantity.family(:pressure, "dPa", :us) == ~w([psi])
-      assert Quantity.family(:pressure, "dPa") == ~w(Pa kPa MPa)
-      assert Quantity.family(:pressure, nil, :us) == ~w([psi])
+      assert Quantity.family!(:pressure, "hPa", :metric) == ~w(hPa)
+      assert Quantity.family!(:pressure, "kPa", :metric) == ~w(Pa kPa MPa)
+      assert Quantity.family!(:pressure, "dPa", :metric) == ~w(Pa kPa MPa)
+      assert Quantity.family!(:pressure, "dPa", :us) == ~w([psi])
+      assert Quantity.family!(:pressure, "dPa") == ~w(Pa kPa MPa)
+      assert Quantity.family!(:pressure, nil, :us) == ~w([psi])
     end
 
     @tag verifies: "quantities-families-conventions"
     test "clinical: mm[Hg] keeps its unit in every system" do
       for system <- Quantity.systems() do
-        assert Quantity.family(:pressure, "mm[Hg]", system) == ~w(mm[Hg])
+        assert Quantity.family!(:pressure, "mm[Hg]", system) == ~w(mm[Hg])
       end
     end
 
@@ -361,7 +361,7 @@ defmodule Macaw.Data.Quantity.FactsTest do
       for {quantity, units, answers} <- @before,
           unit <- units,
           {system, answer} <- Enum.zip(Quantity.systems(), answers) do
-        assert Quantity.family(quantity, unit, system) == answer,
+        assert Quantity.family!(quantity, unit, system) == answer,
                inspect({quantity, unit, system})
       end
 

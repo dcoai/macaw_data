@@ -336,11 +336,18 @@ defmodule Macaw.Data.Derived do
   `functions:`, the host functions' registry (`Macaw.Data.Derived.Functions.registry/1`),
   or `nil` to leave the name unchecked, and `operations:`, the registry a stored
   function's `Macaw.Data.Ops` calls are held to (`Macaw.Data.Operations.registry/1`), or
-  `nil` to hold their names only to being literals (spec/04 §6.1).
+  `nil` to hold their names only to being literals (spec/04 §6.1). An option it does not
+  take is `{[key], :unknown_key}` (spec/00 §5).
   """
   @spec validate(t(), keyword()) :: :ok | {:error, [error(), ...]}
   def validate(%__MODULE__{} = source, opts \\ []) do
-    opts = Keyword.validate!(opts, inputs: %{}, functions: nil, operations: nil)
+    case Macaw.Data.Options.known(opts, inputs: %{}, functions: nil, operations: nil) do
+      {:ok, opts} -> validated(source, opts)
+      {:error, _faults} = error -> error
+    end
+  end
+
+  defp validated(source, opts) do
     inputs = opts[:inputs]
 
     errors =
