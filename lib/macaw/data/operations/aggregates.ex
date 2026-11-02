@@ -18,8 +18,10 @@ defmodule Macaw.Data.Operations.Aggregates do
   | `slope` | the least-squares slope; a number is the point `[i, v]` | `nil`, of one, or every `x` equal | `:number` | dropped |
   | `delta` | the last reading minus the first | `nil` (`0` of one) | `:number` | kept |
 
-  The readings come with every `nil` dropped. A reading of the wrong kind raises
-  `ArgumentError` naming the aggregate and the reading. Every statistic but `median` and
+  The readings come with every `nil` dropped. A reading of the wrong kind is refused before
+  the fold, by what each statistic `reads/0` (spec/04 §5): `Macaw.Data.Operations.aggregate/4`
+  answers `{["values"], {:reads, kind}}`, and the step naming it refuses the column the same
+  way. Every statistic but `median` and
   `quantile` has the streaming form, and its `reduce/2` **is** that form folded over the
   readings, so the two are equal by construction: the mean is a running sum over a count,
   the variance and the slope Welford's one-pass updates, which agree with visualize's

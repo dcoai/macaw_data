@@ -161,7 +161,8 @@ defmodule Macaw.Data.Operations.Transforms.Ladder do
   @doc """
   An x reading in the scale's space: seconds (a time) or the number itself for `:linear`;
   microseconds since the Unix epoch for `:time`, a number read as seconds; `log2` of a
-  number above 0 for `:log`. Any other reading raises `ArgumentError` naming the step.
+  number above 0 for `:log`. Any other reading is refused before (`bind/4`'s
+  `{"fields", {:reads, kind}}`), so one here is a broken invariant and raises.
   """
   @spec space(term(), map(), String.t()) :: number()
   def space(value, %{kind: :linear, x: x}, op), do: Transforms.seconds!(value, x, op)

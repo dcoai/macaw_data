@@ -426,7 +426,7 @@ eq and ne compare a time by its instant, whatever its zone, precision or kind (U
 ```
 
 ```test:operations-filter-typed
-the orderings compare by the column's type, as sort orders: a time column against a DateTime, a Date and an ISO 8601 string keeps exactly the rows whose instant stands so, across chunkings, agreeing with DateTime.compare/2 over generated instants; naive, date and mixed time columns by instant; numbers by value, text and a category by spelling; a reading of no value for its type never passes; a value of another kind (a number against a time, a string against a number, nil) raises naming the field and its type, before any row is read; a column the rows lack keeps none
+the orderings compare by the column's type, as sort orders: a time column against a DateTime, a Date and an ISO 8601 string keeps exactly the rows whose instant stands so, across chunkings, agreeing with DateTime.compare/2 over generated instants; naive, date and mixed time columns by instant; numbers by value, text and a category by spelling; a reading of no value for its type never passes; a value of another kind (a number against a time, a string against a number, nil) is the fault {[i, "value"], {:reading, type}}, answered before any row is read; a column the rows lack keeps none
 ```
 
 #### 4.1.1 The mask and the gather in native kernels {#operations-filter-native}
@@ -468,9 +468,9 @@ The rows whose reading of `field` lies in **`[now − from, now − to)`**, in o
 
 So four windows of decreasing span partition a column exactly.
 - **`now`** is the context's `now` (§3.2) when given, else the newest reading of `field` over the rows entering the step. A live dashboard means the wall clock and a test means the data's own end, and only the caller knows which. A derived source's context has no clock (02 §2.3), so in a stored function a window is measured from its data's newest reading.
-- **Readings** are seconds: a `DateTime`, a `NaiveDateTime` (as UTC) and a `Date` (at midnight UTC) by their instant, an ISO 8601 string as `Table.temporal?/1` reads one, a number as it is. A `nil` reading is skipped. Any other reading raises `ArgumentError` naming the step and the field.
+- **Readings** are seconds: a `DateTime`, a `NaiveDateTime` (as UTC) and a `Date` (at midnight UTC) by their instant, an ISO 8601 string as `Table.temporal?/1` reads one, a number as it is. A `nil` reading is skipped. Any other reading is the fault `{[i, "field"], {:reads, :time}}` (§3.1), answered before any row is read.
 
-**`latest: true`** asks for each entity's current state: of the rows the window selects, for each identity value, the one row whose reading of `field` is greatest, the later row in order where two tie, kept in their order. It is what a request's `latest` gives (01 §2.4), by the same function, `Macaw.Data.Window.latest_rows/3`. The identity is the one the context's `schema` **declares** (`Macaw.Data.Schema.identity/2`), never inferred, and a row whose identity is `nil` names nothing and is dropped. A `latest` step without a schema in its context, or over a schema declaring no identity, raises `ArgumentError` naming the step. Dropping the entities that are gone is a `filter` after it. **Class:** a combine (§1.4). Each chunk's partial is, of the rows the window selects in it, each identity's newest; two runs' partials merge by keeping the greater reading, the second run's on a tie, so ties are broken by chunk order and then by row order, as the rows' order breaks them. The rows kept are gathered from their chunks, in their order.
+**`latest: true`** asks for each entity's current state: of the rows the window selects, for each identity value, the one row whose reading of `field` is greatest, the later row in order where two tie, kept in their order. It is what a request's `latest` gives (01 §2.4), by the same function, `Macaw.Data.Window.latest_rows/3`. The identity is the one the context's `schema` **declares** (`Macaw.Data.Schema.identity/2`), never inferred, and a row whose identity is `nil` names nothing and is dropped. A `latest` step without a schema in its context is the fault `{[i, "latest"], {:needs, :schema}}`, and over a schema declaring no identity `{[i, "latest"], {:needs, :identity}}` (§3.1). Dropping the entities that are gone is a `filter` after it. **Class:** a combine (§1.4). Each chunk's partial is, of the rows the window selects in it, each identity's newest; two runs' partials merge by keeping the greater reading, the second run's on a tie, so ties are broken by chunk order and then by row order, as the rows' order breaks them. The rows kept are gathered from their chunks, in their order.
 
 **Outputs:** the input's columns.
 
@@ -484,7 +484,7 @@ over a table sorted by its window field, window binary-searches each chunk, read
 ```
 
 ```test:operations-window-spans
-a window selects [now - from, now - to): a given to is exclusive, an absent to closes at now inclusively, an absent from is open, so adjacent windows partition the rows; now is the context's or the newest reading; every reading form is read in seconds and any other raises; a bad unit is refused
+a window selects [now - from, now - to): a given to is exclusive, an absent to closes at now inclusively, an absent from is open, so adjacent windows partition the rows; now is the context's or the newest reading; every reading form is read in seconds and any other is a fault; a bad unit is refused
 ```
 
 ```test:operations-window-latest
@@ -503,7 +503,7 @@ latest keeps each declared identity's newest row in the window, the later on a t
 **Outputs:** the input's columns. **Reducer:** `{"n", 1}`. **Class:** a combine (§1.4): each chunk's partial is its buckets' extremes, partials merge by concatenation (§4.5.1), and the selection runs in `finish/3`, over the candidates in one pass.
 
 ```test:operations-lttb-shape
-lttb keeps the ends and at most n rows, whole; n or fewer rows come back unchanged; gaps pass through with each run of gaps kept as its first row; a time column under a linear scale reads in seconds and a non-number y raises; n below 3 is refused
+lttb keeps the ends and at most n rows, whole; n or fewer rows come back unchanged; gaps pass through with each run of gaps kept as its first row; a time column under a linear scale reads in seconds and a non-number y is a fault; n below 3 is refused
 ```
 
 ```test:operations-lttb-minmax
@@ -637,7 +637,7 @@ fold makes one row per input row per listed column it has, in row then field ord
 
 ### 4.8 stack {#operations-stack}
 
-`fields` (`{:list, :field}`, required: the series keys); `order` (`{:one_of, [{:enum, [:none, :ascending, :descending, :inside_out, :reverse, :appearance]}, {:keys, {:list, :field}}]}`, `:none`); `offset` (`{:enum, [:none, :expand, :silhouette, :wiggle, :diverging]}`, `:none`). d3-shape's stack (`Macaw.Data.Stack`, ported from `Visualize.Shape.Stack`), each series' value its reading, `nil` read as `0`; a reading that is neither raises `ArgumentError` naming the step.
+`fields` (`{:list, :field}`, required: the series keys); `order` (`{:one_of, [{:enum, [:none, :ascending, :descending, :inside_out, :reverse, :appearance]}, {:keys, {:list, :field}}]}`, `:none`); `offset` (`{:enum, [:none, :expand, :silhouette, :wiggle, :diverging]}`, `:none`). d3-shape's stack (`Macaw.Data.Stack`, ported from `Visualize.Shape.Stack`), each series' value its reading, `nil` read as `0`; a reading that is neither is the fault `{[i, "fields"], {:reads, :number}}` (§3.1).
 
 **The order** is a permutation of the series, bottom first:
 - `none`: `fields` order;
@@ -676,7 +676,7 @@ every order and offset matches d3-shape's on the reference fixtures, keys fixed 
 - **A reading belongs to** the first bin `[x0, x1)` holding it, or to the last bin when it equals the domain's maximum.
 - One row per bin, in order: `x0`, `x1`, `y0` (`0`, so a histogram's channels read the rows alone), `as` and `values` (the bin's readings, in input order).
 
-`as` holds the bin's count, or, with `fn`, the named aggregate of the bin's readings (`bin(field: "latency", fn: "median")`), an empty bin's being that aggregate's empty value (§5). No readings yield no rows; a reading that is not a number raises `ArgumentError` naming the step.
+`as` holds the bin's count, or, with `fn`, the named aggregate of the bin's readings (`bin(field: "latency", fn: "median")`), an empty bin's being that aggregate's empty value (§5). No readings yield no rows; a reading that is not a number is the fault `{[i, "field"], {:reads, :number}}` (§3.1).
 
 **Outputs:** `x0`, `x1`, `y0` (`:number`), `as` (`:number`, or the aggregate's output type) and `values` (`:term`). **Class:** counting, or with an `fn` that has the combining form (§1.2), a combine (§1.4): the bins are bound over the whole input's extent once, each chunk's readings are binned into each bin's count or state and its readings in order, and the bins merge, states by the combining form and readings in chunk order. With any other `fn` (`median`, `quantile`, `distinct`, …) it is global (§1.4): each chunk's readings binned, and every bin's readings reduced at once in the merge.
 
@@ -820,7 +820,7 @@ Ops takes its subject first and the name second, so a pipe reads in order; calle
 - **The name is registered.** One the registry doesn't hold is `{:unknown_operation, :transform | :aggregate, name}`.
 - **It needs nothing a derived source lacks.** A transform whose `needs/0` isn't empty is `{:needs, name, need}`, since a derived source has no frame, projection or text.
 - **The call is compiled against the registry it was checked against.** It becomes `Ops.__run__(kind, registry, name, subject, options)` with the registry escaped into the compiled code, so it runs exactly what was checked, with nothing read from the node's environment, and no module atom passes through the stored source. `__run__/5` is on `Macaw.Data.Ops`'s excluded list (`:internal`), so a stored source that writes it is refused like any other unlisted call.
-- **Before it is placed,** a source is checked with `operations: nil` (`Derived.new/1`, which knows no engine): its names need only be literals. `Derived.validate/2` takes `operations:` as it takes `functions:`, and the engine passes its registry, so a name its packages do not hold is a fault at define time. `Sandbox.compile/2` needs a registry and raises `ArgumentError` without one.
+- **Before it is placed,** a source is checked with `operations: nil` (`Derived.new/1`, which knows no engine): its names need only be literals. `Derived.validate/2` takes `operations:` as it takes `functions:`, and the engine passes its registry, so a name its packages do not hold is a fault at define time. `Sandbox.compile/2` needs a registry and answers `{:error, [{nil, {:operations, :registry}}]}` without one.
 - **The options and the readings are checked when the call runs, and a fault is a value** (00 §5). They may be built by the function, so a fault in them, or a reading the operation cannot read (§3.1), is `{:error, faults}`, which the function reads as it reads any answer. Its atoms are spelled as the function's literals are (02 §6.3), as `Macaw.Data.Derived.Columns`' reasons are, so `{:error, [{["p"], :required}]}` in the function matches what `aggregate(values, "quantile")` answers, and `Ops.format_error/1` words it. A `!` call raises `ArgumentError` with those words, which the runner reports as `:raised` (02 §6.4), as does a `{:ok, v} =` match on a fault.
 - **Rows in, rows out** is the default for a derived function (02 §2.2): under `input: :columns` it reads tables through `Macaw.Data.Derived.Columns` instead, and hands `Ops` what it reads of them. `transform/2,3` reads its rows with `Table.from/2` and answers `Table.rows/1` of the result. The context a stored call runs with has no `now`, `frame` or `schema` (02 §2.3), so a `window` measures from its data's newest reading, and `latest` is the fault `{:needs, :schema}`: a function asks its input for `latest` instead (02 §2.2).
 
