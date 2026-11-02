@@ -2,7 +2,7 @@ defmodule Macaw.Data.MixProject do
   use Mix.Project
 
   @source_url "https://github.com/dcoai/macaw_data"
-  @version "0.10.0"
+  @version "0.11.0"
 
   def project do
     [
