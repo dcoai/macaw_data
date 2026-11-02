@@ -397,22 +397,25 @@ defmodule Macaw.Data.Table.Chunk do
   A per-row step's output chunk (spec/01 §1.1.3, spec/04 §1.4): the rows at `indexes`
   of the run of `count` rows from `first` of `input`, every column gathered from its
   storage by copying its slots, nothing decoded and nothing hashed. As `derive/3`, its id
-  is `{id(input), step_key}` and its version the derivation digest of
-  `{[version(input)], step_key}`; the step key names the run when it is not the whole
-  chunk.
+  is `{id(input), key}` and its version the derivation digest of `{[version(input)], key}`,
+  `key` the step key named at the run's first slot (`at_slot/2`): the step key itself for a
+  run from slot 0, else `{step_key, {:from, first}}`. So `indexes`, counted from the run's
+  first row, name the input's slots they read, and two gathers share an id and a version
+  only where they read the same slots under one step key (macaw_data#132, #145).
   """
   @spec gather(t(), non_neg_integer(), non_neg_integer(), [non_neg_integer()], term()) :: t()
   def gather(%__MODULE__{} = input, first, _count, indexes, step_key) when is_list(indexes) do
     at = read_at(first, indexes)
     columns = Map.new(as_read(input), fn {name, col} -> {name, Column.gather(col, at)} end)
     size = length(indexes)
+    key = at_slot(step_key, first)
 
     %__MODULE__{
       size: size,
       columns: columns,
-      id: {input.id, step_key},
+      id: {input.id, key},
       digest: nil,
-      derivation: Document.digest({[version(input)], step_key}),
+      derivation: Document.digest({[version(input)], key}),
       base_rows: size,
       header: input.header
     }
@@ -423,7 +426,7 @@ defmodule Macaw.Data.Table.Chunk do
   the run of `count` rows from `first` of `input`, repeats allowed, under `header`
   (`{name, type}` in order): a column of `added` (a map from name to its values) packed
   from them, any other gathered from the input's column of that name by copying its
-  slots. Named as `gather/5` names its chunk; nothing hashed.
+  slots. Named as `gather/5` names its chunk, at the run's first slot; nothing hashed.
   """
   @spec reshape(
           t(),
@@ -452,16 +455,24 @@ defmodule Macaw.Data.Table.Chunk do
         end
       end)
 
+    key = at_slot(step_key, first)
+
     %__MODULE__{
       size: size,
       columns: columns,
-      id: {input.id, step_key},
+      id: {input.id, key},
       digest: nil,
-      derivation: Document.digest({[version(input)], step_key}),
+      derivation: Document.digest({[version(input)], key}),
       base_rows: size,
       header: header
     }
   end
+
+  # A gather's step key named at its run's first slot: rows counted from the run name the
+  # input's slots only with it (macaw_data#145). A run from slot 0 keeps the step key
+  # itself, so a whole chunk's output is `{input id, step key}`, as `derive/3`'s is.
+  defp at_slot(step_key, 0), do: step_key
+  defp at_slot(step_key, first), do: {step_key, {:from, first}}
 
   # A run's rows as rows of the chunk as read, so a column is gathered from its whole
   # storage and never sliced first: a slot's place, a bitmap's bit and a text offset are

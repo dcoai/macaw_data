@@ -5,6 +5,7 @@ defmodule Macaw.Data.TableIdentityTest do
   the span from the description, and step outputs keyed by derivation, never hashed.
   """
   use ExUnit.Case, async: true
+  use ExUnitProperties
 
   alias Macaw.Data.Schema
   alias Macaw.Data.Source.Description
@@ -255,6 +256,47 @@ defmodule Macaw.Data.TableIdentityTest do
 
       assert starts.(a) == Enum.map([0, 60, 120], &at/1)
       assert starts.(b) == Enum.map([0, 60, 120], &at/1)
+    end
+  end
+
+  describe "a gather's name (macaw_data#145)" do
+    @tag verifies: "table-gather-slots"
+    test "two views at different first slots keeping the same counted rows get different versions" do
+      [{chunk, 0, n}] = Table.chunks(Table.new!([{"x", :number, Enum.to_list(0..4_999)}]))
+      key = {:subset, [0, 5, 9]}
+
+      a = Chunk.gather(chunk, 100, 1_000, [0, 5, 9], key)
+      b = Chunk.gather(chunk, 200, 1_000, [0, 5, 9], key)
+      whole = Chunk.gather(chunk, 0, n, [0, 5, 9], key)
+
+      assert Chunk.values(a, "x", 0, 3) == [100, 105, 109]
+      assert Chunk.values(b, "x", 0, 3) == [200, 205, 209]
+      refute Chunk.version(a) == Chunk.version(b)
+      refute Chunk.id(a) == Chunk.id(b)
+      # A view from slot 0 keeps the step key itself, as a per-row step's output does.
+      assert Chunk.id(whole) == {Chunk.id(chunk), key}
+      assert Chunk.version(whole) == Document.digest({[Chunk.version(chunk)], key})
+    end
+
+    @tag verifies: "table-gather-slots"
+    property "two gathers under one step key that share an id and a version hold the same rows" do
+      [{chunk, 0, n}] = Table.chunks(Table.new!([{"x", :number, Enum.to_list(0..199)}]))
+
+      check all(
+              f1 <- integer(0..20),
+              f2 <- integer(0..20),
+              kept <- list_of(integer(0..30), min_length: 1, max_length: 5),
+              max_runs: 200
+            ) do
+        key = {:subset, kept}
+        a = Chunk.gather(chunk, f1, n - f1, kept, key)
+        b = Chunk.gather(chunk, f2, n - f2, kept, key)
+
+        if {Chunk.id(a), Chunk.version(a)} == {Chunk.id(b), Chunk.version(b)},
+          do:
+            assert(Chunk.values(a, "x", 0, length(kept)) == Chunk.values(b, "x", 0, length(kept))),
+          else: refute(f1 == f2)
+      end
     end
   end
 
