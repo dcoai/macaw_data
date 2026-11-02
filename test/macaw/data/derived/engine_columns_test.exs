@@ -25,7 +25,7 @@ defmodule Macaw.Data.Derived.EngineColumnsTest do
       [
         %{
           n: length(rows),
-          total: Macaw.Data.Ops.aggregate(values, "sum"),
+          total: Macaw.Data.Ops.aggregate!(values, "sum"),
           readings: length(values)
         }
       ]
@@ -64,7 +64,7 @@ defmodule Macaw.Data.Derived.EngineColumnsTest do
   fn %{in: rows} ->
     values = for row <- rows, row.v != nil, do: row.v
     n = Enum.count(rows)
-    [%{n: n, total: Macaw.Data.Ops.aggregate(values, "sum") * div(6, rem(n + 3, 6)) / div(6, rem(n + 3, 6)), readings: Enum.count(values)}]
+    [%{n: n, total: Macaw.Data.Ops.aggregate!(values, "sum") * div(6, rem(n + 3, 6)) / div(6, rem(n + 3, 6)), readings: Enum.count(values)}]
   end
   """
 

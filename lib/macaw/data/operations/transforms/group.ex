@@ -49,7 +49,7 @@ defmodule Macaw.Data.Operations.Transforms.Aggregate do
   def outputs(node, columns), do: group_outputs(node, node["fn"], columns)
 
   @impl true
-  def run(node, table, context), do: Step.run(__MODULE__, node, table, context)
+  def run(node, table, context), do: Step.answer(__MODULE__, node, table, context)
 
   # A combine (spec/04 §1.4) when the aggregate has the combining form; with any other
   # (median, quantile, distinct, …), a global step: each chunk's part is its keys and
@@ -61,7 +61,7 @@ defmodule Macaw.Data.Operations.Transforms.Aggregate do
   def reads, do: []
 
   @impl true
-  def bind(node, table, _context), do: group_bind(node, table)
+  def bind(node, table, _context), do: group_bind(node, node["fn"], table)
 
   @impl true
   # The bound context alone: a chunk's part depends not on where it sits (`:at`, `:rows`),
@@ -106,16 +106,32 @@ defmodule Macaw.Data.Operations.Transforms.Aggregate do
 
   @doc false
   # The columns the step reads, by the names the table spells them with: the field (or the
-  # pair's two) and `by`'s.
-  def group_bind(%{"field" => field, "by" => by}, table) do
+  # pair's two) and `by`'s. Every reading is checked once, as `aggregate` reads it
+  # (`Macaw.Data.Aggregate.reads/1`), before any chunk is: a pair's are points, `[x, y]`
+  # with `x` read as seconds and `y` a number, so only an aggregate that reads points (or
+  # anything) takes a pair (spec/04 §3.1).
+  def group_bind(%{"field" => field, "by" => by}, aggregate, table) do
     names = Table.names(table)
     found = &Transforms.name_in(names, &1)
+    reads = Macaw.Data.Aggregate.reads(aggregate)
 
     field =
       if is_list(field), do: Enum.map(field, &{&1, found.(&1)}), else: {field, found.(field)}
 
-    %{field: field, by: Enum.map(by_list(by), found)}
+    case readings(field, reads, table) do
+      :ok -> %{field: field, by: Enum.map(by_list(by), found)}
+      {:error, reason} -> {:error, {"field", reason}}
+    end
   end
+
+  defp readings({_field, name}, reads, table), do: Transforms.readings(table, name, reads)
+
+  defp readings([{_x, x_name}, {_y, y_name}], reads, table) when reads in [:point, :any] do
+    with :ok <- Transforms.readings(table, x_name, :time),
+         do: Transforms.readings(table, y_name, if(reads == :point, do: :number, else: :any))
+  end
+
+  defp readings(_pair, reads, _table), do: {:error, {:reads, reads}}
 
   @doc false
   # One chunk's groups: their keys in order of first appearance, each one's state of the
@@ -212,6 +228,8 @@ defmodule Macaw.Data.Operations.Transforms.Aggregate do
   # A dictionary column's rows as their codes, `nil` where a value is missing, and its
   # strings by code: one group a code, named once. A column of another form is read as
   # its values.
+  defp coded(_view, nil), do: :values
+
   defp coded({chunk, first, count}, name) do
     case Macaw.Data.Table.Chunk.storage(chunk, name, first, count) do
       {:dictionary, _codes, _validity, _dictionary, nil} = column ->
@@ -293,6 +311,8 @@ defmodule Macaw.Data.Operations.Transforms.Aggregate do
   # The `by` column's codes, their validity and its dictionary, unsliced; ungrouped, empty
   # buffers the kernel doesn't read.
   defp code_buffers(_chunk, []), do: {false, <<>>, <<>>, nil}
+  # A `by` column the rows lack: every row's key is `nil`, the Elixir fold's to read.
+  defp code_buffers(_chunk, [nil]), do: :elixir
 
   defp code_buffers(chunk, [name]) do
     case Chunk.packed(chunk, name) do
@@ -509,7 +529,7 @@ defmodule Macaw.Data.Operations.Transforms.Sum do
   def outputs(node, columns), do: Aggregate.group_outputs(node, Aggregates.Sum, columns)
 
   @impl true
-  def run(node, table, context), do: Step.run(__MODULE__, node, table, context)
+  def run(node, table, context), do: Step.answer(__MODULE__, node, table, context)
 
   # A combine (spec/04 §1.4): each chunk's groups summed exactly, the sums merged.
   @impl true
@@ -519,7 +539,7 @@ defmodule Macaw.Data.Operations.Transforms.Sum do
   def reads, do: []
 
   @impl true
-  def bind(node, table, _context), do: Aggregate.group_bind(node, table)
+  def bind(node, table, _context), do: Aggregate.group_bind(node, Aggregates.Sum, table)
 
   @impl true
   # The bound context alone: a chunk's part depends not on where it sits (`:at`, `:rows`),

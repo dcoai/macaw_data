@@ -79,7 +79,7 @@ defmodule Macaw.Data.Operations.SeriesTest do
     end
 
     @tag verifies: "operations-stack-orders"
-    test "a nil reading is zero; a reading that is not a number raises naming the step" do
+    test "a nil reading is zero; a reading that is not a number is the step's fault" do
       rows = run(%{op: "stack", fields: [:a, :b]}, [%{a: 1, b: nil}, %{a: nil, b: 2}])
 
       # A category reads back as the string that spells it (macaw_data#16).
@@ -90,11 +90,8 @@ defmodule Macaw.Data.Operations.SeriesTest do
                {"b", 0, 2}
              ]
 
-      assert_raise ArgumentError,
-                   ~r/^transform "stack": :b reads "x", which is not a number/,
-                   fn ->
-                     run(%{op: "stack", fields: [:a, :b]}, [%{a: 1, b: "x"}])
-                   end
+      assert Operations.apply(@registry, [%{op: "stack", fields: [:a, :b]}], [%{a: 1, b: "x"}]) ==
+               {:error, [{[0, "fields"], {:reads, :number}}]}
 
       assert_raise ArgumentError, ~r/^step 1, offset: is one of none, expand/, fn ->
         run(%{op: "stack", fields: [:a], offset: :zero}, @rows)
@@ -139,7 +136,10 @@ defmodule Macaw.Data.Operations.SeriesTest do
              |> Enum.map(& &1["count"]) ==
                [0.5, 9.5]
 
-      assert_raise ArgumentError, ~r/^transform "bin": :v reads "x", which is not a number/, fn ->
+      assert Operations.apply(@registry, [%{op: "bin", field: :v}], [%{v: 1}, %{v: "x"}]) ==
+               {:error, [{[0, "field"], {:reads, :number}}]}
+
+      assert_raise ArgumentError, "step 1, field: reads a value that is not a number", fn ->
         run(%{op: "bin", field: :v}, [%{v: 1}, %{v: "x"}])
       end
 

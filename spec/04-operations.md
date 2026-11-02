@@ -31,7 +31,7 @@ Each behavior is a module's declaration of what it reads and what it answers, so
 | `options() :: [{String.t(), Option.t()}]` | every key the op reads, in order, each declared as §1.3 says |
 | `needs() :: [:frame \| :projection \| :text]` | the context the op requires beyond §3.2's: `[]` for a table operation; `[:frame]` for a layout (the plot's size and center), `[:projection]` for a geographic projection, `[:text]` for text measurement |
 | `outputs(node, columns) :: [{name, type}]` | the columns, in order and with their `Macaw.Data.Table` types, of the table `run/3` answers for a node (checked, §3.1) over input columns (`[{name, type}]`) |
-| `run(node, table, context) :: table` | the step: the table after it |
+| `run(node, table, context) :: table \| {:error, {key, reason}}` | the step: the table after it, or its fault over the input, at the option `key` (§3.1) |
 | `reduces() :: {String.t(), pos_integer()}` *(optional)* | a **reducer**: the option holding the target count, and the rows each unit of it keeps at most (`lttb`: `{"n", 1}`; `m4`: `{"width", 4}`), so a budget can name it (§7) |
 | `prepare(nodes, table, context) :: term()` *(optional)* | computed once per design and shared by every mark that reads it (a force layout's positions), passed to `run/3` in the context under `prepared`; the drawer's, never called here |
 | `class/1`, `reads/0`, `bind/3`, `resolve/3`, `chunk/3`, `keyed/1`, `combine/3`, `finish/3` *(optional)* | a **column-native step**'s class, the context it reads, its part per chunk and its merge (§1.4) |
@@ -55,6 +55,7 @@ a transform declares its name, options, needs and outputs and runs a checked nod
 | `keeps_unit?() :: boolean()` | whether the input's unit and quantity carry to the output (§5) |
 | `reduce(values, options) :: term()` | the value of the readings, **`nil` readings already dropped**: a gap is absence, never zero (01 §1.1) |
 | `init(options)`, `step(state, value, options)`, `finish(state, options)` *(optional, together)* | the streaming form chunked windows use, over the same readings in the same order: `finish(Enum.reduce(values, init(options), &step(&2, &1, options)), options)` equals `reduce(values, options)` |
+| `reads() :: :number \| :comparable \| :point \| :any` *(optional)* | what every reading is read as (§5): numbers; numbers, or instants of one kind; a number or a point `[x, y]`; or anything, the default. The readings are checked against it before any is reduced (§3.1), so `reduce/2` and `step/3` take readings of that kind only |
 | `merge(state, state, options)` *(optional, with the streaming form)* | the **combining form**: the state of two runs of readings, the first before the second, from each run's state. It is associative, so a step's per-chunk states merge under any grouping (§1.4): `merge(state(a), state(b))` finishes to the value of `state(a ++ b)` |
 | `retract(state, state, options)` *(optional, with the combining form)* | its **inverse, where exact** (§1.5): the state of a run's readings with some removed, from the run's state and the removed readings' state, `{:ok, state}` equal to the state of the readings that remain, or `:inexact`. `count` has it; `sum` has it while every reading is an integer (once a float is among them the sum is a float, where the remaining integers' would be an integer); no other statistic has it |
 
@@ -70,6 +71,7 @@ An option is declared `{name, %Option{type: type, default: value, required: bool
 |---|---|
 | `:field` | a column name, a string or an atom; read by either spelling |
 | `{:list, type}` | a list of `type` |
+| `{:list, type, min, max}` | a list of `min` to `max` of `type` |
 | `{:pair, type}` | a two-element list of `type` (`fields: [x, y]`) |
 | `:name` | the name of a column the step adds, a string or an atom, kept as written |
 | `:number` | any number |
@@ -101,7 +103,7 @@ A column-native step declares, beside §1.1's callbacks (each optional, together
 |---|---|
 | `class(node) :: :row \| :combine \| :global` | its **class**, which decides its merge |
 | `reads() :: [atom()]` | the keys of the context it reads (§3.2): only those reach it |
-| `bind(node, table, context) :: map()` *(optional)* | the declared context resolved over the whole input, once: `window`'s `now`, the newest reading when the caller gives none. Without it, the declared context as it is |
+| `bind(node, table, context) :: map() \| {:error, {key, reason}}` *(optional)* | the declared context resolved over the whole input, once: `window`'s `now`, the newest reading when the caller gives none. It is where a step refuses its input before any chunk is read: a reading of the wrong kind, a context it cannot read, `{:error, {key, reason}}` (§3.1). Without it, the declared context as it is |
 | `resolve(node, view, bound) :: term()` | the context **as it resolves for one chunk**, from the bound context and the chunk's place (`:at`, the input's row its view starts at, and `:rows`, the input's count). It reads that chunk's columns alone |
 | `chunk(node, view, resolved) :: part` | the chunk's part |
 | `keyed(node) :: map()` *(optional)* | the node's options a chunk's part depends on, when not all: the step key holds them in place of the whole node (`m4` and `lttb` leave out their count, which only the merge reads) |
@@ -153,7 +155,7 @@ take n: 100 reads only the chunks it returns, its work growing by a step a chunk
 
 - **The key** of a part is `{logical id, version, step key}`: `Chunk.id/1`, where the chunk sits ([01 §1.1.3](01-sources.md#sources-table-chunk-identity)); `Chunk.version/1`, its content digest, or a step output's derivation digest; and the part's step key (§1.4). **The version decides validity:** any rebuild of the same contents (a re-fetch, a restart, another process) has the same digest and hits, and different contents never do. **The logical id scopes eviction:** `Cache.prune/2` keeps only the parts of chunks the tables given still hold, at their version or their base version.
 - **A digest is never computed on lookup.** The version is read from the chunk, computed once when its state was made. A chunk whose digest is pending has no version and never matches a key.
-- **`Cache.run(cache, module, node, table, context)`** answers `{table, cache}`: for each of `Step.parts/4`'s parts, the part held under its key is **reused**; else a chunk with a delta whose base's part is held is **updated** by inverse, where that is exact; else the part is **computed** (`Step.chunk/3`). Only the merge (`Step.merge/6`) is recomputed. The table equals `Step.run/4`'s, a per-chunk run with cached parts equal to a full run. `Cache.run/5` records how the last run came by its parts (`last`: `reused`, `updated`, `computed`).
+- **`Cache.run(cache, module, node, table, context)`** answers `{:ok, table, cache}`, or the step's fault `{:error, {key, reason}}` with nothing cached (§3.1); `Cache.run!/5` answers `{table, cache}` or raises: for each of `Step.parts/4`'s parts, the part held under its key is **reused**; else a chunk with a delta whose base's part is held is **updated** by inverse, where that is exact; else the part is **computed** (`Step.chunk/3`). Only the merge (`Step.merge/6`) is recomputed. The table equals `Step.run/4`'s, a per-chunk run with cached parts equal to a full run. `Cache.run/5` records how the last run came by its parts (`last`: `reused`, `updated`, `computed`).
 - **Compaction keeps every cached part:** it changes neither a chunk's logical id nor its content digest (01 §1.1.4).
 - **What is reused frame after frame:** scale-domain extremes, M4 and `lttb` partials within a bucket level (§4.5.1), and any per-chunk part of a settled chunk. A drawn path segment is not free: it is reusable only if the caller applies the scale as a transform when drawing, which is the caller's concern.
 
@@ -287,17 +289,17 @@ a kernel that panics, run in a BEAM of its own, takes that node down with the pa
 `Macaw.Data.Operations.registry(packages)` builds the registry, a `%Macaw.Data.Operations.Registry{}`, from an **explicit list** of package modules:
 
 - **Default closed.** `macaw_data`'s own package is always in, since it is the library's own pure code, as `Enum` is the allowlist's (02 §6.2). Anything else is what the list names and nothing more: a module that is merely loaded is not reachable, and no application environment is read.
-- **Duplicates fail at build.** Two members of one behavior with one name raise `ArgumentError` naming the name, both modules and their packages; a package listed twice is listed once. So does an aggregate declaring a step's key as its own option (§1.2), and a module `__members__/0` lists that implements none of the behaviors.
+- **Duplicates fail at build.** `registry(packages)` answers `{:ok, registry}` or every fault (00 §5): two members of one behavior with one name are `{[kind, name], {:named_twice, module, other}}`; an aggregate declaring a step's key as its own option (§1.2) `{[:aggregate, name], {:step_key, key}}`; a module `__members__/0` lists that implements none of the behaviors `{[package, member], :no_behavior}`; and a module that is not a package `{[module], :not_a_package}`. A package listed twice is listed once. `registry!/1` raises `ArgumentError` in `format_error/1`'s words, and `registry/0`, `macaw_data`'s own package alone, cannot fail.
 - **Names are strings, matched by spelling,** and the registry maps each to its module: `transform(registry, name)` and `aggregate(registry, name)` answer `{:ok, module}` or `:error`; `transforms/1` and `aggregates/1` every name, sorted; `packages/1` the packages, `Macaw.Data.Operations` first; `digest/1` the kernel's term digest of every member's name and module (`Macaw.Layers.Document.digest/1`, never `term_to_binary`, which need not agree across OTP releases), which a compile cache keys by (§6.2); it does not depend on the order members were registered in.
-- **A checked step has a canonical identity,** `step_digest(registry, node)`: the kernel's term digest of the transform module its name resolves to and the node `validate/3` checked, options by their strings with defaults filled in. Two nodes that mean the same step have one identity whatever the order their options were written in; the same name resolved to another module has another. A node naming no transform raises `ArgumentError`. It is what a cache of a step's results keys by (macaw_data#9's step keys build on it).
+- **A checked step has a canonical identity,** `step_digest(registry, node)`: the kernel's term digest of the transform module its name resolves to and the node `validate/3` checked, options by their strings with defaults filled in, `{:ok, digest}`. Two nodes that mean the same step have one identity whatever the order their options were written in; the same name resolved to another module has another. A node naming no transform is `{:error, {["op"], {:unknown, :transform, op}}}`, and one with no op `{:error, {["op"], :required}}`; `step_digest!/2` raises. It is what a cache of a step's results keys by (macaw_data#9's step keys build on it).
 - macaw_compose's registry (step 8) builds on this one for its other behaviors and does not replace it. It knows the packages a host lists but has not enabled, so it is what names the providing package in an unknown name's fault (`transform "sankey" is not available: enable visualize_layouts`); here an unknown name is a fault without one (§3.1).
 
 ```test:operations-registry-build
-the registry holds macaw_data's own package and exactly the packages listed; a duplicate name, an aggregate declaring a step's key and a member implementing no behavior each raise naming what collides; names resolve by spelling to their module and the digest changes with the members
+the registry holds macaw_data's own package and exactly the packages listed; a duplicate name, an aggregate declaring a step's key, a member implementing no behavior and a module that is not a package are each a fault naming what collides, every one at once, and registry! raises them; names resolve by spelling to their module and the digest changes with the members
 ```
 
 ```test:operations-step-digest
-the registry's digest is the kernel's term digest of its names and modules; a checked step's identity is the same for the same step written with its options in any order, differs with an option's value and with the module its name resolves to, and a node naming no transform raises
+the registry's digest is the kernel's term digest of its names and modules; a checked step's identity is the same for the same step written with its options in any order, differs with an option's value and with the module its name resolves to, and a node naming no transform, or none, is a fault
 ```
 
 ## 3. Running {#operations-run}
@@ -305,7 +307,7 @@ the registry's digest is the kernel's term digest of its names and modules; a ch
 | Function | Contract |
 |---|---|
 | `Operations.validate(registry, nodes, context)` | `{:ok, checked}`, every node checked (§3.1), or `{:error, faults}` |
-| `Operations.apply(registry, nodes, table, context)` | the context `%{}` by default; the nodes run in order over the table, each step's output the next one's input: `{:ok, table}` or `{:error, faults}`, the validation's |
+| `Operations.apply(registry, nodes, table, context)` | the context `%{}` by default; the nodes run in order over the table, each step's output the next one's input: `{:ok, table}` or `{:error, faults}`, the validation's, the source's, or the first step's that refuses its input (§3.1) |
 | `Operations.apply!/4` | as `apply/4`, raising `ArgumentError` naming every fault |
 | `Operations.aggregate(registry, name, values, options)` | the aggregate's value of `values`, `nil`s dropped: `{:ok, value}` or `{:error, faults}` |
 | `Operations.outputs(registry, nodes, columns, context)` | the columns after every node, by `outputs/2`, the context `%{}` by default: `{:ok, columns}` or `{:error, faults}` |
@@ -334,7 +336,23 @@ Every node is checked before any runs, and **every** fault is answered at once, 
 
 A transform whose node names an aggregate (`fn: "quantile"`) is checked with the aggregate's options too: `p` is the node's key, held to `quantile`'s declaration, and a key neither declares is `{:invalid_for, op}`.
 
-A step whose reading is wrong only at run time (a `window` over a column that holds no time, a `stack` over a value that is not a number) **raises `ArgumentError`** naming the step, the option and the reading, as visualize's steps do: the data is the caller's, and the bounded runner reports it as any raise (02 §6.4). A step never catches.
+**At run time, a step refuses what it cannot read with a fault, never a raise** (macaw_data#114, 00 §5). Validation never sees the table, so a reading that is wrong only for this input (a `window` over a column that holds no time, a `stack` over a value that is not a number) is found by the step's `bind/3` over the whole input, before any chunk is read, and `apply/4` answers it at the step's index and stops: the steps after it do not run. A typed column is read by its type alone (a `:number` column holds numbers, a `:time` column times), at no cost to a run; a column of any other type is read value by value, `nil` passing as a gap. A step never catches, and neither does `apply/4`.
+
+| Fault | Meaning |
+|---|---|
+| `{[i, key], {:reads, kind}}` | the column the option `key` names holds a reading that is not `kind`: `:number`; `:time`, a time or a number read as seconds; `:positive`, a number above zero (a log scale's x); `:comparable`, numbers, or instants of one kind; `:point`, a number or a point `[x, y]` (§5's `reads/0`) |
+| `{[i, "value"], {:reading, type}}` | `filter`'s value is no value of the field's type (§4.1) |
+| `{[i, "latest"], {:needs, :schema \| :identity}}` | `window`'s `latest` without a schema in the context, or over one that declares no identity (§4.3) |
+| `{[i, "op"], {:context, :now, :time}}` | the context's `now` is not a time or a number |
+| `{[i, "op"], {:unknown, :scale, scale}}` | the context's `scale` is not one of `linear`, `time` and `log` (§4.5.1) |
+| `{[i, "op"], :not_a_table}` | the transform answered something that is not a table |
+| `{["source"], :not_a_table}`, `{["source" \| path], reason}` | the source is of no shape `Table.from/2` reads, or `Table.from/2`'s fault in it (01 §1.1) |
+
+`Step.run/4` and `Step.parts/4` answer a step's fault as `{:error, {key, reason}}`, its index the caller's to add; `run!/4` and `parts!/4` raise it. `apply!/4` raises every fault in `format_error/1`'s words: `step 2, field: reads a value that is not a number`. `Operations.aggregate/4` holds its values to the aggregate's `reads/0` the same way: `{["values"], {:reads, kind}}`.
+
+```test:operations-run-faults
+a step's fault over its input stops apply at the step's index, answered by apply, Step.run, Step.parts and Cache.run alike, and worded by apply!; a typed column is read by its type, any other value by value; a source that is no table and a transform answering none are faults; over generated nodes, sources and contexts apply answers a table or faults and never raises
+```
 
 ```test:operations-validate-faults
 every fault of every node is answered at once at its index and key: an unknown op or aggregate, a missing required key or op, a key the op does not read, a value of the wrong type, an unmet need, and a node that is not a map; format_error words each
@@ -391,7 +409,7 @@ the table operations are macaw_data's transforms, in the table's order, each nee
 - `eq` keeps a reading equal to `value` and `ne` one that is not. **Equal means equal on the column's type's scale, the scale the orderings compare on**, so `lte` and `gte` both hold exactly when `eq` does (macaw_data#102). A `:time` is equal by its instant (`Order.instant/1`, below): a `DateTime` in any zone or at any precision, a `NaiveDateTime`, a `Date` and an ISO 8601 string naming one instant are one value. A `:number` is equal by its value: `1` equals `1.0`, and `0.0` equals `-0.0`. A category is one value whichever spelling a row or the node gives it, so `:ok` equals `"ok"` (an atom and a string are equal when the atom's string is the string; `Macaw.Data.Operations.same?/2`). `ne` is `eq`'s negation, so a `nil` reading passes `ne` and never `eq`. On a time column, `value` is read at the edge as the orderings read it, and a value with no instant is refused as theirs is (below), `nil` included: `absent` is that test. On any other column a value of another kind is answered, not refused: no reading equals it.
 - **Comparison is not identity.** These tests ask where a reading stands on its type's order, so two spellings of one point are one point. Whether a value *changed* is another question, asked of a table's identity ([01 §1.1.2](01-sources.md#sources-table-identity)): a table reads back `1.0` where it held `1`, and a time in its own zone, so a reader would see a different value. That is why `1` → `1.0`, or one instant re-delivered in another zone, is a change to a derived source's answer and to a pushed delivery ([02 §8.2](02-derived.md#derived-engine-pulse)) and yet `eq` the old value here;
 - `lt`, `lte`, `gt` and `gte` keep a reading that stands so to `value` **by the column's type, as `sort` orders (§4.6)**, never by term order (which compares a `%DateTime{}` as a map, by its day before its year). Both are keyed by `Macaw.Data.Source.Order.key/2`, the one comparator of `sort`, of a request's order (01 §2.3) and of these, so the three cannot drift apart (macaw_data#96). A `:time` compares by its instant, one scale for every kind of time (`Order.instant/1`: a `DateTime`'s UTC instant, a `NaiveDateTime`'s wall clock, a `Date` at midnight). A `:number` compares by its value, an integer and a float alike, a `:text` by its string, and a `:category` by its spelling, its atom and its string alike (a table carries no declared order). A type with no order of its own (`:color`, `:point`, `:term`) compares by term order, as `sort` orders it. `value` is read as the column reads a value at the edge (`Macaw.Data.Table.at_edge/2`), so against a time column a `DateTime`, a `NaiveDateTime`, a `Date` and an ISO 8601 string are each an instant. **A `nil` reading, and a reading that is no value of its column's type, never passes an ordering** (`sort` puts them last).
-- **An ordering, or `eq` and `ne` on a time column, against a value that is no value of the column's type is a fault**, not a guess. That covers a number against a time column, a string against a number column, an unparsable string against a time column, and `nil` against any column. Guessing would answer silently wrong rows: a number read as microseconds, or term order across kinds, which puts every number below every string. Validation never sees the table (§3.1), so the step raises `ArgumentError` once over the input, before any row is read. The message names the step, `value`, the test, the field, its type and the value, as §3.1's run-time faults do. A column the rows lack has no type: its every reading is `nil`, so no row passes and nothing is refused.
+- **An ordering, or `eq` and `ne` on a time column, against a value that is no value of the column's type is a fault**, not a guess. That covers a number against a time column, a string against a number column, an unparsable string against a time column, and `nil` against any column. Guessing would answer silently wrong rows: a number read as microseconds, or term order across kinds, which puts every number below every string. Validation never sees the table (§3.1), so the step answers it once over the input, before any row is read: `{[i, "value"], {:reading, type}}`, the field's type, as §3.1's run-time faults are answered (macaw_data#114). A column the rows lack has no type: its every reading is `nil`, so no row passes and nothing is refused.
 
 The test is `test`, not `op`, because `op` names the step. A column the rows lack reads `nil`, so `filter(field: "height", test: :eq, value: 0)` after a hierarchy keeps its leaves. **Outputs:** the input's columns. **Class:** per row (§1.4), each chunk decided from `field`'s column alone: a chunk every row of which passes is passed through, one none of which passes is dropped, one whose passing rows are one run is cut to that run without copying, and any other gathers the rows that pass. **A packed number column with no value missing** is tested by an ordering against a number by scanning its values buffer as it lies, nothing decoded (macaw_data#41). So is **a packed time column** (`:utc`, `:zoned`, `:naive`, `:date`), gaps or none, under an ordering, `eq` or `ne`, against the value's instant: its buffer holds each reading's `Order.instant/1` (a date's as its day, at midnight), so no `DateTime` is built (macaw_data#96). Any other column or test reads the values one by one, in one pass.
 
@@ -470,7 +488,7 @@ a window selects [now - from, now - to): a given to is exclusive, an absent to c
 ```
 
 ```test:operations-window-latest
-latest keeps each declared identity's newest row in the window, the later on a tie, in order, dropping a nil identity; without a schema, or with one declaring no identity, it raises naming the step
+latest keeps each declared identity's newest row in the window, the later on a tie, in order, dropping a nil identity; without a schema, or with one declaring no identity, it is the step's fault naming what it needs
 ```
 
 ### 4.4 lttb {#operations-lttb}
@@ -479,7 +497,7 @@ latest keeps each declared identity's newest row in the window, the later on a t
 - **The level** is the ladder's coarsest whose bucket is at most `span / (2n)`, `span` the extent of `x` in the scale's space: at least `2n` buckets, so at least `4n` candidates (a preselection ratio of 4). Each run's first and last rows are candidates too.
 - **The contract:** at most `n` rows when the rows have no gaps (with gaps, `n` is shared among the runs between them as `Reduce.lttb/3` shares it, and each run of gap rows keeps its first row in place, so a line still breaks where the input broke); the first and the last row kept; deterministic, the same rows under every chunking, inline or cached; input of `n` or fewer rows returned unchanged. An `n` below 3 is refused, since a line needs its two ends and a point between to have a shape.
 - **Faithful within a tolerance:** the mean absolute error of the reduced line, read by linear interpolation at every input row's `x` and divided by the extent of `y`, is at most twice `Reduce.lttb/3`'s with the same `n`, plus 0.005. Measured over 2,700 generated series (sines with noise, random walks, sparse spikes; `n` of 20, 60 and 150), the worst ratio was 1.27 for sines, 1.37 for walks and 1.56 for spikes at the smallest `n`.
-- an `x` reads in the scale's space (§4.5.1), a number or a time; a `y` as a number. Any other reading raises `ArgumentError` naming the step and the field;
+- an `x` reads in the scale's space (§4.5.1), a number or a time (a number above zero under `log`); a `y` as a number. Any other reading is the step's fault, `{[i, "fields"], {:reads, kind}}` (§3.1);
 - **whole rows are kept,** every column of each, so a tooltip over a kept point reads the datum itself. O(n) in the rows.
 
 **Outputs:** the input's columns. **Reducer:** `{"n", 1}`. **Class:** a combine (§1.4): each chunk's partial is its buckets' extremes, partials merge by concatenation (§4.5.1), and the selection runs in `finish/3`, over the candidates in one pass.
@@ -647,7 +665,7 @@ every offset's work is linear in the rows, four times the rows under five times 
 **Rows:** one per series in `fields` order, per datum in data order: the datum's columns plus `key` (the series' key), `series` (its stacking position, 0 the bottom), `value`, `y0` and `y1`, the names visualize's marks read. **Outputs:** the input's columns, then `key` (`:category`), `series`, `value`, `y0` and `y1` (`:number`). **Class:** global and a reshape (§1.4): each chunk's readings of the series, the offsets stacked across every row, the datum's columns gathered with repeated indexes and the stack's columns added.
 
 ```test:operations-stack-orders
-every order and offset matches d3-shape's on the reference fixtures, keys fixed and the others computed from the rows; nil reads as zero and a non-number raises; each row carries the datum's columns and its key, series, value, y0 and y1
+every order and offset matches d3-shape's on the reference fixtures, keys fixed and the others computed from the rows; nil reads as zero and a non-number is the step's fault; each row carries the datum's columns and its key, series, value, y0 and y1
 ```
 
 ### 4.9 bin {#operations-bin}
@@ -686,7 +704,7 @@ aggregate makes one row per distinct by value in order of first appearance, or o
 
 ### 4.11 spectrum {#operations-spectrum}
 
-`field` (`:field`, required: the sample column); `time` (`:field`, `nil`); `every` (`:positive`, `nil`: the seconds between samples); `samples` (`:power_of_two`, `nil`); `window` (`{:enum, [:hann, :hamming, :none]}`, `:hann`); `detrend` (`:boolean`, `false`); `as` (`{:one_of, [{:list, :name}, :name]}`, `["frequency", "magnitude"]`).
+`field` (`:field`, required: the sample column); `time` (`:field`, `nil`); `every` (`:positive`, `nil`: the seconds between samples); `samples` (`:power_of_two`, `nil`); `window` (`{:enum, [:hann, :hamming, :none]}`, `:hann`); `detrend` (`:boolean`, `false`); `as` (`{:one_of, [{:list, :name, 2, 3}, :name]}`, `["frequency", "magnitude"]`).
 
 A time series to its **one-sided amplitude spectrum** by a radix-2 Cooley–Tukey FFT, `Macaw.Data.FFT` (ported from `Visualize.Data.FFT`; pure Elixir, `O(N log N)`):
 - **The sample interval** is `every` when given; else the median positive gap between consecutive non-`nil` readings of `time` (`DateTime`s in seconds, numbers as they are); else `1`.
@@ -724,13 +742,13 @@ Each is an aggregate of `macaw_data`'s package implementing §1.2 (`Macaw.Data.O
 | `delta` | | the last reading minus the first | `nil` (`0` of one) | `:number` | kept |
 
 - **A unit carries** where the value is of the reading's own kind: a min, a mean or a deviation of milliseconds is milliseconds. Where it is not, it is dropped: a count, the square of a unit, a rate per sample. A host drawing a sum still holds it to the quantity's additivity ([03 §10](03-units.md#quantities-additivity)): a sum of a quantity that does not add across or over time is the host's to refuse, not the statistic's.
-- **A reading of the wrong kind raises `ArgumentError`** naming the aggregate and the reading: `sum` of a string, `mean` of a time.
+- **A reading of the wrong kind is a fault,** never a raise (00 §5): each statistic declares what it reads (`reads/0`, §1.2): `count` and `distinct` anything; `min`, `max` and `extent` numbers, or instants of one kind; `slope` numbers or points; the rest numbers. `sum` of a string or `mean` of a time is `{["values"], {:reads, :number}}` from `aggregate/4`, and the step naming the aggregate refuses the column the same way (§3.1).
 - **The streaming form** (§1.2) is given by `count`, `distinct`, `min`, `max`, `extent`, `sum`, `mean`, `variance`, `deviation`, `slope` and `delta`. `median` and `quantile` need every reading, so they give none. A streaming statistic's `reduce/2` **is** its streaming form folded over the readings, so the two agree exactly: the mean is a running sum over a count, and the variance, the deviation and the slope are Welford's one-pass updates, numerically stable and equal to visualize's two-pass values to within floating-point rounding.
 - **The combining form** (§1.2) is given by `count`, `min`, `max`, `extent`, `sum` and `mean`: their states merge exactly. A floating-point sum is not associative, so a sum over chunks would change with the chunking; `sum` and `mean` therefore sum exactly (each float as the integer multiple of 2^-1074 it is), and every order and grouping of the same readings gives the same bits. The state sums each float's signed mantissa with its binary exponent's, exactly, and counts the sums in units of 2^-1074 once, when the value is read (macaw_data#41), so adding a float shifts no integer. `min` and `max` keep the first run's on a tie. `distinct`, `variance`, `deviation`, `slope` and `delta` give none: their merges would be inexact in floating point or would grow with the readings. `median` and `quantile` need every reading: a quantile is exact here, never a sketch's approximation, so a step reducing by one reads every reading at once.
 - **spec/02 §4 still holds.** A statistic of a delivery's rows is the statistic of those rows: a quantile of a reduced or rolled-up delivery is not the quantile of the raw readings ("a p95 of p95s is not a p95"), so a percentile from raw rows stays in the source.
 
 ```test:operations-statistics-values
-each statistic answers visualize's value on its fixtures, its empty value for no readings, and its output type; the unit carries exactly for the keeping statistics; a reading of the wrong kind raises naming the aggregate
+each statistic answers visualize's value on its fixtures, its empty value for no readings, and its output type; the unit carries exactly for the keeping statistics; a reading of the wrong kind is a fault naming what the aggregate reads
 ```
 
 ```test:operations-statistics-combine
@@ -769,25 +787,27 @@ A derived source's stored function (02 §6) reaches the registered operations th
 
 | Function | Contract |
 |---|---|
-| `Ops.aggregate(values, name)`, `aggregate(values, name, options)` | the aggregate's value of `values`, `nil`s dropped |
-| `Ops.transform(rows, name)`, `transform(rows, name, options)` | the transform run over the rows, its answer as rows |
+| `Ops.aggregate(values, name)`, `aggregate(values, name, options)` | the aggregate's value of `values`, `nil`s dropped: `{:ok, value}` or `{:error, faults}`, `Operations.aggregate/4`'s |
+| `Ops.transform(rows, name)`, `transform(rows, name, options)` | the transform run over the rows: `{:ok, rows}`, its answer as rows, or `{:error, faults}`, `Operations.apply/4`'s |
+| `Ops.aggregate!/2,3`, `Ops.transform!/2,3` | the value or the rows alone, raising `ArgumentError` in `format_error/1`'s words |
+| `Ops.format_error(fault)` | a fault in words, `Operations.format_error/1`'s, read back from a stored function's spellings |
 
 ```elixir
 fn %{hosts: rows} ->
-  p95 = rows |> Enum.map(& &1.cpu) |> Macaw.Data.Ops.aggregate("quantile", %{p: 0.95})
+  p95 = rows |> Enum.map(& &1.cpu) |> Macaw.Data.Ops.aggregate!("quantile", %{p: 0.95})
 
   rows
-  |> Macaw.Data.Ops.transform("filter", %{field: "cpu", test: :gte, value: p95})
-  |> Macaw.Data.Ops.transform("sort", %{field: "cpu", order: :descending})
+  |> Macaw.Data.Ops.transform!("filter", %{field: "cpu", test: :gte, value: p95})
+  |> Macaw.Data.Ops.transform!("sort", %{field: "cpu", order: :descending})
 end
 ```
 
-**Both take their subject first**, so a pipe reads in order, and the name second. Called from a host's own code rather than a stored function, they use `macaw_data`'s own package (`Macaw.Data.Operations.registry/0`). **Options are the nodes a design writes**, the same keys and values, so a step moves between a design and a stored function unchanged; a transform's options name no `op`, since the name is the op, and one that does raises. They are read by spelling: an option key or enum value the checker doesn't know as an atom comes back as its string (02 §6.1), and the operation reads it as the same option. The checker's word table therefore doesn't grow with the registry, and a stored function makes no atom through one.
+**Both take their subject first**, so a pipe reads in order, and the name second. Called from a host's own code rather than a stored function, they use `macaw_data`'s own package (`Macaw.Data.Operations.registry/0`). **Options are the nodes a design writes**, the same keys and values, so a step moves between a design and a stored function unchanged; a transform's options name no `op`, since the name is the op, and one that does is `{[0, "op"], {:invalid_for, name}}`. They are read by spelling: an option key or enum value the checker doesn't know as an atom comes back as its string (02 §6.1), and the operation reads it as the same option. The checker's word table therefore doesn't grow with the registry, and a stored function makes no atom through one.
 
 **A column's statistics need no rows** (macaw_data#107). A stored function may also call `Macaw.Data.Derived.Columns` (02 §2.2, §6.2), on the allowlist beside `Ops`. Its `count`, `sum`, `mean`, `min` and `max` mean what the aggregates of the same names mean (§5) over one column's readings, and they read the column's buffers, through the kernels where loaded (§1.7). An input is handed as a table only to a function whose source reads its inputs as columns (02 §8). `Ops` itself still takes values and rows: `Ops.aggregate(Columns.numbers(t, "cpu"), "quantile", %{p: 0.95})` reads one column and makes no row.
 
 ```test:operations-sandbox-ops
-Ops takes its subject first and the name second, so a pipe reads in order; called from host code it runs macaw_data's own package, rows in and rows out; a transform's options that name an op raise
+Ops takes its subject first and the name second, so a pipe reads in order; called from host code it runs macaw_data's own package, rows in and rows out, {:ok, _} or {:error, faults}, its ! twins raising; a transform's options that name an op are a fault
 ```
 
 ### 6.1 The allowlist is generated {#operations-allowlist}
@@ -799,13 +819,17 @@ Ops takes its subject first and the name second, so a pipe reads in order; calle
 - **It needs nothing a derived source lacks.** A transform whose `needs/0` isn't empty is `{:needs, name, need}`, since a derived source has no frame, projection or text.
 - **The call is compiled against the registry it was checked against.** It becomes `Ops.__run__(kind, registry, name, subject, options)` with the registry escaped into the compiled code, so it runs exactly what was checked, with nothing read from the node's environment, and no module atom passes through the stored source. `__run__/5` is on `Macaw.Data.Ops`'s excluded list (`:internal`), so a stored source that writes it is refused like any other unlisted call.
 - **Before it is placed,** a source is checked with `operations: nil` (`Derived.new/1`, which knows no engine): its names need only be literals. `Derived.validate/2` takes `operations:` as it takes `functions:`, and the engine passes its registry, so a name its packages do not hold is a fault at define time. `Sandbox.compile/2` needs a registry and raises `ArgumentError` without one.
-- **The options are checked when the call runs.** They may be built by the function, so a fault in them (§3.1) raises `ArgumentError` with `format_error/1`'s words, which the runner reports as `:raised` (02 §6.4).
-- **Rows in, rows out** is the default for a derived function (02 §2.2): under `input: :columns` it reads tables through `Macaw.Data.Derived.Columns` instead, and hands `Ops` what it reads of them. `transform/2,3` reads its rows with `Table.from/2` and answers `Table.rows/1` of the result. The context a stored call runs with has no `now`, `frame` or `schema` (02 §2.3), so a `window` measures from its data's newest reading, and `latest` raises: a function asks its input for `latest` instead (02 §2.2).
+- **The options and the readings are checked when the call runs, and a fault is a value** (00 §5). They may be built by the function, so a fault in them, or a reading the operation cannot read (§3.1), is `{:error, faults}`, which the function reads as it reads any answer. Its atoms are spelled as the function's literals are (02 §6.3), as `Macaw.Data.Derived.Columns`' reasons are, so `{:error, [{["p"], :required}]}` in the function matches what `aggregate(values, "quantile")` answers, and `Ops.format_error/1` words it. A `!` call raises `ArgumentError` with those words, which the runner reports as `:raised` (02 §6.4), as does a `{:ok, v} =` match on a fault.
+- **Rows in, rows out** is the default for a derived function (02 §2.2): under `input: :columns` it reads tables through `Macaw.Data.Derived.Columns` instead, and hands `Ops` what it reads of them. `transform/2,3` reads its rows with `Table.from/2` and answers `Table.rows/1` of the result. The context a stored call runs with has no `now`, `frame` or `schema` (02 §2.3), so a `window` measures from its data's newest reading, and `latest` is the fault `{:needs, :schema}`: a function asks its input for `latest` instead (02 §2.2).
 
 **The compile cache is keyed by the source and the registry's digest** (§2), so the same text compiled against another registry is compiled again. `Macaw.Data.Reduce` leaves the allowlist: `lttb` and `m4` are reached as transforms, so a stored function has one way to reduce. `Allowlist.modules/0` is then `Enum`, `Map`, `Keyword`, `String`, `Integer`, `Float`, `:math` and `Macaw.Data.Ops`.
 
 ```test:operations-sandbox-calls
-a stored function calls a registered aggregate and transform by literal name and gets the same answer apply gives; a name that is not literal, not registered, or of a transform with needs is refused at its line; a bad option raises when the call runs; a test package's members are callable only when enabled
+a stored function calls a registered aggregate and transform by literal name and gets the same answer apply gives; a name that is not literal, not registered, or of a transform with needs is refused at its line; a bad option raises when a ! call runs; a test package's members are callable only when enabled
+```
+
+```test:operations-sandbox-faults
+in a stored function, Ops.aggregate and Ops.transform answer {:ok, value} or {:error, faults} spelled as the function's literals are, which the function matches with its own words and Ops.format_error words; from host code the same answers, unspelled; non-map options and non-enumerable values are faults
 ```
 
 ```test:operations-sandbox-cache
@@ -832,14 +856,14 @@ visualize's sandbox allows `Visualize.Data`. A stored function written against i
 
 | visualize | Macaw |
 |---|---|
-| `min/1,2`, `max/1,2`, `extent/1,2`, `sum/1,2`, `mean/1,2`, `median/1,2`, `variance/1,2`, `deviation/1,2`, `slope/1,2`, `delta/1,2` | `Ops.aggregate(values, name)`, the accessor applied first (`Enum.map(rows, & &1.cpu)`) |
-| `quantile(data, p)`, `quantile(data, p, accessor)` | `Ops.aggregate(values, "quantile", %{p: p})` |
+| `min/1,2`, `max/1,2`, `extent/1,2`, `sum/1,2`, `mean/1,2`, `median/1,2`, `variance/1,2`, `deviation/1,2`, `slope/1,2`, `delta/1,2` | `Ops.aggregate!(values, name)`, the accessor applied first (`Enum.map(rows, & &1.cpu)`) |
+| `quantile(data, p)`, `quantile(data, p, accessor)` | `Ops.aggregate!(values, "quantile", %{p: p})` |
 | `extent` as `{min, max}` | `[min, max]` |
-| `lttb/2,3`, `m4/2,3` | `Ops.transform(rows, "lttb", %{fields: [x, y], n: n})`, `"m4"` with `width` |
-| `bin/1,2` | `Ops.transform(rows, "bin", %{field: f, thresholds: t})` |
+| `lttb/2,3`, `m4/2,3` | `Ops.transform!(rows, "lttb", %{fields: [x, y], n: n})`, `"m4"` with `width` |
+| `bin/1,2` | `Ops.transform!(rows, "bin", %{field: f, thresholds: t})` |
 | `group/2` | `Enum.group_by/2` |
-| `rollup/3` | `Enum.group_by/2` and `Map.new/2`, or `Ops.transform(rows, "aggregate", %{field: f, fn: name, by: k})` |
-| `sort/2,3` | `Enum.sort_by/2,3`, or `Ops.transform(rows, "sort", …)` |
+| `rollup/3` | `Enum.group_by/2` and `Map.new/2`, or `Ops.transform!(rows, "aggregate", %{field: f, fn: name, by: k})` |
+| `sort/2,3` | `Enum.sort_by/2,3`, or `Ops.transform!(rows, "sort", …)` |
 | `unique/1,2` | `Enum.uniq/1`, `Enum.uniq_by/2` |
 | `cross/2,3` | `for x <- a, y <- b, do: …` |
 | `range/2,3` | a range, `Enum.to_list(a..b//s)` |

@@ -34,6 +34,9 @@ defmodule Macaw.Data.Derived.Sandbox do
              &elem(&1, 0)
            )
 
+  # The `Macaw.Data.Ops` functions that run an operation by name (spec/04 §6.1).
+  @operations [:aggregate, :transform, :aggregate!, :transform!]
+
   @check_opts [arity: [1, 2], fields: nil, max_source: 10_000, operations: nil]
   @run_opts [max_reductions: 100_000_000, timeout: 30_000, max_heap: 10_000_000]
 
@@ -138,15 +141,16 @@ defmodule Macaw.Data.Derived.Sandbox do
   end
 
   # A `Macaw.Data.Ops` call, piped into or not, becomes `Ops.__run__/5` with the registry it
-  # was checked against, escaped into the code (spec/04 §6.1). The rest are map reads.
+  # was checked against, escaped into the code (spec/04 §6.1), its kind the function's
+  # name, `!` and all. The rest are map reads.
   defp rewrite(quoted, registry) do
     Macro.prewalk(quoted, fn
       {:|>, _meta, [left, {{:., _dm, [receiver, name]}, call_meta, args}]} = node
-      when name in [:aggregate, :transform] and is_list(args) ->
+      when name in @operations and is_list(args) ->
         if ops?(receiver), do: run_call(name, [left | args], call_meta, registry), else: node
 
       {{:., _dm, [receiver, name]}, call_meta, args} = node
-      when name in [:aggregate, :transform] and is_list(args) and args != [] ->
+      when name in @operations and is_list(args) and args != [] ->
         if ops?(receiver), do: run_call(name, args, call_meta, registry), else: node
 
       # Every accessor is its twin in `Sandbox.Runtime`, which answers as the function reads

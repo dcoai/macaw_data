@@ -79,16 +79,16 @@ defmodule Macaw.Data.Operations.CacheTest do
 
       for node <- @steps do
         {module, node} = step(node)
-        full = Step.run(module, node, table, %{})
+        full = Step.run!(module, node, table, %{})
 
-        {first, cache} = Cache.run(Cache.new(), module, node, table, %{})
+        {first, cache} = Cache.run!(Cache.new(), module, node, table, %{})
         assert Table.equal?(first, full)
         assert cache.last == %{reused: 0, updated: 0, computed: 3}
 
         # A lookup hashes no content: the versions are read from the chunks.
         hashed =
           calls({Macaw.Data.Table.Digest, :digest, 3}, fn ->
-            {again, cache} = Cache.run(cache, module, node, table, %{})
+            {again, cache} = Cache.run!(cache, module, node, table, %{})
             send(self(), {:again, again, cache})
           end)
 
@@ -103,17 +103,17 @@ defmodule Macaw.Data.Operations.CacheTest do
     test "a rebuild of the same contents hits every part; a chunk of other contents misses alone" do
       values = rows(&rem(&1 * 7, 10))
       {module, node} = step(%{op: "sum", field: "v", by: "id"})
-      {_, cache} = Cache.run(Cache.new(), module, node, table(values), %{})
+      {_, cache} = Cache.run!(Cache.new(), module, node, table(values), %{})
 
       # Built again from the same rows: another struct, the same ids and digests.
-      {_, rebuilt} = Cache.run(cache, module, node, table(values), %{})
+      {_, rebuilt} = Cache.run!(cache, module, node, table(values), %{})
       assert rebuilt.last == %{reused: 3, updated: 0, computed: 0}
 
       # One value of the middle chunk changed: that chunk alone is computed.
       changed = List.update_at(values, 150, &%{&1 | "v" => 99})
-      {out, cache} = Cache.run(cache, module, node, table(changed), %{})
+      {out, cache} = Cache.run!(cache, module, node, table(changed), %{})
       assert cache.last == %{reused: 2, updated: 0, computed: 1}
-      assert Table.equal?(out, Step.run(module, node, table(changed), %{}))
+      assert Table.equal?(out, Step.run!(module, node, table(changed), %{}))
     end
 
     @tag verifies: "operations-cache-reuse"
@@ -129,8 +129,8 @@ defmodule Macaw.Data.Operations.CacheTest do
       assert Chunk.version(pending) == nil
 
       {module, node} = step(%{op: "aggregate", field: "v", fn: "count", by: "id"})
-      {out, cache} = Cache.run(Cache.new(), module, node, changed, %{})
-      assert Table.equal?(out, Step.run(module, node, Table.warm(changed), %{}))
+      {out, cache} = Cache.run!(Cache.new(), module, node, changed, %{})
+      assert Table.equal?(out, Step.run!(module, node, Table.warm(changed), %{}))
       assert Enum.all?(Map.keys(cache.parts), fn {_id, version, _key} -> is_binary(version) end)
     end
   end
@@ -198,11 +198,11 @@ defmodule Macaw.Data.Operations.CacheTest do
 
         for {node, by} <- nodes do
           {module, node} = step(node)
-          {_, cache} = Cache.run(Cache.new(), module, node, table, %{})
-          {out, after_} = Cache.run(cache, module, node, applied, %{})
-          assert Table.equal?(out, Step.run(module, node, applied, %{}))
+          {_, cache} = Cache.run!(Cache.new(), module, node, table, %{})
+          {out, after_} = Cache.run!(cache, module, node, applied, %{})
+          assert Table.equal?(out, Step.run!(module, node, applied, %{}))
 
-          for %{view: {chunk, _, _}, key: key} = part <- Step.parts(module, node, applied, %{}),
+          for %{view: {chunk, _, _}, key: key} = part <- Step.parts!(module, node, applied, %{}),
               Chunk.delta?(chunk) do
             base = Map.get(cache.parts, {Chunk.id(chunk), Chunk.base_version(chunk), key})
 
@@ -243,10 +243,10 @@ defmodule Macaw.Data.Operations.CacheTest do
             %{op: "lttb", fields: ["t", "v"], n: 20}
           ] do
         {module, node} = step(node)
-        {_, cache} = Cache.run(Cache.new(), module, node, table, %{})
-        {out, cache} = Cache.run(cache, module, node, applied, %{})
+        {_, cache} = Cache.run!(Cache.new(), module, node, table, %{})
+        {out, cache} = Cache.run!(cache, module, node, applied, %{})
         assert cache.last == %{reused: 2, updated: 0, computed: 1}, inspect(node)
-        assert Table.equal?(out, Step.run(module, node, applied, %{}))
+        assert Table.equal?(out, Step.run!(module, node, applied, %{}))
       end
     end
 
@@ -254,19 +254,19 @@ defmodule Macaw.Data.Operations.CacheTest do
     test "a group whose first row is removed recomputes its chunk" do
       table = table(rows(&rem(&1, 10)))
       {module, node} = step(%{op: "aggregate", field: "v", fn: "count", by: "id"})
-      {_, cache} = Cache.run(Cache.new(), module, node, table, %{})
+      {_, cache} = Cache.run!(Cache.new(), module, node, table, %{})
 
       # t 100 is group b's first row in the chunk [100, 200).
       first = apply!(table, retract: [row("b", 100, 0)])
-      {out, after_} = Cache.run(cache, module, node, first, %{})
+      {out, after_} = Cache.run!(cache, module, node, first, %{})
       assert after_.last == %{reused: 2, updated: 0, computed: 1}
-      assert Table.equal?(out, Step.run(module, node, first, %{}))
+      assert Table.equal?(out, Step.run!(module, node, first, %{}))
 
       # t 103 is not: the chunk is updated, and the groups keep their order.
       later = apply!(table, retract: [row("b", 103, 3)], insert: [row("d", 150, 3)])
-      {out, after_} = Cache.run(cache, module, node, later, %{})
+      {out, after_} = Cache.run!(cache, module, node, later, %{})
       assert after_.last == %{reused: 2, updated: 1, computed: 0}
-      assert Table.equal?(out, Step.run(module, node, later, %{}))
+      assert Table.equal?(out, Step.run!(module, node, later, %{}))
       assert Table.column(out, "id") == ~w(a b c d)
     end
   end
@@ -276,12 +276,12 @@ defmodule Macaw.Data.Operations.CacheTest do
     test "prune keeps the parts of held chunks, at their version or base version" do
       table = table(rows(&rem(&1, 10)))
       {module, node} = step(%{op: "aggregate", field: "v", fn: "count", by: "id"})
-      {_, cache} = Cache.run(Cache.new(), module, node, table, %{})
+      {_, cache} = Cache.run!(Cache.new(), module, node, table, %{})
       assert Cache.size(cache) == 3
 
       # A changed chunk adds its new version's part; its base's is kept for updates.
       changed = apply!(table, retract: [row("b", 103, 3)])
-      {_, cache} = Cache.run(cache, module, node, changed, %{})
+      {_, cache} = Cache.run!(cache, module, node, changed, %{})
       assert Cache.size(cache) == 4
       assert Cache.size(Cache.prune(cache, [changed])) == 4
 

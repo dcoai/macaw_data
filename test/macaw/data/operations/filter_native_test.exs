@@ -197,11 +197,11 @@ defmodule Macaw.Data.Operations.FilterNativeTest do
         {type, readings} = column(form, [1, nil, 2])
         table = Table.new!([{"v", type, readings}])
         node = %{op: "filter", field: "v", test: test, value: value}
-        run = fn -> Operations.apply!(@registry, [node], table) end
-        message = ~r/the :time field "v" with a value of its type/
+        run = fn -> Operations.apply(@registry, [node], table) end
+        fault = {:error, [{[0, "value"], {:reading, :time}}]}
 
-        assert_raise ArgumentError, message, run
-        assert_raise ArgumentError, message, fn -> Native.elixir(run) end
+        assert run.() == fault
+        assert Native.elixir(run) == fault
       end
     end
   end
@@ -226,17 +226,17 @@ defmodule Macaw.Data.Operations.FilterNativeTest do
         table = Table.new!([{"v", type, readings}])
 
         run = fn ->
-          Operations.apply!(
+          Operations.apply(
             @registry,
             [%{op: "filter", field: "v", test: test, value: value}],
             table
           )
         end
 
-        message = ~r/the #{inspect(type)} field "v" with a value of its type/
+        fault = {:error, [{[0, "value"], {:reading, type}}]}
 
-        assert_raise ArgumentError, message, run
-        assert_raise ArgumentError, message, fn -> Native.elixir(run) end
+        assert run.() == fault
+        assert Native.elixir(run) == fault
       end
     end
   end

@@ -11,7 +11,7 @@ defmodule Macaw.Data.Operations.SandboxOpsTest do
   alias Macaw.Data.Derived.Sandbox.Cache
 
   @own Operations.registry()
-  @hosted Operations.registry([Macaw.Data.Test.Ops])
+  defp hosted, do: Operations.registry!([Macaw.Data.Test.Ops])
 
   @rows [
     %{host: "a", cpu: 30},
@@ -35,14 +35,14 @@ defmodule Macaw.Data.Operations.SandboxOpsTest do
     test "a stored aggregate and transform answer what apply answers" do
       source = ~S"""
       fn rows ->
-        p50 = rows |> Enum.map(& &1.cpu) |> Macaw.Data.Ops.aggregate("quantile", %{p: 0.5})
+        p50 = rows |> Enum.map(& &1.cpu) |> Macaw.Data.Ops.aggregate!("quantile", %{p: 0.5})
 
         hot =
           rows
-          |> Macaw.Data.Ops.transform("filter", %{field: "cpu", test: :gte, value: p50})
-          |> Macaw.Data.Ops.transform("sort", %{field: "cpu", order: :descending})
+          |> Macaw.Data.Ops.transform!("filter", %{field: "cpu", test: :gte, value: p50})
+          |> Macaw.Data.Ops.transform!("sort", %{field: "cpu", order: :descending})
 
-        %{p50: p50, hot: Enum.map(hot, & &1.host), mean: Macaw.Data.Ops.aggregate(Enum.map(rows, & &1.cpu), "mean")}
+        %{p50: p50, hot: Enum.map(hot, & &1.host), mean: Macaw.Data.Ops.aggregate!(Enum.map(rows, & &1.cpu), "mean")}
       end
       """
 
@@ -58,14 +58,14 @@ defmodule Macaw.Data.Operations.SandboxOpsTest do
 
       assert Macaw.Data.Table.rows(direct) |> Enum.map(& &1.host) == ["b", "a", "a"]
 
-      assert Ops.transform(Enum.take(@rows, 3), "sort", %{field: :cpu, order: "descending"})
+      assert Ops.transform!(Enum.take(@rows, 3), "sort", %{field: :cpu, order: "descending"})
              |> Enum.map(& &1.host) == ["b", "a", "a"]
 
-      assert Ops.aggregate([1, nil, 3], "sum") == 4
-      assert Ops.aggregate([1, 2, 3, 4], "quantile", %{p: 0.5}) == 2.5
+      assert Ops.aggregate!([1, nil, 3], "sum") == 4
+      assert Ops.aggregate!([1, 2, 3, 4], "quantile", %{p: 0.5}) == 2.5
 
       assert_raise ArgumentError, "take: step 1, n: is required", fn ->
-        Ops.transform(@rows, "take")
+        Ops.transform!(@rows, "take")
       end
     end
 
@@ -73,28 +73,30 @@ defmodule Macaw.Data.Operations.SandboxOpsTest do
     test "a name that is not a literal, not registered, or a drawing transform is refused at its line" do
       assert [{3, {:operation_name, :literal}}] =
                reasons(
-                 "fn rows ->\n  name = \"sum\"\n  Macaw.Data.Ops.aggregate(rows, name)\nend"
+                 "fn rows ->\n  name = \"sum\"\n  Macaw.Data.Ops.aggregate!(rows, name)\nend"
                )
 
       assert [{3, {:unknown_operation, :transform, "sankey"}}] =
-               reasons("fn rows ->\n\n  Macaw.Data.Ops.transform(rows, \"sankey\")\nend")
+               reasons("fn rows ->\n\n  Macaw.Data.Ops.transform!(rows, \"sankey\")\nend")
 
       assert [{1, {:unknown_operation, :transform, "double"}}] =
-               reasons(~S|fn rows -> Macaw.Data.Ops.transform(rows, "double", %{field: "v"}) end|)
+               reasons(
+                 ~S|fn rows -> Macaw.Data.Ops.transform!(rows, "double", %{field: "v"}) end|
+               )
 
       assert [{1, {:needs, "layout", :frame}}] =
-               reasons(~S|fn rows -> Macaw.Data.Ops.transform(rows, "layout") end|,
-                 operations: @hosted
+               reasons(~S|fn rows -> Macaw.Data.Ops.transform!(rows, "layout") end|,
+                 operations: hosted()
                )
 
       # Checked before it is placed, a name need only be a literal.
       assert {:ok, _} =
-               Sandbox.check(~S|fn rows -> Macaw.Data.Ops.transform(rows, "double") end|,
+               Sandbox.check(~S|fn rows -> Macaw.Data.Ops.transform!(rows, "double") end|,
                  operations: nil
                )
 
       assert [{1, {:operation_name, :literal}}] =
-               reasons(~S|fn rows -> Macaw.Data.Ops.transform(rows, rows) end|, operations: nil)
+               reasons(~S|fn rows -> Macaw.Data.Ops.transform!(rows, rows) end|, operations: nil)
 
       assert Sandbox.format_error({1, {:operation_name, :literal}}) ==
                "line 1: a Macaw.Data.Ops call names its operation with a literal string"
@@ -106,34 +108,80 @@ defmodule Macaw.Data.Operations.SandboxOpsTest do
                ~S|line 3: transform "layout" needs a frame, which a derived source does not have|
     end
 
+    @tag verifies: "operations-sandbox-faults"
+    test "a fault is a value: answered, matched by the function's own words, and worded" do
+      source = ~S"""
+      fn rows ->
+        missing =
+          case Macaw.Data.Ops.aggregate(rows, "quantile") do
+            {:error, [{["p"], :required}]} -> :matched
+            other -> other
+          end
+
+        {:error, [fault]} = Macaw.Data.Ops.transform(rows, "take", %{n: -1})
+        {:error, [read]} = Macaw.Data.Ops.aggregate(["x"], "sum")
+
+        %{
+          missing: missing,
+          fault: fault,
+          words: Macaw.Data.Ops.format_error(fault),
+          read: Macaw.Data.Ops.format_error(read),
+          sum: Macaw.Data.Ops.aggregate([1, 2], "sum"),
+          rows: Macaw.Data.Ops.transform(rows, "take", %{n: 1})
+        }
+      end
+      """
+
+      assert {:ok, answer} = call(source, [[1, 2]], operations: @own)
+      assert answer["missing"] == "matched"
+      assert {[0, "n"], {"type", {:integer, 0}}} = answer["fault"]
+      assert answer["words"] == "step 1, n: is an integer of at least 0"
+      assert answer["read"] == "values: reads a value that is not a number"
+      assert answer["sum"] == {:ok, 3}
+      assert answer["rows"] == {:error, [{["source"], "not_a_table"}]}
+
+      # From host code, the same answers, unspelled.
+      assert Ops.aggregate([1], "quantile") == {:error, [{["p"], :required}]}
+      assert Ops.aggregate([1, 2], "sum") == {:ok, 3}
+      assert Ops.transform(@rows, "take") == {:error, [{[0, "n"], :required}]}
+      assert Ops.transform([%{v: 2}, %{v: 1}], "sort", %{field: :v}) == {:ok, [%{v: 1}, %{v: 2}]}
+
+      assert Ops.transform(@rows, "take", %{op: "sort", n: 1}) ==
+               {:error, [{[0, "op"], {:invalid_for, "take"}}]}
+
+      assert Ops.aggregate(:none, "sum") == {:error, [{["values"], {:type, {:list, :term}}}]}
+      assert Ops.aggregate([1], "sum", p: 1) == {:error, [{["options"], {:type, :map}}]}
+      assert Ops.format_error({["p"], :required}) == "p: is required"
+    end
+
     @tag verifies: ["operations-sandbox-calls", "operations-sandbox-ops"]
     test "a bad option raises when the call runs, and the runner reports it" do
       assert {:error, :raised, ArgumentError} =
-               call(~S|fn rows -> Macaw.Data.Ops.aggregate(rows, "quantile") end|, [[1, 2]])
+               call(~S|fn rows -> Macaw.Data.Ops.aggregate!(rows, "quantile") end|, [[1, 2]])
 
       assert {:error, :raised, ArgumentError} =
-               call(~S|fn rows -> Macaw.Data.Ops.transform(rows, "take", %{n: -1}) end|, [@rows])
+               call(~S|fn rows -> Macaw.Data.Ops.transform!(rows, "take", %{n: -1}) end|, [@rows])
 
       assert {:error, :raised, ArgumentError} =
                call(
-                 ~S|fn rows -> Macaw.Data.Ops.transform(rows, "take", %{op: "sort", n: 1}) end|,
+                 ~S|fn rows -> Macaw.Data.Ops.transform!(rows, "take", %{op: "sort", n: 1}) end|,
                  [@rows]
                )
 
       assert_raise ArgumentError, "quantile: p: is required", fn ->
-        Ops.aggregate([1], "quantile")
+        Ops.aggregate!([1], "quantile")
       end
     end
 
     @tag verifies: "operations-sandbox-calls"
     test "a host package's members are callable only where it is enabled" do
       source =
-        ~S|fn rows -> Macaw.Data.Ops.transform(rows, "double", %{field: "cpu", as: "twice"}) end|
+        ~S|fn rows -> Macaw.Data.Ops.transform!(rows, "double", %{field: "cpu", as: "twice"}) end|
 
       rows = Enum.take(@rows, 2)
 
       assert {:ok, [%{"twice" => 60}, %{"twice" => 180}]} =
-               call(source, [rows], operations: @hosted)
+               call(source, [rows], operations: hosted())
 
       assert {:error, [{1, {:unknown_operation, :transform, "double"}}]} = Sandbox.compile(source)
 
@@ -164,8 +212,8 @@ defmodule Macaw.Data.Operations.SandboxOpsTest do
       source =
         derived(~S"""
         fn %{hosts: rows} ->
-          doubled = Macaw.Data.Ops.transform(rows, "double", %{field: "cpu"})
-          [%{n: Macaw.Data.Ops.aggregate(Enum.map(doubled, & &1["double"]), "sum")}]
+          doubled = Macaw.Data.Ops.transform!(rows, "double", %{field: "cpu"})
+          [%{n: Macaw.Data.Ops.aggregate!(Enum.map(doubled, & &1["double"]), "sum")}]
         end
         """)
 
@@ -187,11 +235,11 @@ defmodule Macaw.Data.Operations.SandboxOpsTest do
     test "validate in context holds a name to the registry given, or only to being literal" do
       source =
         derived(
-          ~S|fn %{hosts: rows} -> Macaw.Data.Ops.transform(rows, "double", %{field: "cpu"}) end|
+          ~S|fn %{hosts: rows} -> Macaw.Data.Ops.transform!(rows, "double", %{field: "cpu"}) end|
         )
 
       assert Derived.validate(source, inputs: %{hosts: @hosts}) == :ok
-      assert Derived.validate(source, inputs: %{hosts: @hosts}, operations: @hosted) == :ok
+      assert Derived.validate(source, inputs: %{hosts: @hosts}, operations: hosted()) == :ok
 
       assert {:error, [{[:elixir], {:check, 1, {:unknown_operation, :transform, "double"}}}]} =
                Derived.validate(source, inputs: %{hosts: @hosts}, operations: @own)
@@ -199,16 +247,16 @@ defmodule Macaw.Data.Operations.SandboxOpsTest do
 
     @tag verifies: "operations-sandbox-cache"
     test "the same source compiles once per registry digest" do
-      source = ~S|fn rows -> Macaw.Data.Ops.aggregate(rows, "sum") end|
+      source = ~S|fn rows -> Macaw.Data.Ops.aggregate!(rows, "sum") end|
 
       {:ok, a, cache} = Cache.compile(Cache.new(), source, operations: @own)
       {:ok, b, cache} = Cache.compile(cache, source, operations: @own)
       assert a == b and map_size(cache.entries) == 1
 
-      {:ok, c, cache} = Cache.compile(cache, source, operations: @hosted)
+      {:ok, c, cache} = Cache.compile(cache, source, operations: hosted())
       assert map_size(cache.entries) == 2
       assert Sandbox.run(c, [[1, 2]]) == {:ok, 3}
-      assert Operations.digest(@own) != Operations.digest(@hosted)
+      assert Operations.digest(@own) != Operations.digest(hosted())
     end
   end
 end

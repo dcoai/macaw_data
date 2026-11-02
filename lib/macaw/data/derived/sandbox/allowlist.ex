@@ -362,7 +362,17 @@ defmodule Macaw.Data.Derived.Sandbox.Allowlist do
 
   # The library's own reductions (spec/02 §6.2): pure, every export. Step 6 (#83) adds the
   # registered aggregates and transforms.
-  @ops [aggregate: 2, aggregate: 3, transform: 2, transform: 3]
+  @ops [
+    aggregate: 2,
+    aggregate: 3,
+    aggregate!: 2,
+    aggregate!: 3,
+    format_error: 1,
+    transform: 2,
+    transform: 3,
+    transform!: 2,
+    transform!: 3
+  ]
 
   # A function's input read as columns (spec/02 §2.2, macaw_data#107): every accessor
   # reads the table it is given and makes nothing else, so every export: each accessor and

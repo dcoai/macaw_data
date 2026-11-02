@@ -88,8 +88,13 @@ defmodule Macaw.Data.Derived.AllowlistTest do
     assert Allowlist.allowed(Macaw.Data.Ops) == [
              aggregate: 2,
              aggregate: 3,
+             aggregate!: 2,
+             aggregate!: 3,
+             format_error: 1,
              transform: 2,
-             transform: 3
+             transform: 3,
+             transform!: 2,
+             transform!: 3
            ]
 
     assert Allowlist.excluded(Macaw.Data.Ops) == [{{:__run__, 5}, :internal}]

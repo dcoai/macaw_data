@@ -33,7 +33,7 @@ defmodule Macaw.Data.Operations.Transforms.Window do
   def outputs(_node, columns), do: columns
 
   @impl true
-  def run(node, table, context), do: Step.run(__MODULE__, node, table, context)
+  def run(node, table, context), do: Step.answer(__MODULE__, node, table, context)
 
   # Without `latest`, a per-row step (spec/04 §1.4): a chunk wholly inside the window
   # passes through, one wholly outside is dropped, and only an edge chunk is cut, a sorted
@@ -48,30 +48,43 @@ defmodule Macaw.Data.Operations.Transforms.Window do
   def reads, do: [:now, :schema]
 
   # The window's bounds over the whole input, once: `now` the context's, else the newest
-  # reading, found from the end of a sorted column or by a scan of any other.
+  # reading, found from the end of a sorted column or by a scan of any other. A field
+  # holding a reading that is no time, or a `now` that is none, is a fault, answered here
+  # before any row is read (spec/04 §3.1).
   @impl true
   def bind(%{"latest" => true} = node, table, context) do
-    ids = identity!(Map.get(context, :schema), Table.names(table))
-    node |> Map.put("latest", false) |> bind(table, context) |> Map.put(:ids, ids)
+    with {:ok, ids} <- identity(Map.get(context, :schema), Table.names(table)),
+         %{} = bound <- node |> Map.put("latest", false) |> bind(table, context),
+         do: Map.put(bound, :ids, ids)
   end
 
   def bind(%{"field" => field, "from" => from, "to" => to}, table, context) do
     name = Transforms.name_in(Table.names(table), field)
     sorted? = name != nil and Table.sorted(table) == name
+    given = Map.get(context, :now)
 
-    now =
-      cond do
-        name == nil -> nil
-        Map.get(context, :now) == nil -> newest(Table.chunks(table), name, field, sorted?)
-        true -> Transforms.seconds!(context.now, field, name())
-      end
+    cond do
+      Transforms.readings(table, name, :time) != :ok ->
+        {:error, {"field", {:reads, :time}}}
 
-    if now do
-      lo = if from, do: now - seconds(from), else: :open
-      hi = if to, do: {:below, now - seconds(to)}, else: {:through, now}
-      %{bounds: {lo, hi}, name: name, field: field, sorted?: sorted?}
-    else
-      %{bounds: nil}
+      given != nil and not Transforms.read_as?([given], :time) ->
+        {:error, {"op", {:context, :now, :time}}}
+
+      true ->
+        now =
+          cond do
+            name == nil -> nil
+            given == nil -> newest(Table.chunks(table), name, field, sorted?)
+            true -> Transforms.seconds!(given, field, name())
+          end
+
+        if now do
+          lo = if from, do: now - seconds(from), else: :open
+          hi = if to, do: {:below, now - seconds(to)}, else: {:through, now}
+          %{bounds: {lo, hi}, name: name, field: field, sorted?: sorted?}
+        else
+          %{bounds: nil}
+        end
     end
   end
 
@@ -271,21 +284,14 @@ defmodule Macaw.Data.Operations.Transforms.Window do
   end
 
   # The identity the schema declares, each field by the name the table spells it with;
-  # never an inferred one (spec/04 §4.3).
-  defp identity!(%Schema{} = schema, names) do
+  # never an inferred one (spec/04 §4.3). Without a schema, or with one declaring no
+  # identity, `latest` has nothing to group by: `{"latest", {:needs, :schema | :identity}}`.
+  defp identity(%Schema{} = schema, names) do
     case Schema.identity(schema) do
-      [] ->
-        raise ArgumentError,
-              "transform \"window\": latest over a schema that declares no identity (spec/04 §4.3)"
-
-      fields ->
-        Enum.map(fields, &{&1, Transforms.name_in(names, &1)})
+      [] -> {:error, {"latest", {:needs, :identity}}}
+      fields -> {:ok, Enum.map(fields, &{&1, Transforms.name_in(names, &1)})}
     end
   end
 
-  defp identity!(_no_schema, _names) do
-    raise ArgumentError,
-          "transform \"window\": latest needs the schema of its rows in the context, whose " <>
-            "declared identity it groups by (spec/04 §4.3)"
-  end
+  defp identity(_no_schema, _names), do: {:error, {"latest", {:needs, :schema}}}
 end

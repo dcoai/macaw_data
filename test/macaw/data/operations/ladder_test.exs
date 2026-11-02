@@ -70,7 +70,7 @@ defmodule Macaw.Data.Operations.LadderTest do
       {levels, keys} =
         Enum.map_reduce(frames, nil, fn frame, previous ->
           context = if previous, do: %{level: previous}, else: %{}
-          parts = Step.parts(M4, node, frame, context)
+          parts = Step.parts!(M4, node, frame, context)
           level = hd(parts).context.level
           {{level, Enum.map(parts, & &1.key)}, level}
         end)
@@ -96,7 +96,7 @@ defmodule Macaw.Data.Operations.LadderTest do
 
       keys = fn width ->
         Enum.map(
-          Step.parts(M4, checked(%{op: "m4", fields: ["t", "v"], width: width}), frame, %{
+          Step.parts!(M4, checked(%{op: "m4", fields: ["t", "v"], width: width}), frame, %{
             level: 5
           }),
           & &1.key

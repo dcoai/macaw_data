@@ -25,9 +25,9 @@ defmodule Macaw.Data.Operations.Cache do
   merge recomputes. The result equals `Step.run/4`'s. `prune/2` evicts by logical id.
 
       cache = Cache.new()
-      {table, cache} = Cache.run(cache, Sum, node, frame_1, %{})
+      {:ok, table, cache} = Cache.run(cache, Sum, node, frame_1, %{})
       # the next frame: one new chunk computed, every other part reused
-      {table, cache} = Cache.run(cache, Sum, node, frame_2, %{})
+      {:ok, table, cache} = Cache.run(cache, Sum, node, frame_2, %{})
       cache = Cache.prune(cache, [frame_2])
   """
 
@@ -56,14 +56,30 @@ defmodule Macaw.Data.Operations.Cache do
 
   @doc """
   The step `module` (a column-native one, `Step.step?/1`) run over `table` with the parts
-  `cache` holds, and the cache holding this run's parts. The table equals
-  `Step.run(module, node, table, context)`'s. With `parallel: true` in the context, the
-  parts it computes run as `Step.run/4`'s would (spec/04 §1.6).
+  `cache` holds: `{:ok, table, cache}`, the cache holding this run's parts, or the step's
+  fault, `{:error, {key, reason}}`, with the cache unchanged (spec/04 §3.1). The table
+  equals `Step.run(module, node, table, context)`'s. With `parallel: true` in the context,
+  the parts it computes run as `Step.run/4`'s would (spec/04 §1.6).
   """
-  @spec run(t(), module(), map(), Table.t(), map()) :: {Table.t(), t()}
+  @spec run(t(), module(), map(), Table.t(), map()) ::
+          {:ok, Table.t(), t()} | {:error, Step.fault()}
   def run(%__MODULE__{} = cache, module, node, %Table{} = table, context) do
     table = Step.warmed(table)
-    parts = Step.parts(module, node, table, context)
+
+    with {:ok, parts} <- Step.parts(module, node, table, context),
+         do: run(cache, module, node, table, context, parts)
+  end
+
+  @doc "As `run/5`, `{table, cache}`, raising `ArgumentError` naming the fault."
+  @spec run!(t(), module(), map(), Table.t(), map()) :: {Table.t(), t()}
+  def run!(%__MODULE__{} = cache, module, node, %Table{} = table, context) do
+    case run(cache, module, node, table, context) do
+      {:ok, output, cache} -> {output, cache}
+      {:error, fault} -> raise ArgumentError, Step.format_error(fault)
+    end
+  end
+
+  defp run(cache, module, node, table, context, parts) do
     found = Enum.map(parts, &found(module, node, &1, cache.parts))
 
     missing = for {:compute, part} <- found, do: part
@@ -77,7 +93,7 @@ defmodule Macaw.Data.Operations.Cache do
       )
 
     output = Step.merge(module, node, partials, table, Enum.map(parts, & &1.key), context)
-    {output, %__MODULE__{parts: held, last: last}}
+    {:ok, output, %__MODULE__{parts: held, last: last}}
   end
 
   # How a part is come by: held under its key, updated by inverse from its base's part

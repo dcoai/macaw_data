@@ -118,6 +118,9 @@ defmodule Macaw.Data.Operations.Aggregates do
 
     @impl true
     def name, do: "count"
+
+    @impl true
+    def reads, do: :any
     @impl true
     def options, do: []
     @impl true
@@ -145,6 +148,9 @@ defmodule Macaw.Data.Operations.Aggregates do
 
     @impl true
     def name, do: "distinct"
+
+    @impl true
+    def reads, do: :any
     @impl true
     def options, do: []
     @impl true
@@ -169,6 +175,9 @@ defmodule Macaw.Data.Operations.Aggregates do
 
     @impl true
     def name, do: "min"
+
+    @impl true
+    def reads, do: :comparable
     @impl true
     def options, do: []
     @impl true
@@ -203,6 +212,9 @@ defmodule Macaw.Data.Operations.Aggregates do
 
     @impl true
     def name, do: "max"
+
+    @impl true
+    def reads, do: :comparable
     @impl true
     def options, do: []
     @impl true
@@ -237,6 +249,9 @@ defmodule Macaw.Data.Operations.Aggregates do
 
     @impl true
     def name, do: "extent"
+
+    @impl true
+    def reads, do: :comparable
     @impl true
     def options, do: []
     @impl true
@@ -285,6 +300,9 @@ defmodule Macaw.Data.Operations.Aggregates do
 
     @impl true
     def name, do: "sum"
+
+    @impl true
+    def reads, do: :number
     @impl true
     def options, do: []
     @impl true
@@ -316,6 +334,9 @@ defmodule Macaw.Data.Operations.Aggregates do
 
     @impl true
     def name, do: "mean"
+
+    @impl true
+    def reads, do: :number
     @impl true
     def options, do: []
     @impl true
@@ -344,6 +365,9 @@ defmodule Macaw.Data.Operations.Aggregates do
 
     @impl true
     def name, do: "median"
+
+    @impl true
+    def reads, do: :number
     @impl true
     def options, do: []
     @impl true
@@ -378,6 +402,9 @@ defmodule Macaw.Data.Operations.Aggregates do
     def name, do: "quantile"
 
     @impl true
+    def reads, do: :number
+
+    @impl true
     def options,
       do: [{"p", %Option{type: {:number, 0, 1}, required: true, doc: "the quantile, 0 to 1"}}]
 
@@ -407,6 +434,9 @@ defmodule Macaw.Data.Operations.Aggregates do
 
     @impl true
     def name, do: "variance"
+
+    @impl true
+    def reads, do: :number
     @impl true
     def options, do: []
     @impl true
@@ -442,6 +472,9 @@ defmodule Macaw.Data.Operations.Aggregates do
 
     @impl true
     def name, do: "deviation"
+
+    @impl true
+    def reads, do: :number
     @impl true
     def options, do: []
     @impl true
@@ -479,6 +512,9 @@ defmodule Macaw.Data.Operations.Aggregates do
 
     @impl true
     def name, do: "slope"
+
+    @impl true
+    def reads, do: :point
     @impl true
     def options, do: []
     @impl true
@@ -521,6 +557,9 @@ defmodule Macaw.Data.Operations.Aggregates do
 
     @impl true
     def name, do: "delta"
+
+    @impl true
+    def reads, do: :number
     @impl true
     def options, do: []
     @impl true

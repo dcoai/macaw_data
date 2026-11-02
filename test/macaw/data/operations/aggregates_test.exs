@@ -136,7 +136,7 @@ defmodule Macaw.Data.Operations.AggregatesTest do
     end
 
     @tag verifies: "operations-statistics-values"
-    test "a reading of the wrong kind raises naming the aggregate" do
+    test "a reading of the wrong kind is a fault naming what the aggregate reads" do
       for {name, values} <- [
             {"sum", [1, "2"]},
             {"mean", [@t1]},
@@ -151,11 +151,22 @@ defmodule Macaw.Data.Operations.AggregatesTest do
             {"extent", [@t1, ~D[2026-01-01]]}
           ] do
         options = if name == "quantile", do: %{p: 0.5}, else: %{}
+        {:ok, module} = Operations.aggregate(Operations.registry(), name)
+        reads = Macaw.Data.Aggregate.reads(module)
 
-        assert_raise ArgumentError, ~r/^aggregate "#{name}": .* is not /, fn ->
-          agg(name, values, options)
-        end
+        assert Operations.aggregate(Operations.registry(), name, values, options) ==
+                 {:error, [{["values"], {:reads, reads}}]}
       end
+
+      # What each reads: numbers, comparable readings, points, or anything.
+      assert Enum.map(~w(count distinct min max extent sum mean slope), fn name ->
+               {:ok, module} = Operations.aggregate(Operations.registry(), name)
+               Macaw.Data.Aggregate.reads(module)
+             end) == [:any, :any, :comparable, :comparable, :comparable, :number, :number, :point]
+
+      # A time of one kind is comparable; times of two kinds are not, nor is a nil alone a kind.
+      assert agg("min", [@t1, nil, ~U[2026-01-01 00:00:00Z]]) == ~U[2026-01-01 00:00:00Z]
+      assert agg("max", [nil]) == nil
     end
   end
 

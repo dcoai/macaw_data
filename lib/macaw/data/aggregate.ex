@@ -64,5 +64,20 @@ defmodule Macaw.Data.Aggregate do
   """
   @callback retract(term(), term(), options()) :: {:ok, term()} | :inexact
 
-  @optional_callbacks init: 1, step: 3, finish: 2, merge: 3, retract: 3
+  @doc """
+  What every reading is read as (spec/04 §3.1, §5), checked over the readings before any
+  is reduced, so `reduce/2` and `step/3` never meet another: `:number`, `:comparable`
+  (numbers, or instants of one kind), `:point` (a number or a point `[x, y]`), or `:any`,
+  the default when an aggregate does not say.
+  """
+  @callback reads() :: :number | :comparable | :point | :any
+
+  @optional_callbacks init: 1, step: 3, finish: 2, merge: 3, retract: 3, reads: 0
+
+  @doc "What `aggregate`'s readings are read as: its `reads/0`, `:any` when it has none."
+  @spec reads(module()) :: :number | :comparable | :point | :any
+  def reads(aggregate) do
+    Code.ensure_loaded(aggregate)
+    if function_exported?(aggregate, :reads, 0), do: aggregate.reads(), else: :any
+  end
 end

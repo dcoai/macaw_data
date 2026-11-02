@@ -56,7 +56,7 @@ defmodule Macaw.Data.Operations.SandboxOpsLoadTest do
     compiled =
       for {name, options} <- @transforms do
         source =
-          ~s'fn rows -> rows |> Macaw.Data.Ops.transform("#{name}", #{options}) |> Enum.count() end'
+          ~s'fn rows -> rows |> Macaw.Data.Ops.transform!("#{name}", #{options}) |> Enum.count() end'
 
         {:ok, compiled} = Sandbox.compile(source)
         compiled
@@ -77,7 +77,7 @@ defmodule Macaw.Data.Operations.SandboxOpsLoadTest do
 
     for offset <- ~w(none expand silhouette wiggle diverging) do
       source =
-        ~s'fn rows -> rows |> Macaw.Data.Ops.transform("stack", %{fields: ["a", "b"], offset: "#{offset}"}) |> Enum.count() end'
+        ~s'fn rows -> rows |> Macaw.Data.Ops.transform!("stack", %{fields: ["a", "b"], offset: "#{offset}"}) |> Enum.count() end'
 
       {:ok, compiled} = Sandbox.compile(source)
       assert Sandbox.run(compiled, [rows]) == {:ok, 40_000}, offset
@@ -91,7 +91,7 @@ defmodule Macaw.Data.Operations.SandboxOpsLoadTest do
         options = if module.name() == "quantile", do: "%{p: 0.95}", else: "%{}"
 
         source =
-          ~s'fn rows -> rows |> Enum.map(& &1.v) |> Macaw.Data.Ops.aggregate("#{module.name()}", #{options}) end'
+          ~s'fn rows -> rows |> Enum.map(& &1.v) |> Macaw.Data.Ops.aggregate!("#{module.name()}", #{options}) end'
 
         {:ok, compiled} = Sandbox.compile(source)
         compiled

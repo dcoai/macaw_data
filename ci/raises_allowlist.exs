@@ -97,88 +97,18 @@
     reason: "native: :required without a toolchain fails the build (spec/04 §1.7)"
   },
   %{
-    site: "Macaw.Data.Operations.step_digest/2",
-    count: 1,
-    class: :convert,
-    reason: "bad input it answers with a raise; #118 converts it"
-  },
-  %{
-    site: "Macaw.Data.Operations.run/4",
-    count: 1,
-    class: :convert,
-    reason: "bad input it answers with a raise; #118 converts it"
-  },
-  %{
-    site: "Macaw.Data.Operations.table!/1",
-    count: 1,
-    class: :convert,
-    reason: "bad input it answers with a raise; #118 converts it"
-  },
-  %{
     site: "Macaw.Data.Operations.Aggregates.wrong!/3",
     count: 1,
-    class: :convert,
-    reason: "bad input it answers with a raise; #118 converts it"
-  },
-  %{
-    site: "Macaw.Data.Operations.Registry.build/2",
-    count: 1,
-    class: :convert,
-    reason: "bad input it answers with a raise; #118 converts it"
-  },
-  %{
-    site: "Macaw.Data.Operations.Registry.members!/1",
-    count: 1,
-    class: :convert,
-    reason: "bad input it answers with a raise; #118 converts it"
-  },
-  %{
-    site: "Macaw.Data.Operations.Registry.kind/2",
-    count: 1,
-    class: :convert,
-    reason: "bad input it answers with a raise; #118 converts it"
-  },
-  %{
-    site: "Macaw.Data.Operations.Registry.named/2",
-    count: 1,
-    class: :convert,
-    reason: "bad input it answers with a raise; #118 converts it"
+    class: :invariant,
+    reason:
+      "a reading an aggregate does not read: Operations.aggregate/4 and the grouping steps check every reading with Aggregate.reads/1 before reducing, and answer {:reads, kind}; reduce/2 and step/3 take readings as reads/0 declares (spec/04 §3.1, §5)"
   },
   %{
     site: "Macaw.Data.Operations.Transforms.not_a!/4",
     count: 1,
-    class: :convert,
-    reason: "bad input it answers with a raise; #118 converts it"
-  },
-  %{
-    site: "Macaw.Data.Operations.Transforms.Ladder.kind!/3",
-    count: 1,
-    class: :convert,
-    reason: "bad input it answers with a raise; #118 converts it"
-  },
-  %{
-    site: "Macaw.Data.Operations.Transforms.Filter.at/4",
-    count: 1,
-    class: :convert,
-    reason: "bad input it answers with a raise; #118 converts it"
-  },
-  %{
-    site: "Macaw.Data.Operations.Transforms.Spectrum.names/1",
-    count: 1,
-    class: :convert,
-    reason: "bad input it answers with a raise; #118 converts it"
-  },
-  %{
-    site: "Macaw.Data.Operations.Transforms.Window.identity!/2",
-    count: 2,
-    class: :convert,
-    reason: "bad input it answers with a raise; #118 converts it"
-  },
-  %{
-    site: "Macaw.Data.Ops.__run__/5",
-    count: 3,
-    class: :convert,
-    reason: "bad input it answers with a raise; #118 converts it"
+    class: :invariant,
+    reason:
+      "a reading of the wrong kind inside a step: each step's bind/3 checks its columns with Transforms.readings/3 before any chunk is read, and answers {:reads, kind} (spec/04 §3.1)"
   },
   %{
     site: "Macaw.Data.Quantity.resolve!/1",
@@ -257,5 +187,12 @@
     count: 1,
     class: :convert,
     reason: "bad input it answers with a raise; #120 converts it"
+  },
+  %{
+    site: "Macaw.Data.Ops.value!/2",
+    count: 1,
+    class: :bang,
+    reason:
+      "the Ops bang twins' one raise (aggregate!/2,3, transform!/2,3, and __run__/5's ! kinds): their twin's faults in format_error/1's words"
   }
 ]

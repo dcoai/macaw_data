@@ -78,35 +78,43 @@ defmodule Macaw.Data.Operations.Transforms.Ladder do
   @doc """
   The step's fields, the scale's kind and the x extent over the whole input, once:
   `%{x, y, x_name, y_name, kind, extent}`, `extent` `{lo, hi}` in the space or `nil`.
-  A sorted x column is read at its ends, any other scanned.
+  A sorted x column is read at its ends, any other scanned. A context's scale that is not
+  one of linear, time or log is `{"op", {:unknown, :scale, scale}}`; an x reading the
+  scale cannot place, or a y reading that is no number, `{"fields", {:reads, kind}}`
+  (spec/04 §3.1), answered before any row is read.
   """
-  @spec bind([Table.name()], Table.t(), map(), String.t()) :: map()
+  @spec bind([Table.name()], Table.t(), map(), String.t()) ::
+          map() | {:error, {String.t(), term()}}
   def bind([x, y], table, context, op) do
     names = Table.names(table)
     x_name = Transforms.name_in(names, x)
     y_name = Transforms.name_in(names, y)
-    kind = kind!(Map.get(context, :scale), x_name && Table.column_type(table, x_name), op)
-    sorted? = x_name != nil and Table.sorted(table) == x_name
-    bound = %{x: x, y: y, x_name: x_name, y_name: y_name, kind: kind}
-    Map.put(bound, :extent, extent(Table.chunks(table), bound, sorted?, op))
-  end
+    scale = Map.get(context, :scale)
 
-  defp kind!(nil, :time, _op), do: :time
-  defp kind!(nil, _type, _op), do: :linear
-  defp kind!(kind, _type, _op) when kind in @kinds, do: kind
-
-  defp kind!(kind, type, op) when is_binary(kind) do
-    case Enum.find(@kinds, &(Atom.to_string(&1) == kind)) do
-      nil -> kind!(:unknown, type, op)
-      found -> found
+    with {:ok, kind} <- kind(scale, x_name && Table.column_type(table, x_name)),
+         :ok <- Transforms.readings(table, x_name, if(kind == :log, do: :positive, else: :time)),
+         :ok <- Transforms.readings(table, y_name, :number) do
+      sorted? = x_name != nil and Table.sorted(table) == x_name
+      bound = %{x: x, y: y, x_name: x_name, y_name: y_name, kind: kind}
+      Map.put(bound, :extent, extent(Table.chunks(table), bound, sorted?, op))
+    else
+      :error -> {:error, {"op", {:unknown, :scale, scale}}}
+      {:error, reason} -> {:error, {"fields", reason}}
     end
   end
 
-  defp kind!(kind, _type, op) do
-    raise ArgumentError,
-          "transform #{inspect(op)}: scale #{inspect(kind)} is not one of linear, time or " <>
-            "log (spec/04 §4.4)"
+  defp kind(nil, :time), do: {:ok, :time}
+  defp kind(nil, _type), do: {:ok, :linear}
+  defp kind(kind, _type) when kind in @kinds, do: {:ok, kind}
+
+  defp kind(kind, _type) when is_binary(kind) do
+    case Enum.find(@kinds, &(Atom.to_string(&1) == kind)) do
+      nil -> :error
+      found -> {:ok, found}
+    end
   end
+
+  defp kind(_kind, _type), do: :error
 
   defp extent(_views, %{x_name: nil}, _sorted?, _op), do: nil
 

@@ -330,7 +330,7 @@ defmodule Macaw.Data.Derived.Sandbox.Checker do
             module == Enum and name == :into and not literal_target?(Enum.at(args, 1)) ->
               fault(state, {:into, :literal})
 
-            module == Macaw.Data.Ops ->
+            module == Macaw.Data.Ops and name != :format_error ->
               operation(name, Enum.at(args, 1), state)
 
             module == Macaw.Data.Derived.Columns ->
@@ -360,6 +360,8 @@ defmodule Macaw.Data.Derived.Sandbox.Checker do
   # A call of `Macaw.Data.Ops` names its operation by a literal string the registry holds,
   # one that needs nothing a derived source lacks (spec/04 §6.1). With no registry given
   # (a source checked before it is placed), the name need only be a literal.
+  defp operation(:aggregate!, name, state), do: operation(:aggregate, name, state)
+  defp operation(:transform!, name, state), do: operation(:transform, name, state)
   defp operation(kind, name, state) when is_binary(name), do: registered(kind, name, state)
   defp operation(_kind, _name, state), do: fault(state, {:operation_name, :literal})
 
@@ -445,7 +447,7 @@ defmodule Macaw.Data.Derived.Sandbox.Checker do
         fault(state, {:into, :literal})
 
       # A captured operation would be named when called, not when checked.
-      {:module, Macaw.Data.Ops} when name in [:aggregate, :transform] ->
+      {:module, Macaw.Data.Ops} when name in [:aggregate, :transform, :aggregate!, :transform!] ->
         fault(state, {:operation_name, :literal})
 
       {:module, module} ->

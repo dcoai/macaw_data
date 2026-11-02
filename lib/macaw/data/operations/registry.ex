@@ -21,91 +21,86 @@ defmodule Macaw.Data.Operations.Registry do
         }
 
   @doc false
-  # The registry of `packages`, in order, each listed once. Raises `ArgumentError` for a
-  # module that is not a package, a member implementing no behavior, two members of one
-  # behavior with one name, and an aggregate declaring a step's key as its own option.
-  @spec build([module()], [String.t()]) :: t()
+  # The registry of `packages`, in order, each listed once: `{:ok, registry}`, or every
+  # fault (spec/04 §2), each `{path, reason}`: `{[module], :not_a_package}` for a module
+  # with no `__members__/0`, `{[package, member], :no_behavior}` for a member implementing
+  # no behavior, `{[kind, name], {:named_twice, module, other}}` for two members of one
+  # behavior with one name, and `{[:aggregate, name], {:step_key, key}}` for an aggregate
+  # declaring a step's key as its own option.
+  @spec build([module()], [String.t()]) :: {:ok, t()} | {:error, [{list(), term()}, ...]}
   def build(packages, step_keys) do
     packages = Enum.uniq(packages)
+    {listed, faults} = Enum.flat_map_reduce(packages, [], &members/2)
+    {members, faults} = Enum.flat_map_reduce(listed, faults, &kind/2)
 
-    members =
-      for package <- packages, member <- members!(package) do
-        {kind(member, package), member, package}
-      end
+    {transforms, faults} =
+      named(for({:transform, m, p} <- members, do: {m, p}), :transform, faults)
 
-    transforms = named(for({:transform, m, p} <- members, do: {m, p}), "transform")
-    aggregates = named(for({:aggregate, m, p} <- members, do: {m, p}), "aggregate")
+    {aggregates, faults} =
+      named(for({:aggregate, m, p} <- members, do: {m, p}), :aggregate, faults)
 
-    for {name, {module, package}} <- aggregates,
-        {key, _option} <- module.options(),
-        key in step_keys do
-      raise ArgumentError,
-            "aggregate #{inspect(name)} (#{inspect(module)}, package #{inspect(package)}) " <>
-              "declares #{inspect(key)}, a key of the steps that name it (spec/04 §1.2)"
+    faults =
+      faults ++
+        for {name, {module, _package}} <- aggregates,
+            {key, _option} <- module.options(),
+            key in step_keys,
+            do: {[:aggregate, name], {:step_key, key}}
+
+    case faults do
+      [] ->
+        transforms = Map.new(transforms, fn {name, {module, _}} -> {name, module} end)
+        aggregates = Map.new(aggregates, fn {name, {module, _}} -> {name, module} end)
+
+        {:ok,
+         %__MODULE__{
+           packages: packages,
+           transforms: transforms,
+           aggregates: aggregates,
+           digest: digest(transforms, aggregates)
+         }}
+
+      faults ->
+        {:error, faults}
     end
-
-    transforms = Map.new(transforms, fn {name, {module, _}} -> {name, module} end)
-    aggregates = Map.new(aggregates, fn {name, {module, _}} -> {name, module} end)
-
-    %__MODULE__{
-      packages: packages,
-      transforms: transforms,
-      aggregates: aggregates,
-      digest: digest(transforms, aggregates)
-    }
   end
 
-  defp members!(package) do
+  defp members(package, faults) do
     Code.ensure_loaded(package)
 
-    function_exported?(package, :__members__, 0) ||
-      raise ArgumentError,
-            "#{inspect(package)} is not a package: it has no __members__/0 (spec/04 §2)"
-
-    package.__members__()
+    if function_exported?(package, :__members__, 0),
+      do: {Enum.map(package.__members__(), &{&1, package}), faults},
+      else: {[], faults ++ [{[package], :not_a_package}]}
   end
 
   # Which of the two behaviors a member implements, from its own @behaviour declarations.
   # A member of another Macaw behavior only is skipped here: its registry is the host's.
-  defp kind(member, package) do
+  defp kind({member, package}, faults) do
     Code.ensure_loaded(member)
 
     # spelling: allow, the attribute's name is Elixir's
     declared = member.module_info(:attributes) |> Keyword.get_values(:behaviour) |> List.flatten()
 
     cond do
-      Transform in declared ->
-        :transform
-
-      Aggregate in declared ->
-        :aggregate
-
-      declared == [] ->
-        raise ArgumentError,
-              "#{inspect(member)}, a member of #{inspect(package)}, implements no behavior " <>
-                "(spec/04 §2)"
-
-      true ->
-        :other
+      Transform in declared -> {[{:transform, member, package}], faults}
+      Aggregate in declared -> {[{:aggregate, member, package}], faults}
+      declared == [] -> {[], faults ++ [{[package, member], :no_behavior}]}
+      true -> {[], faults}
     end
   end
 
-  defp named(members, kind) do
-    Enum.reduce(members, %{}, fn {module, package}, acc ->
+  defp named(members, kind, faults) do
+    Enum.reduce(members, {%{}, faults}, fn {module, package}, {acc, faults} ->
       name = module.name()
 
       case Map.fetch(acc, name) do
         {:ok, {^module, _}} ->
-          acc
+          {acc, faults}
 
-        {:ok, {other, other_package}} ->
-          raise ArgumentError,
-                "#{kind} #{inspect(name)} is named twice: by #{inspect(other)} (package " <>
-                  "#{inspect(other_package)}) and #{inspect(module)} (package " <>
-                  "#{inspect(package)}) (spec/04 §2)"
+        {:ok, {other, _other_package}} ->
+          {acc, faults ++ [{[kind, name], {:named_twice, other, module}}]}
 
         :error ->
-          Map.put(acc, name, {module, package})
+          {Map.put(acc, name, {module, package}), faults}
       end
     end)
   end

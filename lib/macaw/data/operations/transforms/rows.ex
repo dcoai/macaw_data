@@ -54,7 +54,7 @@ defmodule Macaw.Data.Operations.Transforms.Filter do
   def outputs(_node, columns), do: columns
 
   @impl true
-  def run(node, table, context), do: Step.run(__MODULE__, node, table, context)
+  def run(node, table, context), do: Step.answer(__MODULE__, node, table, context)
 
   # A per-row step (spec/04 §1.4): each chunk decided from the one column it reads.
   @impl true
@@ -65,30 +65,28 @@ defmodule Macaw.Data.Operations.Transforms.Filter do
 
   # The column and, for an ordering or a time's `eq` and `ne`, the value's key under its
   # type, once over the input: a value of no reading for the column's type is the caller's
-  # fault, raised here, before any row is read (spec/04 §3.1). A column the rows lack has
-  # no type: every reading is `nil`, and no row passes.
+  # fault, `{"value", {:reading, type}}`, answered here, before any row is read (spec/04
+  # §3.1). A column the rows lack has no type: every reading is `nil`, and no row passes.
   @impl true
   def bind(%{"field" => field, "test" => test, "value" => value}, table, _context) do
     name = Transforms.name_in(Table.names(table), field)
     type = if name, do: Table.column_type(table, name)
-    %{bound: {name, type, at(test, type, value, field)}}
-  end
 
-  defp at(test, type, value, field)
-       when (test in @orderings and type != nil) or (test in @equalities and type == :time) do
-    case Order.key(type).(Table.at_edge(type, value)) do
-      nil ->
-        raise ArgumentError,
-              "filter, value: #{inspect(test)} compares the #{inspect(type)} field " <>
-                "#{inspect(field)} with a value of its type, and #{inspect(value)} is none " <>
-                "(spec/04 §4.1)"
-
-      key ->
-        key
+    case at(test, type, value) do
+      {:ok, key} -> %{bound: {name, type, key}}
+      :error -> {:error, {"value", {:reading, type}}}
     end
   end
 
-  defp at(_test, _type, _value, _field), do: nil
+  defp at(test, type, value)
+       when (test in @orderings and type != nil) or (test in @equalities and type == :time) do
+    case Order.key(type).(Table.at_edge(type, value)) do
+      nil -> :error
+      key -> {:ok, key}
+    end
+  end
+
+  defp at(_test, _type, _value), do: {:ok, nil}
 
   @impl true
   def resolve(_node, _view, %{bound: bound}), do: bound
@@ -309,7 +307,7 @@ defmodule Macaw.Data.Operations.Transforms.Take do
   def outputs(_node, columns), do: columns
 
   @impl true
-  def run(node, table, context), do: Step.run(__MODULE__, node, table, context)
+  def run(node, table, context), do: Step.answer(__MODULE__, node, table, context)
 
   # A per-row step (spec/04 §1.4) that reads no column: each chunk's run is decided by
   # where the chunk sits, so a chunk it does not return is never read.
@@ -372,7 +370,7 @@ defmodule Macaw.Data.Operations.Transforms.Sort do
   def outputs(_node, columns), do: columns
 
   @impl true
-  def run(node, table, context), do: Step.run(__MODULE__, node, table, context)
+  def run(node, table, context), do: Step.answer(__MODULE__, node, table, context)
 
   # A global step (spec/04 §1.4): each chunk's part is its readings of the field; the
   # merge sorts every row of every chunk stably and gathers them across the chunks.
@@ -457,7 +455,7 @@ defmodule Macaw.Data.Operations.Transforms.Fold do
   end
 
   @impl true
-  def run(node, table, context), do: Step.run(__MODULE__, node, table, context)
+  def run(node, table, context), do: Step.answer(__MODULE__, node, table, context)
 
   # A per-row reshape (spec/04 §1.4): each chunk's rows repeated once per listed column
   # each holds, the carried columns gathered at the repeated indexes and the key and

@@ -424,8 +424,8 @@ defmodule Macaw.Data.Derived.SandboxTest do
           for i <- 1..arity//1 do
             case {module, name, i} do
               {Enum, :into, 2} -> "[]"
-              {Macaw.Data.Ops, :aggregate, 2} -> ~S("sum")
-              {Macaw.Data.Ops, :transform, 2} -> ~S("sort")
+              {Macaw.Data.Ops, kind, 2} when kind in [:aggregate, :aggregate!] -> ~S("sum")
+              {Macaw.Data.Ops, kind, 2} when kind in [:transform, :transform!] -> ~S("sort")
               _other -> "rows"
             end
           end
@@ -456,7 +456,7 @@ defmodule Macaw.Data.Derived.SandboxTest do
     test "a stored function with interpolation and lttb runs through the bounded runner" do
       source = ~S"""
       fn rows ->
-        kept = Macaw.Data.Ops.transform(rows, "lttb", %{fields: ["t", "load"], n: 3})
+        kept = Macaw.Data.Ops.transform!(rows, "lttb", %{fields: ["t", "load"], n: 3})
         total = Enum.sum_by(rows, & &1.load)
         "#{Enum.count(rows)} samples, total #{total}, kept #{Enum.map_join(kept, ",", & &1.t)}"
       end

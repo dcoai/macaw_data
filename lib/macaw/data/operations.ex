@@ -16,7 +16,7 @@ defmodule Macaw.Data.Operations do
   every node. Each fault is `{path, reason}` (spec/04 §3.1) and `format_error/1` words one.
 
       iex> alias Macaw.Data.Operations
-      iex> registry = Operations.registry([Macaw.Data.Test.Ops])
+      iex> {:ok, registry} = Operations.registry([Macaw.Data.Test.Ops])
       iex> {:ok, table} = Operations.apply(registry, [%{op: "double", field: "v"}], [%{v: 2}], %{})
       iex> Macaw.Data.Table.rows(table)
       [%{:v => 2, "double" => 4}]
@@ -25,14 +25,21 @@ defmodule Macaw.Data.Operations do
   """
 
   alias Macaw.Data.Operations.{Aggregates, Option, Registry, Transforms}
+
+  # `table` is optional: a source is asked about its protocol only when it is loaded.
+  @compile {:no_warn_undefined, [Elixir.Table.Reader]}
   alias Macaw.Data.Table
 
   # The keys of the steps that name an aggregate, which an aggregate may not declare as
   # its own (spec/04 §1.2).
   @step_keys ~w(op field by as fn thresholds values)
 
-  @typedoc "A fault: the path (a node's index, then its key) and the reason (spec/04 §3.1)."
-  @type fault :: {[non_neg_integer() | String.t()], term()}
+  @typedoc """
+  A fault: the path (a node's index, then its key; `"source"` and the table's path for a
+  source that is no table; a package and member, or a member's kind and name, for the
+  registry) and the reason (spec/04 §2, §3.1).
+  """
+  @type fault :: {[non_neg_integer() | String.t() | atom() | term()], term()}
 
   @doc "The modules of `macaw_data`'s package: its table operations and statistics."
   @spec __members__() :: [module()]
@@ -45,13 +52,31 @@ defmodule Macaw.Data.Operations do
   # -- the registry -----------------------------------------------------------------------
 
   @doc """
-  The registry of this package and `packages`, in order, each once (spec/04 §2). Raises
-  `ArgumentError` for a module that is not a package, a member implementing no behavior,
-  a name two members of one behavior share, and an aggregate declaring a step's key.
+  The registry of this package alone (spec/04 §2), which nothing a caller passes can fail.
   """
-  @spec registry([module()]) :: Registry.t()
-  def registry(packages \\ []) when is_list(packages),
+  @spec registry() :: Registry.t()
+  def registry, do: registry!([])
+
+  @doc """
+  The registry of this package and `packages`, in order, each once (spec/04 §2):
+  `{:ok, registry}`, or every fault, `{path, reason}`: `{[module], :not_a_package}` for a
+  module that is not a package, `{[package, member], :no_behavior}` for a member
+  implementing no behavior, `{[kind, name], {:named_twice, module, other}}` for a name two
+  members of one behavior share, and `{[:aggregate, name], {:step_key, key}}` for an
+  aggregate declaring a step's key.
+  """
+  @spec registry([module()]) :: {:ok, Registry.t()} | {:error, [fault(), ...]}
+  def registry(packages) when is_list(packages),
     do: Registry.build([__MODULE__ | packages], @step_keys)
+
+  @doc "As `registry/1`, raising `ArgumentError` naming every fault."
+  @spec registry!([module()]) :: Registry.t()
+  def registry!(packages) when is_list(packages) do
+    case registry(packages) do
+      {:ok, registry} -> registry
+      {:error, faults} -> raise ArgumentError, Enum.map_join(faults, "; ", &format_error/1)
+    end
+  end
 
   @doc "The transform named `name`, by spelling: `{:ok, module}` or `:error`."
   @spec transform(Registry.t(), String.t() | atom()) :: {:ok, module()} | :error
@@ -82,18 +107,27 @@ defmodule Macaw.Data.Operations do
   transform module the registry gives its name and the node `validate/3` checked, its
   options by their strings with defaults filled in. Two nodes that mean the same step have
   one identity whatever order their options were written in, and a step whose name another
-  registry gives to another module has another. A node naming no transform of the registry
-  raises `ArgumentError`: only a checked node has an identity.
+  registry gives to another module has another. `{:ok, digest}`; only a checked node has
+  an identity, so a node naming no transform of the registry is
+  `{:error, {["op"], {:unknown, :transform, op}}}`, and one with no `"op"`
+  `{:error, {["op"], :required}}`.
   """
-  @spec step_digest(Registry.t(), map()) :: String.t()
+  @spec step_digest(Registry.t(), map()) :: {:ok, String.t()} | {:error, fault()}
   def step_digest(%Registry{} = registry, %{"op" => op} = node) do
     case Registry.transform(registry, op) do
-      {:ok, module} ->
-        Macaw.Layers.Document.digest(%{"module" => module, "node" => node})
+      {:ok, module} -> {:ok, Macaw.Layers.Document.digest(%{"module" => module, "node" => node})}
+      :error -> {:error, {["op"], {:unknown, :transform, op}}}
+    end
+  end
 
-      :error ->
-        raise ArgumentError,
-              "step_digest/2 takes a checked node; #{inspect(op)} names no transform"
+  def step_digest(%Registry{}, node) when is_map(node), do: {:error, {["op"], :required}}
+
+  @doc "As `step_digest/2`, raising `ArgumentError` naming the fault."
+  @spec step_digest!(Registry.t(), map()) :: String.t()
+  def step_digest!(%Registry{} = registry, node) do
+    case step_digest(registry, node) do
+      {:ok, digest} -> digest
+      {:error, fault} -> raise ArgumentError, format_error(fault)
     end
   end
 
@@ -210,14 +244,25 @@ defmodule Macaw.Data.Operations do
   @doc """
   The nodes run in order over `source`, a `Macaw.Data.Table` or anything
   `Macaw.Data.Table.from/2` reads, each step's table the next one's input:
-  `{:ok, table}`, or `validate/3`'s `{:error, faults}` before any step runs. A step whose
-  reading is wrong only at run time raises `ArgumentError` naming the step (spec/04 §3.1).
+  `{:ok, table}`, or `validate/3`'s `{:error, faults}` before any step runs. A source that
+  is no table is `Macaw.Data.Table.from/2`'s faults under `"source"`. A step that refuses its input
+  at run time stops the run with its fault at its index (spec/04 §3.1): a reading of the
+  wrong kind, `{[i, key], {:reads, kind}}`, and the like; a transform answering something
+  that is not a table is `{[i, "op"], :not_a_table}`.
   """
   @spec apply(Registry.t(), [map()], Table.source() | Table.t(), map()) ::
           {:ok, Table.t()} | {:error, [fault(), ...]}
   def apply(%Registry{} = registry, nodes, source, context \\ %{}) do
-    with {:ok, checked} <- validate(registry, nodes, context) do
-      {:ok, Enum.reduce(checked, table!(source), &run(registry, &1, &2, context))}
+    with {:ok, checked} <- validate(registry, nodes, context),
+         {:ok, table} <- source(source) do
+      checked
+      |> Enum.with_index()
+      |> Enum.reduce_while({:ok, table}, fn {node, i}, {:ok, table} ->
+        case run(registry, node, table, context) do
+          %Table{} = table -> {:cont, {:ok, table}}
+          {:error, {key, reason}} -> {:halt, {:error, [{[i, key], reason}]}}
+        end
+      end)
     end
   end
 
@@ -230,31 +275,59 @@ defmodule Macaw.Data.Operations do
     end
   end
 
+  # One checked node run: the table, or the step's fault (`Macaw.Data.Transform.run/3`).
   defp run(registry, %{"op" => op} = node, table, context) do
     {:ok, module} = Registry.transform(registry, op)
 
     case module.run(node, table, context) do
-      %Table{} = table ->
-        table
-
-      other ->
-        raise ArgumentError,
-              "transform #{inspect(op)} (#{inspect(module)}) answered #{inspect(other)}, " <>
-                "not a Macaw.Data.Table (spec/04 §1.1)"
+      %Table{} = table -> table
+      {:error, {key, _reason}} = error when is_binary(key) -> error
+      _other -> {:error, {"op", :not_a_table}}
     end
   end
 
-  defp table!(source) do
-    case Table.from(source) do
-      {:ok, table} -> table
-      {:error, faults} -> raise ArgumentError, "not a table: #{inspect(faults)}"
+  defp source(%Table{} = table), do: {:ok, table}
+
+  defp source(source) do
+    if shaped?(source) do
+      case Table.from(source) do
+        {:ok, table} ->
+          {:ok, table}
+
+        {:error, faults} ->
+          {:error, for({path, reason} <- faults, do: {["source" | path], reason})}
+      end
+    else
+      {:error, [{["source"], :not_a_table}]}
     end
   end
+
+  # A source of a shape `Table.from/2` reads (spec/01 §1.1): row maps, `{name, values}`
+  # columns, a map of columns, a tensor or a `Table.Reader` source; told apart without
+  # reading a value.
+  defp shaped?(rows) when is_list(rows) do
+    Enum.all?(rows, &(is_map(&1) and not is_struct(&1))) or
+      Enum.all?(
+        rows,
+        &match?({name, values} when is_list(values) and (is_atom(name) or is_binary(name)), &1)
+      )
+  end
+
+  defp shaped?(%{__struct__: Nx.Tensor}), do: true
+
+  defp shaped?(%_{} = struct),
+    do: Code.ensure_loaded?(Elixir.Table.Reader) and Elixir.Table.Reader.impl_for(struct) != nil
+
+  defp shaped?(columns) when is_map(columns),
+    do: Enum.all?(columns, fn {_name, values} -> is_list(values) end)
+
+  defp shaped?(_other), do: false
 
   @doc """
   The value of `values` by the aggregate named `name`, its `options` checked against its
   declaration and every `nil` reading dropped: `{:ok, value}` or `{:error, faults}`, each
-  fault at its option's key (`[]` for the name itself).
+  fault at its option's key (`[]` for the name itself). A reading the aggregate does not
+  read (`Macaw.Data.Aggregate.reads/1`) is `{["values"], {:reads, kind}}`.
   """
   @spec aggregate(Registry.t(), String.t() | atom(), Enumerable.t(), map()) ::
           {:ok, term()} | {:error, [fault(), ...]}
@@ -273,8 +346,14 @@ defmodule Macaw.Data.Operations do
               key not in keys(module.options()),
               do: {[key], {:invalid_for, module.name()}}
 
-        case Enum.sort(faults ++ unread) do
-          [] -> {:ok, module.reduce(Enum.reject(values, &is_nil/1), checked)}
+        values = Enum.reject(values, &is_nil/1)
+        kind = Macaw.Data.Aggregate.reads(module)
+
+        read =
+          if Transforms.read_as?(values, kind), do: [], else: [{["values"], {:reads, kind}}]
+
+        case Enum.sort(faults ++ unread ++ read) do
+          [] -> {:ok, module.reduce(values, checked)}
           faults -> {:error, faults}
         end
     end
@@ -350,15 +429,45 @@ defmodule Macaw.Data.Operations do
 
   defp where([i]) when is_integer(i), do: "step #{i + 1}"
   defp where([i, key]) when is_integer(i), do: "step #{i + 1}, #{key}"
+  defp where(["source" | path]), do: Enum.map_join(["source" | path], ", ", &to_text/1)
+  defp where([kind, name]) when kind in [:transform, :aggregate], do: "#{kind} #{inspect(name)}"
+
+  defp where([package, member]) when is_atom(package),
+    do: "#{inspect(member)} of #{inspect(package)}"
+
+  defp where([module]) when is_atom(module), do: inspect(module)
   defp where([key]), do: key
   defp where([]), do: "the name"
 
+  defp to_text(part) when is_binary(part) or is_atom(part) or is_integer(part),
+    do: to_string(part)
+
+  defp to_text(part), do: inspect(part)
+
+  defp why(:not_a_table), do: "is not a table"
+  defp why(:not_a_package), do: "is not a package: it has no __members__/0"
+  defp why(:no_behavior), do: "implements no behavior"
+
+  defp why({:named_twice, module, other}),
+    do: "is named twice: by #{inspect(module)} and #{inspect(other)}"
+
+  defp why({:step_key, key}), do: "declares #{inspect(key)}, a key of the steps that name it"
+  defp why({:reads, kind}), do: "reads a value that is not #{reading(kind)}"
+  defp why({:reading, type}), do: "is no value of the field's type, #{type}"
+  defp why({:context, key, kind}), do: "the context's #{key} is not #{reading(kind)}"
   defp why(:required), do: "is required"
   defp why(:not_a_node), do: "is not a node (a map with an op)"
   defp why({:invalid_for, op}), do: "is not read by #{op}"
   defp why({:unknown, kind, name}), do: "#{kind} #{inspect(name)} is not available"
   defp why({:needs, need}), do: "needs a #{need}, which the caller does not give"
   defp why({:type, type}), do: "is #{words(type)}"
+  defp why(other), do: inspect(other)
+
+  defp reading(:number), do: "a number"
+  defp reading(:time), do: "a time or a number"
+  defp reading(:positive), do: "a number above zero"
+  defp reading(:comparable), do: "a number, or a time of the first reading's kind"
+  defp reading(:point), do: "a number or a point [x, y]"
 
   defp words(:field), do: "a field name"
   defp words(:name), do: "a column name"
@@ -369,9 +478,10 @@ defmodule Macaw.Data.Operations do
   defp words({:integer, min}), do: "an integer of at least #{min}"
   defp words(:power_of_two), do: "a power of two"
   defp words(:boolean), do: "true or false"
-  defp words({:enum, atoms}), do: "one of " <> or_list(Enum.map(atoms, &Atom.to_string/1))
+  defp words({:enum, atoms}), do: "one of " <> or_list(Enum.map(atoms, &to_string/1))
   defp words({:keys, _}), do: "a fixed order of keys"
   defp words({:list, type}), do: "a list, each #{words(type)}"
+  defp words({:list, type, min, max}), do: "a list of #{min} to #{max}, each #{words(type)}"
   defp words({:pair, type}), do: "a pair, each #{words(type)}"
   defp words({:one_of, types}), do: types |> Enum.map(&words/1) |> or_list()
   defp words(:duration), do: "a duration [n, unit], unit one of " <> or_list(units())

@@ -11,7 +11,7 @@ defmodule Macaw.Data.OperationsTest do
   doctest Macaw.Data.Operations
   doctest Macaw.Data.Operations.Option
 
-  defp registry, do: Operations.registry([Ops])
+  defp registry, do: Operations.registry!([Ops])
 
   defp rows(table), do: Table.rows(table)
 
@@ -75,6 +75,7 @@ defmodule Macaw.Data.OperationsTest do
                finish: 2,
                init: 1,
                merge: 3,
+               reads: 0,
                retract: 3,
                step: 3
              ]
@@ -219,7 +220,7 @@ defmodule Macaw.Data.OperationsTest do
 
       assert Operations.transform(own, "double") == :error
 
-      r = Operations.registry([Ops, Ops])
+      r = Operations.registry!([Ops, Ops])
       assert Operations.packages(r) == [Operations, Ops]
       assert "double" in Operations.transforms(r) and "layout" in Operations.transforms(r)
       assert "spread" in Operations.aggregates(r)
@@ -234,22 +235,28 @@ defmodule Macaw.Data.OperationsTest do
     end
 
     @tag verifies: "operations-registry-build"
-    test "a duplicate name, a step's key and a member of no behavior each raise naming it" do
+    test "a duplicate name, a step's key and a member of no behavior are each a fault naming it" do
+      assert Operations.registry([Ops, Ops.Twin]) ==
+               {:error, [{[:transform, "double"], {:named_twice, Ops.Double, Ops.Twin.Double}}]}
+
+      assert Operations.registry([Ops.Greedy]) ==
+               {:error, [{[:aggregate, "by_field"], {:step_key, "field"}}]}
+
+      assert Operations.registry([Ops.Stray]) == {:error, [{[Ops.Stray, String], :no_behavior}]}
+      assert Operations.registry([Enum]) == {:error, [{[Enum], :not_a_package}]}
+
+      # Every fault at once, and registry!/1 raises them in format_error/1's words.
+      assert {:error, [_, _]} = Operations.registry([Enum, Ops.Stray])
+
       assert_raise ArgumentError,
-                   ~r/"double" is named twice: by .*Ops.Double .*Ops.Twin.Double/,
-                   fn ->
-                     Operations.registry([Ops, Ops.Twin])
-                   end
+                   ~s(transform "double": is named twice: by Macaw.Data.Test.Ops.Double and Macaw.Data.Test.Ops.Twin.Double),
+                   fn -> Operations.registry!([Ops, Ops.Twin]) end
 
-      assert_raise ArgumentError, ~r/"by_field" .*declares "field"/, fn ->
-        Operations.registry([Ops.Greedy])
+      assert_raise ArgumentError, "Enum: is not a package: it has no __members__/0", fn ->
+        Operations.registry!([Enum])
       end
 
-      assert_raise ArgumentError, ~r/String, a member of .*Stray, implements no behavior/, fn ->
-        Operations.registry([Ops.Stray])
-      end
-
-      assert_raise ArgumentError, ~r/Enum is not a package/, fn -> Operations.registry([Enum]) end
+      assert {:ok, %Registry{}} = Operations.registry([Ops])
     end
 
     @tag verifies: "operations-step-digest"
@@ -288,22 +295,29 @@ defmodule Macaw.Data.OperationsTest do
           %{}
         )
 
-      assert Operations.step_digest(registry, a) == Operations.step_digest(registry, b)
-      assert Operations.step_digest(registry, a) != Operations.step_digest(registry, c)
+      assert Operations.step_digest!(registry, a) == Operations.step_digest!(registry, b)
+      assert Operations.step_digest!(registry, a) != Operations.step_digest!(registry, c)
 
       # The same name and options under another module are another step.
-      assert Operations.step_digest(registry, a) !=
+      assert Operations.step_digest!(registry, a) !=
                Macaw.Layers.Document.digest(%{"module" => Macaw.Data.Test.Ops.Twin, "node" => a})
 
-      assert_raise ArgumentError, ~r/"nope" names no transform/, fn ->
-        Operations.step_digest(registry, %{"op" => "nope"})
+      assert Operations.step_digest(registry, %{"op" => "nope"}) ==
+               {:error, {["op"], {:unknown, :transform, "nope"}}}
+
+      assert Operations.step_digest(registry, %{"field" => "v"}) == {:error, {["op"], :required}}
+      assert {:ok, digest} = Operations.step_digest(registry, a)
+      assert digest == Operations.step_digest!(registry, a)
+
+      assert_raise ArgumentError, ~s(op: transform "nope" is not available), fn ->
+        Operations.step_digest!(registry, %{"op" => "nope"})
       end
     end
 
     @tag verifies: "operations-registry-build"
     test "the digest changes with the members" do
       assert Operations.digest(Operations.registry()) != Operations.digest(registry())
-      assert Operations.digest(registry()) == Operations.digest(Operations.registry([Ops, Ops]))
+      assert Operations.digest(registry()) == Operations.digest(Operations.registry!([Ops, Ops]))
       assert %Registry{} = registry()
     end
   end

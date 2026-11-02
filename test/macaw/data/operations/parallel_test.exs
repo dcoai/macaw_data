@@ -86,7 +86,7 @@ defmodule Macaw.Data.Operations.ParallelTest do
           {:ok, [checked]} = Operations.validate(@registry, [node], context)
           {:ok, module} = Operations.Registry.transform(@registry, checked["op"])
           context = Map.put(context, :parallel, true)
-          {cached, _cache} = Cache.run(Cache.new(), module, checked, table, context)
+          {cached, _cache} = Cache.run!(Cache.new(), module, checked, table, context)
           assert Table.equal?(cached, inline), inspect(node)
         end
       end
@@ -109,7 +109,7 @@ defmodule Macaw.Data.Operations.ParallelTest do
 
   describe "the threshold" do
     defp workers(table, context) do
-      Step.run(Probe, %{"to" => self()}, table, context)
+      Step.run!(Probe, %{"to" => self()}, table, context)
 
       table
       |> Table.chunks()

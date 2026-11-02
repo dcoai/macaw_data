@@ -45,7 +45,7 @@ defmodule Macaw.Data.Operations.Transforms.Bin do
   end
 
   @impl true
-  def run(node, table, context), do: Step.run(__MODULE__, node, table, context)
+  def run(node, table, context), do: Step.answer(__MODULE__, node, table, context)
 
   # A combine (spec/04 §1.4) counting, or reducing by an aggregate with the combining form:
   # the bins are bound over the whole input's extent once, each chunk's readings are
@@ -63,6 +63,14 @@ defmodule Macaw.Data.Operations.Transforms.Bin do
   def bind(%{"field" => field, "thresholds" => thresholds}, table, _context) do
     name = Transforms.name_in(Table.names(table), field)
 
+    case Transforms.readings(table, name, :number) do
+      :ok -> bound(field, name, thresholds, table)
+      {:error, reason} -> {:error, {"field", reason}}
+    end
+  end
+
+  # The bins over the field's extent, its readings each a number (`bind/3`).
+  defp bound(field, name, thresholds, table) do
     extent =
       table
       |> Table.chunks()
@@ -312,7 +320,7 @@ defmodule Macaw.Data.Operations.Transforms.Stack do
   end
 
   @impl true
-  def run(node, table, context), do: Step.run(__MODULE__, node, table, context)
+  def run(node, table, context), do: Step.answer(__MODULE__, node, table, context)
 
   # A global step and a reshape (spec/04 §1.4): each chunk's part is its readings of the
   # series; the offsets are stacked across every row, and the datum's columns gathered at
@@ -326,7 +334,11 @@ defmodule Macaw.Data.Operations.Transforms.Stack do
   @impl true
   def bind(%{"fields" => fields}, table, _context) do
     names = Table.names(table)
-    %{fields: Enum.map(fields, &{&1, Transforms.name_in(names, &1)})}
+    fields = Enum.map(fields, &{&1, Transforms.name_in(names, &1)})
+
+    if Enum.all?(fields, fn {_field, name} -> Transforms.readings(table, name, :number) == :ok end),
+       do: %{fields: fields},
+       else: {:error, {"fields", {:reads, :number}}}
   end
 
   @impl true
@@ -443,7 +455,7 @@ defmodule Macaw.Data.Operations.Transforms.Spectrum do
       {"detrend", %Option{type: :boolean, default: false, doc: "subtract the mean first"}},
       {"as",
        %Option{
-         type: {:one_of, [{:list, :name}, :name]},
+         type: {:one_of, [{:list, :name, 2, 3}, :name]},
          default: ["frequency", "magnitude"],
          doc: "the lines' columns"
        }}
@@ -460,7 +472,7 @@ defmodule Macaw.Data.Operations.Transforms.Spectrum do
   end
 
   @impl true
-  def run(node, table, context), do: Step.run(__MODULE__, node, table, context)
+  def run(node, table, context), do: Step.answer(__MODULE__, node, table, context)
 
   # A global step (spec/04 §1.4): each chunk's part is its readings of the field and the
   # time column; the FFT runs over the newest samples of every chunk.
@@ -518,11 +530,6 @@ defmodule Macaw.Data.Operations.Transforms.Spectrum do
   defp names([frequency, magnitude]), do: {frequency, magnitude, nil}
   defp names([frequency, magnitude, phase]), do: {frequency, magnitude, phase}
   defp names(name) when not is_list(name), do: {name, "magnitude", nil}
-
-  defp names(other) do
-    raise ArgumentError,
-          "transform \"spectrum\": as names two or three columns, got #{inspect(other)} (spec/04 §4.11)"
-  end
 
   # The median positive gap between consecutive readings of the time column: instants in
   # seconds, numbers as they are; nil without a column or with no positive gap.

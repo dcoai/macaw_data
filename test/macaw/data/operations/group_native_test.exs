@@ -81,7 +81,7 @@ defmodule Macaw.Data.Operations.GroupNativeTest do
             ] do
           raw = Map.merge(%{op: "aggregate", field: "v", fn: op}, by)
           node = checked(raw)
-          bound = Aggregate.group_bind(node, table)
+          bound = Aggregate.group_bind(node, node["fn"], table)
 
           for {chunk, first, count} <- Table.chunks(table), offset < count do
             view = {chunk, first + offset, count - offset}
@@ -121,7 +121,7 @@ defmodule Macaw.Data.Operations.GroupNativeTest do
             %{op: "aggregate", field: ["v", "v"], fn: "count", by: "s"}
           ] do
         node = checked(raw)
-        bound = Aggregate.group_bind(node, table)
+        bound = Aggregate.group_bind(node, node["fn"], table)
         # The int/float union, another aggregate, two columns, a pair.
         assert Aggregate.group_native(node["fn"], view, bound) == :fallback
         run = fn -> Operations.apply!(@registry, [raw], table) end
@@ -164,7 +164,7 @@ defmodule Macaw.Data.Operations.GroupNativeTest do
           Table.new!([{"s", :category, keys}, {"v", :number, values}]) |> Storage.chunked(:one)
 
         node = checked(%{op: "sum", field: "v", by: "s"})
-        bound = Aggregate.group_bind(node, table)
+        bound = Aggregate.group_bind(node, Aggregates.Sum, table)
         [view] = Table.chunks(table)
         native = Aggregate.group_native(Aggregates.Sum, view, bound)
         elixir = Aggregate.group_chunk_elixir(node, Aggregates.Sum, view, bound, "sum")

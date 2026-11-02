@@ -83,7 +83,7 @@ defmodule Macaw.Data.Test.FrameLoop do
                                                                  {input, {cache, counts, tables}} ->
           {:ok, [checked]} = Operations.validate(@registry, [node], %{})
           {:ok, module} = Operations.Registry.transform(@registry, checked["op"])
-          {output, cache} = Cache.run(cache, module, checked, input, %{})
+          {output, cache} = Cache.run!(cache, module, checked, input, %{})
           counts = Map.merge(counts, cache.last, fn _k, a, b -> a + b end)
           {output, {cache, counts, [input | tables]}}
         end)

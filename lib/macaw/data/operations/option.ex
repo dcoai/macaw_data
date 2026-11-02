@@ -11,6 +11,7 @@ defmodule Macaw.Data.Operations.Option do
   |---|---|
   | `:field` | a column name, a string or an atom |
   | `{:list, type}` | a list of `type` |
+  | `{:list, type, min, max}` | a list of `min` to `max` of `type` |
   | `{:pair, type}` | a two-element list of `type` |
   | `:name` | the name of a column a step adds, a string or an atom |
   | `:number`, `{:number, low, high}` | any number; one in `low..high`, both inclusive |
@@ -47,6 +48,7 @@ defmodule Macaw.Data.Operations.Option do
           | {:enum, [atom()]}
           | {:keys, type()}
           | {:list, type()}
+          | {:list, type(), non_neg_integer(), non_neg_integer()}
           | {:pair, type()}
           | {:one_of, [type()]}
           | :duration
@@ -139,6 +141,14 @@ defmodule Macaw.Data.Operations.Option do
     if Enum.all?(checked, &match?({:ok, _}, &1)),
       do: {:ok, Enum.map(checked, &elem(&1, 1))},
       else: refuse(type)
+  end
+
+  def check(registry, {:list, inner, min, max} = type, value)
+      when is_list(value) and length(value) in min..max//1 do
+    case check(registry, {:list, inner}, value) do
+      {:ok, list} -> {:ok, list}
+      {:error, _} -> refuse(type)
+    end
   end
 
   def check(registry, {:pair, inner} = type, [_, _] = value) do

@@ -72,6 +72,11 @@ defmodule Macaw.Data.Operations.TransformsTest do
     end
 
     # The rows of a one-column table an ordering keeps, chunked `size` rows a chunk.
+    defp refused(type, readings, test, value) do
+      table = Table.new!([{"t", type, readings}])
+      Operations.apply(@registry, [%{op: "filter", field: "t", test: test, value: value}], table)
+    end
+
     defp ordered(type, readings, test, value, size \\ :one) do
       table = Table.new!([{"t", type, readings}]) |> Macaw.Data.Test.Storage.chunked(size)
 
@@ -303,13 +308,13 @@ defmodule Macaw.Data.Operations.TransformsTest do
     @tag verifies: "operations-filter-equal"
     test "eq and ne on a time column refuse a value with no instant; on a number column another kind equals none" do
       for value <- [1_767_225_600, "yesterday", nil], test <- [:eq, :ne] do
-        message =
-          "filter, value: #{inspect(test)} compares the :time field \"t\" with a value of its " <>
-            "type, and #{inspect(value)} is none (spec/04 §4.1)"
+        run = fn -> refused(:time, [~U[2026-01-01 00:00:00Z]], test, value) end
+        assert run.() == {:error, [{[0, "value"], {:reading, :time}}]}
+        assert Native.elixir(run) == run.()
+      end
 
-        run = fn -> ordered(:time, [~U[2026-01-01 00:00:00Z]], test, value) end
-        assert_raise ArgumentError, message, run
-        assert_raise ArgumentError, message, fn -> Native.elixir(run) end
+      assert_raise ArgumentError, "step 1, value: is no value of the field's type, time", fn ->
+        ordered(:time, [~U[2026-01-01 00:00:00Z]], :eq, "yesterday")
       end
 
       assert ordered(:number, [1, 2], :eq, "1") == []
@@ -327,11 +332,7 @@ defmodule Macaw.Data.Operations.TransformsTest do
             {:text, ["a"], :a},
             {:number, [1], nil}
           ] do
-        message =
-          "filter, value: :lt compares the #{inspect(type)} field \"t\" with a value of its " <>
-            "type, and #{inspect(value)} is none (spec/04 §4.1)"
-
-        assert_raise ArgumentError, message, fn -> ordered(type, readings, :lt, value) end
+        assert refused(type, readings, :lt, value) == {:error, [{[0, "value"], {:reading, type}}]}
       end
 
       assert run(%{op: "filter", field: :nope, test: :lt, value: nil}, @rows) == []
@@ -457,11 +458,19 @@ defmodule Macaw.Data.Operations.TransformsTest do
     end
 
     @tag verifies: "operations-window-spans"
-    test "a reading that is not a time raises, and a bad duration is refused" do
+    test "a reading that is not a time is the step's fault, and a bad duration is refused" do
+      step = %{op: "window", field: :v, from: [1, :minute]}
+
+      assert Operations.apply(@registry, [step], [%{v: "later"}]) ==
+               {:error, [{[0, "field"], {:reads, :time}}]}
+
+      assert Operations.apply(@registry, [step], [%{v: 1}], %{now: "soon"}) ==
+               {:error, [{[0, "op"], {:context, :now, :time}}]}
+
       assert_raise ArgumentError,
-                   ~r/^transform "window": :v reads "later", which is not a time/,
+                   "step 1, field: reads a value that is not a time or a number",
                    fn ->
-                     run(%{op: "window", field: :v, from: [1, :minute]}, [%{v: "later"}])
+                     run(step, [%{v: "later"}])
                    end
 
       assert_raise ArgumentError, ~r/^step 1, from: is a duration \[n, unit\]/, fn ->
@@ -524,16 +533,20 @@ defmodule Macaw.Data.Operations.TransformsTest do
     end
 
     @tag verifies: "operations-window-latest"
-    test "latest without a schema, or over one that declares no identity, raises" do
+    test "latest without a schema, or over one that declares no identity, is the step's fault" do
       step = %{op: "window", field: :t, latest: true}
 
-      assert_raise ArgumentError, ~r/latest needs the schema of its rows/, fn ->
-        run(step, cars(1..3))
-      end
+      assert Operations.apply(@registry, [step], cars(1..3)) ==
+               {:error, [{[0, "latest"], {:needs, :schema}}]}
 
-      assert_raise ArgumentError, ~r/declares no identity/, fn ->
-        run(step, cars(1..3), %{schema: @anonymous})
-      end
+      assert Operations.apply(@registry, [step], cars(1..3), %{schema: @anonymous}) ==
+               {:error, [{[0, "latest"], {:needs, :identity}}]}
+
+      assert_raise ArgumentError,
+                   "step 1, latest: needs a schema, which the caller does not give",
+                   fn ->
+                     run(step, cars(1..3))
+                   end
     end
   end
 
@@ -628,20 +641,29 @@ defmodule Macaw.Data.Operations.TransformsTest do
         assert_raise ArgumentError, words, fn -> run(node, rows) end
       end
 
-      assert_raise ArgumentError,
-                   ~r/^transform "lttb": :v reads "x", which is not a number/,
-                   fn ->
-                     run(%{op: "lttb", fields: [:t, :v], n: 3}, [
-                       %{t: 0, v: 1},
-                       %{t: 1, v: "x"},
-                       %{t: 2, v: 1},
-                       %{t: 3, v: 0}
-                     ])
-                   end
+      bad_y = [%{t: 0, v: 1}, %{t: 1, v: "x"}, %{t: 2, v: 1}, %{t: 3, v: 0}]
 
-      # A category reads back as the string that spells it (macaw_data#16).
-      assert_raise ArgumentError, ~r/^transform "m4": :t reads "soon", which is not a time/, fn ->
-        run(%{op: "m4", fields: [:t, :v], width: 3}, [%{t: :soon, v: 1}])
+      assert Operations.apply(@registry, [%{op: "lttb", fields: [:t, :v], n: 3}], bad_y) ==
+               {:error, [{[0, "fields"], {:reads, :number}}]}
+
+      # A category is no time, in either spelling (macaw_data#16).
+      assert Operations.apply(@registry, [%{op: "m4", fields: [:t, :v], width: 3}], [
+               %{t: :soon, v: 1}
+             ]) == {:error, [{[0, "fields"], {:reads, :time}}]}
+
+      # A log scale reads an x above zero; a scale the step does not know is the context's.
+      log = %{scale: :log}
+      at_zero = [%{t: 0, v: 1}, %{t: 1, v: 2}, %{t: 2, v: 1}, %{t: 3, v: 0}]
+
+      assert Operations.apply(@registry, [%{op: "m4", fields: [:t, :v], width: 3}], at_zero, log) ==
+               {:error, [{[0, "fields"], {:reads, :positive}}]}
+
+      assert Operations.apply(@registry, [%{op: "m4", fields: [:t, :v], width: 3}], at_zero, %{
+               scale: :radial
+             }) == {:error, [{[0, "op"], {:unknown, :scale, :radial}}]}
+
+      assert_raise ArgumentError, "step 1, fields: reads a value that is not a number", fn ->
+        run(%{op: "lttb", fields: [:t, :v], n: 3}, bad_y)
       end
     end
 

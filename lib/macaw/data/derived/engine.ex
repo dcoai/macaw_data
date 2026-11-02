@@ -122,6 +122,17 @@ defmodule Macaw.Data.Derived.Engine do
 
     errors = if errors == [], do: cycles(inputs), else: errors
 
+    # The packages' registry (spec/04 §2): a fault of it is the engine's, under
+    # `[:packages]` at the root.
+    {operations, errors} =
+      case Operations.registry(opts[:packages]) do
+        {:ok, registry} ->
+          {registry, errors}
+
+        {:error, faults} ->
+          {nil, errors ++ for({at, why} <- faults, do: {[], [:packages | at], why})}
+      end
+
     case Enum.sort(errors) do
       [] ->
         engine = %__MODULE__{
@@ -132,7 +143,7 @@ defmodule Macaw.Data.Derived.Engine do
           debounce: opts[:debounce],
           idle_after: Map.new(opts[:idle_after], fn {name, ms} -> {Names.name(name), ms} end),
           run_opts: run_opts,
-          operations: Operations.registry(opts[:packages])
+          operations: operations
         }
 
         {:ok, engine |> rank() |> compile()}

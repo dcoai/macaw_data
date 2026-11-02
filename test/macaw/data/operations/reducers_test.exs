@@ -43,7 +43,7 @@ defmodule Macaw.Data.Operations.ReducersTest do
 
   @tag verifies: "operations-reducers-named"
   test "an enabled package's reducer is named like any other" do
-    hosted = Operations.registry([Macaw.Data.Test.Ops])
+    hosted = Operations.registry!([Macaw.Data.Test.Ops])
     every = finish(reduce: "every", operations: hosted)
 
     # every keeps n rows evenly, its count the budget itself at one row a unit.

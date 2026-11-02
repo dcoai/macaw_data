@@ -47,6 +47,12 @@ defmodule Macaw.Data.Operations.Step do
   """
   @type part :: %{view: Table.view(), context: term(), key: term()}
 
+  @typedoc """
+  A step's fault over its input (spec/04 §3.1): the option it is at, and why. Running in
+  `Macaw.Data.Operations.apply/4`, it is the node's fault `{[index, key], reason}`.
+  """
+  @type fault :: {String.t(), term()}
+
   @doc "Whether `module` is a column-native step: it declares a class and its parts."
   @spec step?(module()) :: boolean()
   def step?(module) do
@@ -56,14 +62,38 @@ defmodule Macaw.Data.Operations.Step do
 
   @doc """
   The step run over `table`: each chunk's part, merged as the step's class says
-  (spec/04 §1.4). The same table whatever the chunking.
+  (spec/04 §1.4). The same table whatever the chunking. `{:ok, table}`, or `bind/3`'s
+  fault, `{:error, {key, reason}}`, before any chunk is worked (spec/04 §3.1).
   """
-  @spec run(module(), map(), Table.t(), map()) :: Table.t()
+  @spec run(module(), map(), Table.t(), map()) :: {:ok, Table.t()} | {:error, fault()}
   def run(module, node, %Table{} = table, context) when is_map(context) do
     table = warmed(table)
-    parts = parts(module, node, table, context)
-    partials = chunks(module, node, parts, parallel?(table, context))
-    merge(module, node, partials, table, Enum.map(parts, & &1.key), context)
+
+    with {:ok, parts} <- parts(module, node, table, context) do
+      partials = chunks(module, node, parts, parallel?(table, context))
+      {:ok, merge(module, node, partials, table, Enum.map(parts, & &1.key), context)}
+    end
+  end
+
+  @doc "As `run/4`, raising `ArgumentError` naming the fault."
+  @spec run!(module(), map(), Table.t(), map()) :: Table.t()
+  def run!(module, node, %Table{} = table, context) do
+    case run(module, node, table, context) do
+      {:ok, output} -> output
+      {:error, fault} -> raise ArgumentError, words(fault)
+    end
+  end
+
+  @doc """
+  What a transform's `run/3` answers when it runs as a step (`run/4`): the table, or the
+  fault, `{:error, {key, reason}}` (`Macaw.Data.Transform`).
+  """
+  @spec answer(module(), map(), Table.t(), map()) :: Table.t() | {:error, fault()}
+  def answer(module, node, %Table{} = table, context) do
+    case run(module, node, table, context) do
+      {:ok, output} -> output
+      {:error, _fault} = error -> error
+    end
   end
 
   @doc """
@@ -112,11 +142,9 @@ defmodule Macaw.Data.Operations.Step do
   key. Nothing of a chunk's part is computed here, so a caller holding a part under its
   key need not compute it again.
   """
-  @spec parts(module(), map(), Table.t(), map()) :: [part()]
+  @spec parts(module(), map(), Table.t(), map()) :: {:ok, [part()]} | {:error, fault()}
   def parts(module, node, %Table{} = table, context) when is_map(context) do
     table = warmed(table)
-    views = Table.chunks(table)
-    rows = Table.size(table)
     declared = Map.take(context, module.reads())
 
     bound =
@@ -124,6 +152,29 @@ defmodule Macaw.Data.Operations.Step do
         do: module.bind(node, table, declared),
         else: declared
 
+    case bound do
+      {:error, {_key, _reason}} = error -> error
+      bound -> {:ok, parts(module, node, table, bound, Table.chunks(table))}
+    end
+  end
+
+  @doc "As `parts/4`, raising `ArgumentError` naming the fault."
+  @spec parts!(module(), map(), Table.t(), map()) :: [part()]
+  def parts!(module, node, %Table{} = table, context) do
+    case parts(module, node, table, context) do
+      {:ok, parts} -> parts
+      {:error, fault} -> raise ArgumentError, words(fault)
+    end
+  end
+
+  @doc "A step's fault in words, as `Macaw.Data.Operations.format_error/1` words a node's."
+  @spec format_error(fault()) :: String.t()
+  def format_error({key, reason}), do: Macaw.Data.Operations.format_error({[key], reason})
+
+  defp words(fault), do: format_error(fault)
+
+  defp parts(module, node, table, bound, views) do
+    rows = Table.size(table)
     keyed = if function_exported?(module, :keyed, 1), do: module.keyed(node), else: node
     identity = Document.digest(%{"module" => module, "node" => keyed})
 

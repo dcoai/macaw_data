@@ -177,8 +177,8 @@ defmodule Macaw.Data.Operations.StepsTest do
     test "only the context a step declares reaches it" do
       table = source(20)
       node = checked(%{op: "window", field: "t", from: [5, :second]})
-      parts = Step.parts(Window, node, table, %{now: 19, frame: %{width: 3}, sources: %{}})
-      wide = Step.parts(Window, node, table, %{now: 19})
+      parts = Step.parts!(Window, node, table, %{now: 19, frame: %{width: 3}, sources: %{}})
+      wide = Step.parts!(Window, node, table, %{now: 19})
       assert parts == wide
     end
 
@@ -196,7 +196,7 @@ defmodule Macaw.Data.Operations.StepsTest do
       # Rows that pass apart are gathered into a chunk named {input id, step key}.
       spread = run(table, %{op: "filter", field: "k", test: :eq, value: "k0"})
       node = checked(%{op: "filter", field: "k", test: :eq, value: "k0"})
-      [part | _] = Step.parts(Filter, node, table, %{})
+      [part | _] = Step.parts!(Filter, node, table, %{})
       [{gathered, 0, 4} | _] = Table.chunks(spread)
       assert Chunk.id(gathered) == {Chunk.id(a), part.key}
       assert Chunk.digest(gathered) == nil
@@ -267,7 +267,7 @@ defmodule Macaw.Data.Operations.StepsTest do
     defp grouped(table, node, context) do
       {:ok, registered} = Operations.transform(@registry, node.op)
       checked = checked(node)
-      parts = Step.parts(registered, checked, table, context)
+      parts = Step.parts!(registered, checked, table, context)
       partials = Enum.map(parts, &Step.chunk(registered, checked, &1))
       merged = if partials == [], do: nil, else: tree(registered, checked, partials)
       registered.finish(checked, merged, %{input: table, key: :key})
@@ -440,14 +440,14 @@ defmodule Macaw.Data.Operations.StepsTest do
     test "a key is the step's identity, its context as resolved for the chunk, and its run" do
       table = source(200)
       node = checked(%{op: "filter", field: "v", test: :gt, value: 3})
-      identity = Operations.step_digest(@registry, node)
+      identity = Operations.step_digest!(@registry, node)
 
-      [part | _] = Step.parts(Filter, node, table, %{})
+      [part | _] = Step.parts!(Filter, node, table, %{})
       # A filter resolves to its column, the column's type and an ordering's key.
       assert part.key == {identity, {"v", :number, 3}, nil}
 
       # A view that reads part of its chunk names its run in the key.
-      [cut | _] = Step.parts(Filter, node, Table.slice(table, 3, 10), %{})
+      [cut | _] = Step.parts!(Filter, node, Table.slice(table, 3, 10), %{})
       assert cut.key == {identity, {"v", :number, 3}, {3, 10}}
     end
 
@@ -457,7 +457,7 @@ defmodule Macaw.Data.Operations.StepsTest do
       table = source(200)
       node = checked(%{op: "window", field: "t", from: [120, :second]})
 
-      frame = fn now -> Step.parts(Window, node, table, %{now: now}) end
+      frame = fn now -> Step.parts!(Window, node, table, %{now: now}) end
       [outside, edge, inside, last] = frame.(199)
       assert outside.context == :none
       assert edge.context == {:run, 29, 21}
@@ -506,7 +506,7 @@ defmodule Macaw.Data.Operations.StepsTest do
       work = fn table ->
         Table.chunks(table)
         {:reductions, before} = Process.info(self(), :reductions)
-        Step.run(Take, node, table, %{})
+        Step.run!(Take, node, table, %{})
         {:reductions, later} = Process.info(self(), :reductions)
         later - before
       end

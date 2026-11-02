@@ -131,6 +131,70 @@ defmodule Macaw.Data.Operations.Transforms do
   def number!(n, _field, _op) when is_number(n), do: n
   def number!(other, field, op), do: not_a!(other, field, op, "a number")
 
+  @typedoc """
+  What a step reads a column's values as (spec/04 §3.1): `:number`; `:time`, a time or a
+  number as seconds (`seconds!/3`); `:positive`, a number above zero (a log scale's x);
+  `:comparable`, numbers, or instants of one kind; `:point`, a number or a point `[x, y]`;
+  `:any`, anything.
+  """
+  @type reading :: :number | :time | :positive | :comparable | :point | :any
+
+  @doc false
+  # Whether every reading of the column `name` reads as `kind` (spec/04 §3.1): checked
+  # once over the input, in a step's `bind/3`, before any chunk is read, so the step's
+  # readers never meet another. A typed column answers by its type alone, at no cost to a
+  # run; any other is read value by value. `nil` is a gap, and passes. A column the
+  # table lacks reads `nil` throughout.
+  @spec readings(Table.t(), Table.name() | nil, reading()) :: :ok | {:error, {:reads, reading()}}
+  def readings(_table, nil, _kind), do: :ok
+  def readings(_table, _name, :any), do: :ok
+
+  def readings(%Table{} = table, name, kind) do
+    if typed?(Table.column_type(table, name), kind) or
+         read_as?(Enum.flat_map(Table.chunks(table), &view_values(&1, name)), kind),
+       do: :ok,
+       else: {:error, {:reads, kind}}
+  end
+
+  defp typed?(:number, kind) when kind in [:number, :time, :comparable, :point], do: true
+  defp typed?(:time, kind) when kind in [:time, :comparable], do: true
+  defp typed?(_type, _kind), do: false
+
+  @doc false
+  # Whether every value of `values` reads as `kind`, `nil` passing (`readings/3`).
+  @spec read_as?([term()], reading()) :: boolean()
+  def read_as?(_values, :any), do: true
+
+  def read_as?(values, :comparable) do
+    case Enum.find(values, &(&1 != nil)) do
+      nil -> true
+      first -> Enum.all?(values, &(&1 == nil or same_kind?(&1, first)))
+    end
+  end
+
+  def read_as?(values, kind), do: Enum.all?(values, &(&1 == nil or reads?(&1, kind)))
+
+  defp reads?(n, :number), do: is_number(n)
+  defp reads?(n, :positive), do: is_number(n) and n > 0
+  defp reads?(n, :point) when is_number(n), do: true
+  defp reads?([x, y], :point), do: is_number(x) and is_number(y)
+  defp reads?({x, y}, :point), do: is_number(x) and is_number(y)
+  defp reads?(_other, :point), do: false
+  defp reads?(n, :time) when is_number(n), do: true
+  defp reads?(%kind{}, :time) when kind in [DateTime, NaiveDateTime, Date], do: true
+
+  defp reads?(string, :time) when is_binary(string),
+    do:
+      match?({:ok, _}, iso(DateTime.from_iso8601(string))) or
+        match?({:ok, _}, iso(NaiveDateTime.from_iso8601(string))) or
+        match?({:ok, _}, iso(Date.from_iso8601(string)))
+
+  defp reads?(_other, :time), do: false
+
+  defp same_kind?(a, b) when is_number(a) and is_number(b), do: true
+  defp same_kind?(%kind{}, %kind{}) when kind in [DateTime, NaiveDateTime, Date], do: true
+  defp same_kind?(_a, _b), do: false
+
   @doc false
   # The option every aggregate-naming step shares (spec/04 §4.9, §4.10).
   @spec field_option() :: {String.t(), Option.t()}

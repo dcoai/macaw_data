@@ -193,7 +193,7 @@ defmodule Macaw.Data.Operations.HotPathsTest do
         given = %{op: "aggregate", field: "v", fn: fun}
         node = checked(if by, do: Map.put(given, :by, by), else: given)
         aggregate = node["fn"]
-        bound = Aggregate.group_bind(node, table)
+        bound = Aggregate.group_bind(node, aggregate, table)
 
         for {_chunk, first, count} = view <- views(table, from, length(rows) - from) do
           slice = &Enum.slice(&1, first, count)
@@ -226,7 +226,7 @@ defmodule Macaw.Data.Operations.HotPathsTest do
 
       [view] = Table.chunks(table)
       node = checked(%{op: "sum", field: "v", by: "k"})
-      bound = Aggregate.group_bind(node, table)
+      bound = Aggregate.group_bind(node, Macaw.Data.Operations.Aggregates.Sum, table)
 
       {reductions, {order, _groups, _rows}} =
         Work.reductions(fn ->

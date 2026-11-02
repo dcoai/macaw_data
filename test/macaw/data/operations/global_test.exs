@@ -277,7 +277,7 @@ defmodule Macaw.Data.Operations.GlobalTest do
       refute Chunk.id(other) == Chunk.id(once)
 
       filter = checked(%{op: "filter", field: "v", test: :gt, value: 50})
-      keys = fn t -> Enum.map(Step.parts(Filter, filter, t, %{}), & &1.key) end
+      keys = fn t -> Enum.map(Step.parts!(Filter, filter, t, %{}), & &1.key) end
       assert keys.(run(table, sort)) == keys.(run(table, sort))
     end
 

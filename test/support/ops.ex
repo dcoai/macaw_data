@@ -228,3 +228,29 @@ defmodule Macaw.Data.Test.Ops.Stray do
   # A package listing a module that implements no behavior.
   def __members__, do: [String]
 end
+
+defmodule Macaw.Data.Test.Ops.Junk do
+  @moduledoc false
+  # A package whose one transform answers something that is not a table (spec/04 §3.1).
+  def __members__, do: [__MODULE__.Answer]
+
+  defmodule Answer do
+    @moduledoc false
+    @behaviour Macaw.Data.Transform
+
+    @impl true
+    def name, do: "junk"
+
+    @impl true
+    def options, do: []
+
+    @impl true
+    def needs, do: []
+
+    @impl true
+    def outputs(_node, columns), do: columns
+
+    @impl true
+    def run(_node, _table, _context), do: :not_a_table
+  end
+end

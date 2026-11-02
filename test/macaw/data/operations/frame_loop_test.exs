@@ -180,14 +180,15 @@ defmodule Macaw.Data.Operations.FrameLoopTest do
           before = Macaw.Data.Operations.apply!(registry, Enum.drop(chain, -1), last)
           node = List.last(checked)
           {:ok, module} = Macaw.Data.Operations.Registry.transform(registry, node["op"])
-          {_, cold} = Cache.run(held, module, node, before, %{})
-          {_, warm} = Cache.run(cold, module, node, input, %{})
+          {_, cold} = Cache.run!(held, module, node, before, %{})
+          {_, warm} = Cache.run!(cold, module, node, input, %{})
 
-          {node["op"], timed.(fn -> Macaw.Data.Operations.Step.run(module, node, input, %{}) end),
-           timed.(fn -> Cache.run(cold, module, node, input, %{}) end),
-           timed.(fn -> Cache.run(warm, module, node, input, %{}) end),
+          {node["op"],
+           timed.(fn -> Macaw.Data.Operations.Step.run!(module, node, input, %{}) end),
+           timed.(fn -> Cache.run!(cold, module, node, input, %{}) end),
+           timed.(fn -> Cache.run!(warm, module, node, input, %{}) end),
            timed.(fn ->
-             Macaw.Data.Operations.Step.run(module, node, input, %{parallel: true})
+             Macaw.Data.Operations.Step.run!(module, node, input, %{parallel: true})
            end)}
         end
 

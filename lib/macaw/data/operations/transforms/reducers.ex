@@ -38,7 +38,7 @@ defmodule Macaw.Data.Operations.Transforms.Lttb do
   def outputs(_node, columns), do: columns
 
   @impl true
-  def run(node, table, context), do: Step.run(__MODULE__, node, table, context)
+  def run(node, table, context), do: Step.answer(__MODULE__, node, table, context)
 
   @impl true
   def class(_node), do: :combine
@@ -54,17 +54,17 @@ defmodule Macaw.Data.Operations.Transforms.Lttb do
   # kept within a factor of 2. An input of n rows or fewer is answered whole.
   @impl true
   def bind(%{"fields" => fields, "n" => n}, table, context) do
-    bound = Ladder.bind(fields, table, context, name())
+    with %{} = bound <- Ladder.bind(fields, table, context, name()) do
+      ideal =
+        case bound.extent do
+          {lo, hi} when hi > lo -> (hi - lo) / (2 * n)
+          _point_or_none -> nil
+        end
 
-    ideal =
-      case bound.extent do
-        {lo, hi} when hi > lo -> (hi - lo) / (2 * n)
-        _point_or_none -> nil
-      end
-
-    bound
-    |> Map.put(:level, Ladder.level(ideal, Map.get(context, :level)))
-    |> Map.put(:whole?, Table.size(table) <= n)
+      bound
+      |> Map.put(:level, Ladder.level(ideal, Map.get(context, :level)))
+      |> Map.put(:whole?, Table.size(table) <= n)
+    end
   end
 
   # A chunk's part depends on its rows, the fields, the scale's kind and the level only.
@@ -201,7 +201,7 @@ defmodule Macaw.Data.Operations.Transforms.M4 do
   def outputs(_node, columns), do: columns
 
   @impl true
-  def run(node, table, context), do: Step.run(__MODULE__, node, table, context)
+  def run(node, table, context), do: Step.answer(__MODULE__, node, table, context)
 
   @impl true
   def class(_node), do: :combine
@@ -217,15 +217,15 @@ defmodule Macaw.Data.Operations.Transforms.M4 do
   # level kept within a factor of 2.
   @impl true
   def bind(%{"fields" => fields, "width" => width}, table, context) do
-    bound = Ladder.bind(fields, table, context, name())
+    with %{} = bound <- Ladder.bind(fields, table, context, name()) do
+      ideal =
+        case bound.extent do
+          {lo, hi} when hi > lo -> (hi - lo) / width / 4
+          _point_or_none -> nil
+        end
 
-    ideal =
-      case bound.extent do
-        {lo, hi} when hi > lo -> (hi - lo) / width / 4
-        _point_or_none -> nil
-      end
-
-    Map.put(bound, :level, Ladder.level(ideal, Map.get(context, :level)))
+      Map.put(bound, :level, Ladder.level(ideal, Map.get(context, :level)))
+    end
   end
 
   @impl true
