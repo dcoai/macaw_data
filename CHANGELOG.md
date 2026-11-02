@@ -4,6 +4,12 @@
 
 ### Changes
 
+- **Changed:** the `m4` and `lttb` ladder's Elixir walk (`Macaw.Data.Operations.Transforms.Ladder.partial/4` without the native kernels) reads a packed time x column's instants from its buffer, integer microseconds on `Macaw.Data.Source.Order.instant/1`'s scale, instead of building a `DateTime` per row and calling `DateTime.to_unix/2` (#133, #144, spec/04 §4.5.2). Partials are equal term for term to before and to the kernel's. The unsorted x extent reads the same instants. On visualize#998's loop shape (a `Macaw.Data.Source.Push` holding of 50,000 UTC rows, one 1,000-row increment a frame, `Macaw.Data.Source.Finish.finish/4`'s window, then `m4` and `lttb` through `Macaw.Data.Operations.Cache`), a frame's reductions on the Elixir path before and after:
+  - cached (10 of 14 parts reused): 1,351,771 to 666,731, ~64 to ~40 ms;
+  - full (no cache): 5,228,160 to 1,427,844, ~172 to ~47 ms;
+  - one sorted 8,192-row UTC chunk's partial at level 0: 411,913 to 100,008.
+
+  With the kernels loaded the frame is unchanged (~8 ms).
 - **Changed:** rows of a table in another order across its chunks, a full `:order` among them, are gathered by their slots (#128, #137, #138, spec/01 §2.4). Each column's pieces are joined into one storage where they share a form a join takes (int64, float64, date, UTC and naive buffers, text, binary and dictionary columns), its validity and precision with it, and gathered in the order. Any other column is read and packed again, that column alone. The output is chunked at `Macaw.Data.Table.chunk_rows/0`, and every result is `Macaw.Data.Table.equal?/2` to before. On 50k rows, reductions before and after on the Elixir path (with the kernels in brackets):
   - a random reorder of an int64, a float64 and a UTC column: 4,088,217 to 1,228,251 (448,160), ~154 to ~10 ms;
   - finishing by a full order by cpu: 5,316,721 to 2,856,710 (2,076,736), ~210 to ~46 ms. Its sort is 1,471,715 of that;

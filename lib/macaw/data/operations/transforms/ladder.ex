@@ -32,7 +32,7 @@ defmodule Macaw.Data.Operations.Transforms.Ladder do
   alias Macaw.Data.Native
   alias Macaw.Data.Native.Kernels
   alias Macaw.Data.Table
-  alias Macaw.Data.Table.Chunk
+  alias Macaw.Data.Table.{Chunk, Column}
   alias Macaw.Data.Operations.Transforms
   alias Macaw.Data.Operations.Transforms.Ladder.Packed
 
@@ -134,12 +134,17 @@ defmodule Macaw.Data.Operations.Transforms.Ladder do
 
   defp extent(views, bound, false, op) do
     Enum.reduce(views, nil, fn view, extent ->
-      view
-      |> Transforms.view_values(bound.x_name)
-      |> Enum.reduce(extent, fn
-        nil, extent -> extent
-        x, nil -> {space(x, bound, op), space(x, bound, op)}
-        x, {lo, hi} -> {min(lo, space(x, bound, op)), max(hi, space(x, bound, op))}
+      {xs, kind} = x_readings(view, bound)
+
+      Enum.reduce(xs, extent, fn
+        nil, extent ->
+          extent
+
+        x, nil ->
+          {at_space(x, kind, bound, op), at_space(x, kind, bound, op)}
+
+        x, {lo, hi} ->
+          {min(lo, at_space(x, kind, bound, op)), max(hi, at_space(x, kind, bound, op))}
       end)
     end)
   end
@@ -239,12 +244,28 @@ defmodule Macaw.Data.Operations.Transforms.Ladder do
   # The partial by the Elixir walk alone, whatever the kernels: the path a build without
   # them runs, and the reference the native kernel is held equal to (spec/04 §4.5.2).
   @spec partial_elixir(Table.view(), map(), integer(), String.t()) :: partial()
-  def partial_elixir(view, %{x_name: x_name, y_name: y_name, kind: kind} = bound, k, op) do
-    xs = Transforms.view_values(view, x_name)
+  def partial_elixir(view, %{y_name: y_name} = bound, k, op) do
+    {xs, kind} = x_readings(view, bound)
     ys = Transforms.view_values(view, y_name)
     segments = walk(xs, ys, 0, {kind, k, pow2(k), bound, op}, nil, nil, [])
     {k, [view], [{0, Packed.pack(segments)}]}
   end
+
+  # A view's x readings and how the walk places them (`at_space/4`): a time column packed
+  # by its instants (`Order.instant/1`'s integer microseconds, read from its buffer, no
+  # `DateTime` made, macaw_data#133) on a time or linear scale, `:instant` or
+  # `:instant_seconds`; any other, its values under the scale's kind.
+  defp x_readings({chunk, first, count} = view, %{x_name: x_name, kind: kind})
+       when x_name != nil and kind in [:linear, :time] do
+    case chunk |> Chunk.storage(x_name, first, count) |> Column.instants(count) do
+      :general -> {Transforms.view_values(view, x_name), kind}
+      instants when kind == :time -> {instants, :instant}
+      instants -> {instants, :instant_seconds}
+    end
+  end
+
+  defp x_readings(view, %{x_name: x_name, kind: kind}),
+    do: {Transforms.view_values(view, x_name), kind}
 
   # The piece by the native kernel (spec/04 §4.5.2), reading the view's x and y buffers in
   # place, where the kernels are loaded and both columns are in a form it reads, on a
@@ -347,8 +368,12 @@ defmodule Macaw.Data.Operations.Transforms.Ladder do
   defp open(xs, ys, i, at, b, first, li, ls, ly, low, high, run, segments),
     do: walk(xs, ys, i, at, {b, {first, {li, ls, ly}, low, high}}, run, segments)
 
-  # `space/3` for a number on a linear or time scale, read without a call; any other
-  # reading through it.
+  # `space/3` for a number on a linear or time scale, read without a call, and for an
+  # instant read from a time column's buffer (`x_readings/2`): on a time scale it is the
+  # space itself, on a linear one its seconds, as `Transforms.seconds!/3` reads the time;
+  # any other reading through `space/3`.
+  defp at_space(x, :instant, _bound, _op), do: x
+  defp at_space(x, :instant_seconds, _bound, _op), do: x / 1_000_000
   defp at_space(x, :linear, _bound, _op) when is_number(x), do: x
   defp at_space(x, :time, _bound, _op) when is_number(x), do: x * 1_000_000
   defp at_space(x, _kind, bound, op), do: space(x, bound, op)

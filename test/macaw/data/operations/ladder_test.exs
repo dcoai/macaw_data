@@ -506,6 +506,31 @@ defmodule Macaw.Data.Operations.LadderTest do
         assert reductions <= budget, "#{reductions} reductions for #{n} rows at level #{k}"
       end
     end
+
+    @tag verifies: "operations-ladder-walk"
+    test "a time x is read as its instants: a sorted chunk costs what integer x does, on time and linear scales" do
+      # macaw_data#133: the walk reads a packed time column's microseconds from its buffer
+      # (`Order.instant/1`'s scale), never a `DateTime` and its `to_unix`; at level 0 it cost
+      # 411,913 reductions where it now costs 100,008 (macaw_data#144).
+      n = Table.chunk_rows()
+      t0 = ~U[2026-01-01 00:00:00Z]
+
+      input =
+        table(for(i <- 0..(n - 1), do: {DateTime.add(t0, i), :math.sin(i / 50) * 100}), :time)
+
+      [view] = Table.chunks(input)
+
+      for kind <- [:time, :linear], k <- [0, 20] do
+        bound = %{x: "t", y: "v", x_name: "t", y_name: "v", kind: kind}
+
+        {reductions, {_k, _views, [{0, piece}]}} =
+          Work.reductions(fn -> Native.elixir(fn -> Ladder.partial(view, bound, k, "m4") end) end)
+
+        buckets = for {:run, run} <- Packed.unpack(piece), reduce: 0, do: (b -> b + length(run))
+        budget = 12 * n + div(3 * buckets, 2)
+        assert reductions <= budget, "#{reductions} reductions for #{n} rows, #{kind} level #{k}"
+      end
+    end
   end
 
   describe "gaps at chunk edges (spec/04 §4.5.1)" do
