@@ -13,13 +13,13 @@ defmodule Macaw.Data.Derived.Last do
   # same rows kept.
 
   alias Macaw.Data.{Derived, Schema, Table}
-  alias Macaw.Data.Table.Chunk
+  alias Macaw.Data.Table.{Chunk, Subset}
   alias Macaw.Layers.Names
 
   @doc false
   @spec window(Table.t(), pos_integer(), Schema.t()) :: Table.t()
   def window(table, n, schema) when is_integer(n) and n > 0 do
-    table = if pending?(table), do: Table.warm(table), else: table
+    table = Subset.ready(table)
     size = Table.size(table)
     views = Table.chunks(table)
     {order, sorted} = order(table, views, schema)
@@ -29,11 +29,11 @@ defmodule Macaw.Data.Derived.Last do
         Table.slice(table, max(size - n, 0), n)
 
       {[], order} ->
-        take(table, views, Enum.take(order, -n), sorted)
+        Subset.at(table, Enum.take(order, -n), sorted: sorted)
 
       {fields, order} ->
         ids = identities(table, views, size, fields)
-        take(table, views, newest(indexes(order, size), ids, n), sorted)
+        Subset.at(table, newest(indexes(order, size), ids, n), sorted: sorted)
     end
   end
 
@@ -42,13 +42,7 @@ defmodule Macaw.Data.Derived.Last do
   # chunks as views, any other row gathered by its slots (`Chunk.gather/5`). Nothing is
   # decoded. A `per` source's entity reads its rows so (spec/02 §1.3).
   @spec rows_at(Table.t(), [non_neg_integer()]) :: Table.t()
-  def rows_at(table, indexes) do
-    table = if pending?(table), do: Table.warm(table), else: table
-    take(table, Table.chunks(table), indexes, Table.sorted(table))
-  end
-
-  # A table some chunk of which is cold with its count pending (spec/01 §1.1.4).
-  defp pending?(table), do: Enum.any?(Table.chunks(table), fn {_c, _f, count} -> count == nil end)
+  def rows_at(table, indexes), do: table |> Subset.ready() |> Subset.at(indexes)
 
   # The rows' order by the window field: `:as_is` with the column the table is known to be
   # sorted by, or the row indexes sorted stably by their keys, with the window field's
@@ -136,56 +130,5 @@ defmodule Macaw.Data.Derived.Last do
       end)
 
     kept
-  end
-
-  # The rows at `kept`, in that order, as a table of the input's columns. Rows in the
-  # input's order are runs of its chunks: a contiguous run a view, any other gathered.
-  # Rows in another order are gathered in the input's order, then read in theirs: only
-  # the kept rows are decoded.
-  defp take(table, views, kept, sorted) do
-    header = for name <- Table.names(table), do: {name, Table.column_type(table, name)}
-
-    if ascending?(kept) do
-      {:ok, taken} = Table.from_chunks(header, runs(views, kept), sorted: sorted)
-      taken
-    else
-      in_order = Enum.sort(kept)
-      {:ok, gathered} = Table.from_chunks(header, runs(views, in_order))
-      place = in_order |> Enum.with_index() |> Map.new()
-      at = Enum.map(kept, &Map.fetch!(place, &1))
-
-      columns =
-        for {name, type} <- header do
-          values = gathered |> Table.column(name) |> List.to_tuple()
-          {name, type, Enum.map(at, &elem(values, &1))}
-        end
-
-      {:ok, taken} = Table.new(columns)
-      taken
-    end
-  end
-
-  defp ascending?([a | [b | _] = rest]), do: a < b and ascending?(rest)
-  defp ascending?(_one_or_none), do: true
-
-  # The views of the ascending indexes `kept`, view by view of the input's.
-  defp runs(views, kept), do: runs(views, 0, kept, [])
-
-  defp runs(_views, _start, [], acc), do: Enum.reverse(acc)
-
-  defp runs([{chunk, first, count} | views], start, kept, acc) do
-    {here, rest} = Enum.split_while(kept, &(&1 < start + count))
-    acc = if here == [], do: acc, else: [run(chunk, first, count, start, here) | acc]
-    runs(views, start + count, rest, acc)
-  end
-
-  # One view's kept rows: a contiguous run read where it lies, any other gathered.
-  defp run(chunk, first, count, start, [i | _] = here) do
-    locals = Enum.map(here, &(&1 - start))
-    k = length(locals)
-
-    if List.last(here) - i + 1 == k,
-      do: {chunk, first + i - start, k},
-      else: {Chunk.gather(chunk, first, count, locals, {:last, locals}), 0, k}
   end
 end

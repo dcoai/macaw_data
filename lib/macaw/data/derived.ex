@@ -488,14 +488,14 @@ defmodule Macaw.Data.Derived do
   An input in its window (spec/02 §2.2), a table or a list of rows: `nil` every row and
   `%{last: n}` each identity's newest `n` rows by the window field, else the newest `n`,
   each in the input's form; a request the rows its window, box, region and latest select,
-  finished by `Macaw.Data.Source.Finish`, as rows (a table's transposed first, until
-  finishing works on columns, macaw_data#105).
+  finished by `Macaw.Data.Source.Finish`, also in the input's form: a table finished on
+  its columns stays a table (macaw_data#105).
 
   The window field orders by its type's key (`order_key/2`): a `:time` by its instant
   (`Macaw.Data.Source.Order.instant/1`, every kind of time on one scale), a `:number` by
   its value, stably; when a row has no key, the rows are left as they came. A table is
-  windowed on its columns, and no row is made: the kept rows are views of its chunks or
-  gathered from them.
+  windowed on its columns, by `last: n` and by a request alike, and no row is made: the
+  kept rows are views of its chunks or gathered from them.
 
       iex> schema = Macaw.Data.Schema.new!(%{t: %{type: :number, window: true}, v: %{type: :number}})
       iex> rows = for t <- 1..5, do: %{t: t, v: t * 10}
@@ -506,6 +506,8 @@ defmodule Macaw.Data.Derived do
       iex> table = Macaw.Data.Table.from(rows) |> elem(1)
       iex> Macaw.Data.Derived.window(table, %{last: 2}, schema) |> Macaw.Data.Table.column(:v)
       [40, 50]
+      iex> Macaw.Data.Derived.window(table, %{window: [2, 3]}, schema) |> Macaw.Data.Table.column(:v)
+      [20, 30]
   """
   @spec window(Table.t() | [map()], window(), Schema.t()) :: Table.t() | [map()]
   def window(subject, nil, _schema), do: subject
@@ -532,17 +534,13 @@ defmodule Macaw.Data.Derived do
     end
   end
 
-  # A request finishes rows. Finishing a table transposes it and repacks the rows it keeps
-  # (spec/01 §2.4), so a table is finished over its rows, transposed once, until finishing
-  # works on columns (macaw_data#105).
-  def window(%Table{} = table, %{} = window, schema),
-    do: window(Table.rows(table), window, schema)
-
-  def window(rows, %{} = window, schema) when is_list(rows) do
+  # A request is finished as the runtime finishes a delivery, a table on its columns
+  # (spec/01 §2.4, macaw_data#105), in the input's form.
+  def window(subject, %{} = window, schema) when is_list(subject) or is_struct(subject, Table) do
     {:ok, request} = request(window)
     description = %Description{schema: schema}
-    %Delivery{rows: rows} = Finish.finish!(Delivery.new!(rows), description, request)
-    rows
+    %Delivery{rows: finished} = Finish.finish!(Delivery.new!(subject), description, request)
+    finished
   end
 
   @doc """

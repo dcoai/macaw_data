@@ -249,23 +249,33 @@ defmodule Macaw.Data.Window do
   """
   @spec latest_rows([map()], (map() -> number() | nil), (map() -> term())) :: [map()]
   def latest_rows(rows, time, identify) when is_function(time, 1) and is_function(identify, 1) do
-    last =
-      rows
-      |> Enum.with_index()
-      |> Enum.reduce(%{}, fn {row, i}, last ->
-        with id when id != nil <- identify.(row),
-             t when t != nil <- time.(row) do
-          case Map.fetch(last, id) do
-            {:ok, {held, _i}} when held > t -> last
-            _later_or_first -> Map.put(last, id, {t, i})
-          end
-        else
-          nil -> last
-        end
-      end)
-
-    kept = MapSet.new(last, fn {_id, {_t, i}} -> i end)
+    kept = rows |> Enum.map(&{identify.(&1), time.(&1)}) |> latest_indexes() |> MapSet.new()
     for {row, i} <- Enum.with_index(rows), MapSet.member?(kept, i), do: row
+  end
+
+  @doc false
+  # `latest_rows/3` over each row's `{identity, time}`, in order: the indexes, ascending,
+  # of each identity's last row. Finishing a table reads the two from its columns
+  # (`Macaw.Data.Source.Finish`) and keeps the same rows.
+  @spec latest_indexes([{term(), number() | nil}]) :: [non_neg_integer()]
+  def latest_indexes(keys) do
+    keys
+    |> Enum.with_index()
+    |> Enum.reduce(%{}, fn
+      {{nil, _t}, _i}, last ->
+        last
+
+      {{_id, nil}, _i}, last ->
+        last
+
+      {{id, t}, i}, last ->
+        case Map.fetch(last, id) do
+          {:ok, {held, _i}} when held > t -> last
+          _later_or_first -> Map.put(last, id, {t, i})
+        end
+    end)
+    |> Enum.map(fn {_id, {_t, i}} -> i end)
+    |> Enum.sort()
   end
 
   @doc """

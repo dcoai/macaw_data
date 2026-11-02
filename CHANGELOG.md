@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Breaking:** `Macaw.Data.Derived.window/3` answers a table for a table input under a request window (`window`, `box`, `region`, `latest`), where it answered the table's rows (#105, #125, spec/02 §2.2). A list of rows still answers rows. The derived engine makes an input's rows only at a function's call.
+- **Changed:** `Macaw.Data.Source.Finish.finish/4` finishes a table delivery's `:window` and `:latest` on its columns (#105, #125, spec/01 §2.4). It keeps rows of the table's chunks and makes no row, and keeps exactly the rows it kept before. On a 50k-row table, a window keeping half its rows costs 319,799 reductions (5,349,486 before). With the table sorted by its window field, a binary search costs 5,252. Latest costs 609,412 (5,163,695 before).
 - **Breaking:** a quantity's facts answer `{:ok, fact}` or `{:error, reason}` where a map read raised (#114, #121, spec/03 §9–§11). The functions are `Macaw.Data.Quantity.base_unit/1`, `Macaw.Data.Quantity.kind/1`, `Macaw.Data.Quantity.bounds/1`, `Macaw.Data.Quantity.additivity/2`, `Macaw.Data.Quantity.family/2` and `Macaw.Data.Quantity.family/3`, and the reasons are:
   - `{:unknown_quantity, quantity}` for a quantity not in `all/0`;
   - `{:unknown_metric_kind, kind}`;

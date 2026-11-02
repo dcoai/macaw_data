@@ -18,6 +18,11 @@ defmodule Macaw.Data.Source.Finish do
   The budget never widens the window: finishing only removes rows. A delivery that needs
   none of it comes back as it is.
 
+  **A table stays a table, finished on its columns** (macaw_data#105): `:window` and
+  `:latest` read the columns they decide by and keep rows of the table's chunks, as views
+  or gathered by their slots, making no row; they keep exactly the rows finishing the
+  table's rows would keep. Any other delivery is finished over its rows, read by name.
+
   The pure rules of running sources (spec/01 §6) are here too: `ceiling/2` clamps a
   budget to the host's ceiling, and `pooled/1` is the one budget a pooled fetch asks for,
   the largest among its readers, each reader then reduced to its own by `reduce/5`.
@@ -28,6 +33,8 @@ defmodule Macaw.Data.Source.Finish do
   alias Macaw.Data.{Delivery, Operations, Schema, Table, Window}
   alias Macaw.Data.Operations.{Option, Registry}
   alias Macaw.Data.Source.{Description, Order, Request}
+  alias Macaw.Data.Source.Finish.Columns
+  alias Macaw.Data.Table.Subset
 
   @doc """
   The delivery finished for the request, each step where the description's `supports`
@@ -59,14 +66,8 @@ defmodule Macaw.Data.Source.Finish do
          :ok <- Window.check(request, schema),
          {:ok, d} <-
            step(delivery, :window in supports or request.window == nil or field == nil, fn d ->
-             with {:ok, rows} <- Delivery.named_rows(d) do
-               rows = Window.trim(rows, field, request.window)
-
-               {:ok,
-                d
-                |> rebuild(rows)
-                |> serve(:window, Window.intersect(d.served.window, request.window))}
-             end
+             with {:ok, d} <- trimmed(d, field, request.window),
+                  do: {:ok, serve(d, :window, Window.intersect(d.served.window, request.window))}
            end),
          {:ok, d} <-
            step(d, :box in supports or request.box == nil, fn d ->
@@ -83,18 +84,7 @@ defmodule Macaw.Data.Source.Finish do
                   do: {:ok, rebuild(d, Window.trim_region(rows, request.region))}
            end),
          {:ok, d} <-
-           step(d, :latest in supports or not request.latest, fn d ->
-             with {:ok, rows} <- Delivery.named_rows(d) do
-               latest =
-                 Window.latest_rows(
-                   rows,
-                   &Window.position(Table.get(&1, field)),
-                   &Schema.identity(schema, &1)
-                 )
-
-               {:ok, rebuild(d, latest)}
-             end
-           end),
+           step(d, :latest in supports or not request.latest, &latest(&1, field, schema)),
          {:ok, d} <-
            step(d, :order in supports or request.order == [], fn d ->
              with {:ok, rows} <- Delivery.named_rows(d),
@@ -147,6 +137,44 @@ defmodule Macaw.Data.Source.Finish do
 
   defp step(delivery, true, _fun), do: {:ok, delivery}
   defp step(delivery, false, fun), do: fun.(delivery)
+
+  # A table is finished on its columns (macaw_data#105): a step reads the columns it
+  # decides by and keeps rows of the table's chunks (`Finish.Columns`), making no row; any
+  # other delivery is finished over its rows, read by name.
+
+  # The rows whose `field` lies in the window.
+  defp trimmed(%Delivery{rows: %Table{} = table} = delivery, field, window) do
+    table = Subset.ready(table)
+
+    case Columns.within(table, field, window) do
+      {:run, first, count} -> {:ok, %{delivery | rows: Table.slice(table, first, count)}}
+      {:at, indexes} -> {:ok, %{delivery | rows: Subset.at(table, indexes)}}
+    end
+  end
+
+  defp trimmed(%Delivery{} = delivery, field, window) do
+    with {:ok, rows} <- Delivery.named_rows(delivery),
+         do: {:ok, rebuild(delivery, Window.trim(rows, field, window))}
+  end
+
+  # Each identity's latest row by the window field.
+  defp latest(%Delivery{rows: %Table{} = table} = delivery, field, schema) do
+    table = Subset.ready(table)
+    {:ok, %{delivery | rows: Subset.at(table, Columns.latest(table, field, schema))}}
+  end
+
+  defp latest(%Delivery{} = delivery, field, schema) do
+    with {:ok, rows} <- Delivery.named_rows(delivery) do
+      latest =
+        Window.latest_rows(
+          rows,
+          &Window.position(Table.get(&1, field)),
+          &Schema.identity(schema, &1)
+        )
+
+      {:ok, rebuild(delivery, latest)}
+    end
+  end
 
   defp serve(delivery, key, value), do: %{delivery | served: Map.put(delivery.served, key, value)}
 
