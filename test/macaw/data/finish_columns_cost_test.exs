@@ -68,6 +68,27 @@ defmodule Macaw.Data.FinishColumnsCostTest do
     assert latest < transpose
   end
 
+  # A window of another kind of time than its column (macaw_data#124) compares on the
+  # instant scale the buffer holds, so it scans the buffer as a bound of the column's own
+  # kind does: 319,993 for a naive half window over the UTC column when this was written,
+  # 319,867 for a UTC one; it raised before. Its sorted twin is the same binary search.
+  @tag verifies: "finish-columns-cost"
+  test "a window of another kind of time than its column scans the buffer as its own kind does" do
+    table = readings()
+    {transpose, _rows} = Work.reductions(fn -> Table.rows(table) end)
+    naive = Enum.map(@half, &(&1 && DateTime.to_naive(&1)))
+
+    {window, {:ok, half}} = Work.reductions(fn -> finish(table, window: naive) end)
+    assert Table.size(half.rows) == 25_000
+    assert window < 400_000
+    assert window < transpose
+
+    sorted = readings(sorted: true)
+    {search, {:ok, run}} = Work.reductions(fn -> finish(sorted, window: naive) end)
+    assert Table.equal?(run.rows, half.rows)
+    assert search < 20_000
+  end
+
   # A region reads its ranged columns, a scan of each packed buffer, intersected: 718,109
   # when this was written, 3,697,471 by rows. An order with a budget sorts the row indexes
   # by the order's columns and gathers its head alone: 1,569,977, 7,851,916 by rows. A

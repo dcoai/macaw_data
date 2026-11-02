@@ -26,9 +26,10 @@ defmodule Macaw.Data.Source.Finish.Columns do
   @doc false
   # The indexes, ascending, of the rows whose `field` lies in `window` (`Window.within?/2`,
   # both bounds inclusive, a missing value in none). A table sorted by the field
-  # (`Table.sorted/1`), every chunk packed in the bounds' kind, is binary-searched to one
-  # run; otherwise each chunk is scanned, its packed buffer where the bounds are its kind,
-  # its values through `within?/2` where not.
+  # (`Table.sorted/1`), every chunk packed in a form its bounds compare with as it lies (a
+  # number buffer and numbers, a time buffer and instants of any kind), is binary-searched
+  # to one run; otherwise each chunk is scanned, its packed buffer where the bounds compare
+  # with it, its values through `within?/2` where not.
   @spec within(Table.t(), Table.name() | nil, Window.t()) ::
           {:run, non_neg_integer(), non_neg_integer()} | {:at, [non_neg_integer()]}
   def within(table, field, [from, to] = window) do
@@ -77,14 +78,15 @@ defmodule Macaw.Data.Source.Finish.Columns do
   defp kind({:date, _days, _validity}), do: Date
   defp kind(_column), do: :general
 
-  # Whether each bound is of the kind, or open.
+  # Whether each bound is open or compares with the buffer as it lies: a number with a
+  # number buffer, an instant of any kind with a time buffer, which holds instants on
+  # `Order.instant/1`'s scale, the scale `Window.compare/2` compares any two instants on.
   defp bounds_of?(:general, _from, _to), do: false
   defp bounds_of?(kind, from, to), do: bound_of?(kind, from) and bound_of?(kind, to)
 
   defp bound_of?(_kind, nil), do: true
   defp bound_of?(:number, value), do: is_number(value)
-  defp bound_of?(kind, %{__struct__: kind}), do: true
-  defp bound_of?(_kind, _value), do: false
+  defp bound_of?(_time, value), do: Window.instant?(value)
 
   # The first index, of `size`, at which `past?` holds, over a column in ascending order,
   # missing values last: `past?` is false up to it and true from it.
@@ -120,8 +122,8 @@ defmodule Macaw.Data.Source.Finish.Columns do
   end
 
   # One view's indexes in the window: its packed buffer compared against the bounds where
-  # they are its kind, each closed bound's test a scan, the two intersected (a test over a
-  # buffer keeps no missing value); else its values.
+  # they compare with it as it lies, each closed bound's test a scan, the two intersected (a
+  # test over a buffer keeps no missing value); else its values.
   defp kept(chunk, name, first, count, form, [from, to] = window) do
     tests = for {test, bound} <- [gte: from, lte: to], bound != nil, do: {test, bound}
 

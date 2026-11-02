@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Changes
+
+- **Fixed:** a request window whose bound is another kind of time than the window field's values no longer raises `FunctionClauseError` from `Macaw.Data.Window.compare/2` (#124, #134, spec/01 §2.4). Times compare on one scale whatever their kinds, `Macaw.Data.Source.Order.instant/1`'s, as sort and `filter` compare them: a `NaiveDateTime` or `Date` bound trims `DateTime` rows, and a list column of mixed kinds, by instant. `Macaw.Data.Source.Finish.finish/4`, `Macaw.Data.Window.trim/3`, `Macaw.Data.Window.trim_region/2`, `Macaw.Data.Window.newer/3`, `Macaw.Data.Window.before/4` and `Macaw.Data.Derived.window/3` answer a value for every request `Macaw.Data.Window.check/2` passes. A value with no reading on a closed bound's scale (a number or a string in a window of instants) lies in no window, as `nil` does. `Macaw.Data.Window.latest/2`, `Macaw.Data.Window.earliest/2` and `Macaw.Data.Window.intersect/2` keep the first of two bounds that share no scale.
+- **Added:** `Macaw.Data.Window.comparable?/2`, whether two values share the scale `Macaw.Data.Window.compare/2` compares them on: both numbers, or both instants of any kinds (#124).
+- **Changed:** `Macaw.Data.Window.check/2` no longer refuses a region range whose two ends are different kinds of time (`{:window, :mixed}`). They compare on the instant scale, so only an inverted range is refused (#124). A served window of two kinds of time is no longer malformed to `Macaw.Data.Source.Conformance` either.
+- **Changed:** finishing a table reads a packed time column (UTC, zoned, naive or date) against window bounds of any kind of time as the buffer lies (#124). On a 50k-row UTC table a naive half window costs 319,993 reductions (~8 ms), as a UTC one does (319,867, ~6 ms), and the sorted table's binary search 6,479. Same-kind windows are unchanged (319,860 before).
+
 ## v0.10.0 (2026-11-02)
 
 **Errors are values, a derived source reads columns, and a table is finished on its columns** (#114, #107, #105). A public function answers bad input with `{:error, reason}` and keeps its old return in a `!` twin; a CI guard holds `lib/` to it (spec/00 §5). A derived source may take its inputs as tables (`input: :columns`) and read them through `Macaw.Data.Derived.Columns`, which never makes a row. A derived source's output is a table, and the engine windows and finishes a table input on its columns. `filter` compares by the column's type, and `eq`/`ne` compare a time by its instant (#96, #102). This release is breaking for an adopter that calls any function whose return gained `{:ok, _}`, matches a derived output's rows, writes a derived source document that a 0.9.x reader must read, or relies on `filter` across kinds. The guide below lists what to change, and the entries after it give the detail.

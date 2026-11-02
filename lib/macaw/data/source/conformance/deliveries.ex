@@ -166,7 +166,7 @@ defmodule Macaw.Data.Source.Conformance.Deliveries do
 
   defp bound?(value), do: value == nil or Window.time?(value)
 
-  defp ordered?(from, to), do: kind(from) == kind(to) and Window.compare(from, to) != :gt
+  defp ordered?(from, to), do: Window.comparable?(from, to) and Window.compare(from, to) != :gt
 
   defp resolution?(nil), do: true
   defp resolution?(r) when is_number(r), do: r > 0
@@ -356,8 +356,9 @@ defmodule Macaw.Data.Source.Conformance.Deliveries do
 
   @doc false
   # Window arithmetic over the times a source served, which a broken source may not give
-  # of one kind: a bound of another kind than the other is kept, never compared.
-  def comparable?(a, b), do: Window.time?(a) and Window.time?(b) and kind(a) == kind(b)
+  # on one scale: a bound sharing no scale with the other (`Window.comparable?/2`, a number
+  # against an instant) is kept, never compared; instants of any kinds compare.
+  def comparable?(a, b), do: Window.comparable?(a, b)
 
   @doc false
   def earlier(nil, b), do: b

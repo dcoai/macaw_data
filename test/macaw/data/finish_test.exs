@@ -350,9 +350,10 @@ defmodule Macaw.Data.FinishTest do
   end
 
   @tag verifies: "window-arithmetic"
-  test "times compare by kind; positions, intersections and the seams" do
+  test "times compare on one scale; positions, intersections and the seams" do
     assert Window.compare(1, 1.0) == :eq
     assert Window.compare(~D[2026-01-01], ~D[2026-01-02]) == :lt
+    assert Window.compare(~D[2026-01-02], ~N[2026-01-01 23:59:59]) == :gt
     assert Window.intersect([0, 10], [5, nil]) == [5, 10]
     assert Window.intersect(nil, [1, 2]) == [1, 2]
     assert Window.position(~U[1970-01-01 00:00:01Z]) == 1_000_000

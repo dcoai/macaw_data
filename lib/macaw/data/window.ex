@@ -4,7 +4,10 @@ defmodule Macaw.Data.Window do
 
   - A **window** is `nil` (whatever a source holds) or `[from, to]`, either bound `nil`
     for open, over the window field: numbers for a `:number` field, instants (`DateTime`,
-    `NaiveDateTime` or `Date`) for a `:time` one (`applies?/2`).
+    `NaiveDateTime` or `Date`) for a `:time` one (`applies?/2`). Instants of any kinds
+    compare on one scale, `Macaw.Data.Source.Order.instant/1`'s (`compare/2`), so a bound
+    of another kind of time than the rows still trims them, as sort and `filter` compare
+    times; a value with no reading on the bound's scale lies in no window.
   - A **box** is `%{west, south, east, north}` in degrees over a `:point` window field
     (`Macaw.Data.Source.Request.box?/1`); `west` east of `east` crosses the antimeridian.
   - A **region** is ranges over named `:time` or `:number` fields, `%{field => [from, to]}`.
@@ -25,17 +28,36 @@ defmodule Macaw.Data.Window do
   """
 
   alias Macaw.Data.{Schema, Table}
-  alias Macaw.Data.Source.Request
+  alias Macaw.Data.Source.{Order, Request}
 
   # The request's fields a window check reads.
   @axes [:window, :box, :region, :latest, :order]
 
+  # The kinds of instant, each compared on `Order.instant/1`'s one scale.
+  @kinds [DateTime, NaiveDateTime, Date]
+
   @type time :: number() | DateTime.t() | NaiveDateTime.t() | Date.t()
   @type t :: [time() | nil] | nil
 
-  @doc "`:lt`, `:eq` or `:gt` between two times of one kind."
+  @doc """
+  `:lt`, `:eq` or `:gt` between two times on one scale (`comparable?/2`): two numbers by
+  value, and two instants of any kinds on `Macaw.Data.Source.Order.instant/1`'s one scale
+  (macaw_data#124): a `DateTime` by its UTC instant, a `NaiveDateTime` by its wall clock
+  and a `Date` at midnight, as sort and `filter` compare them (spec/01 §2.3). Two values
+  that share no scale are not compared; `comparable?/2` tells.
+
+      iex> Macaw.Data.Window.compare(~N[2026-01-01 12:00:00], ~U[2026-01-01 00:00:00Z])
+      :gt
+      iex> Macaw.Data.Window.compare(~D[2026-01-01], ~N[2026-01-01 00:00:00])
+      :eq
+  """
   @spec compare(time(), time()) :: :lt | :eq | :gt
-  def compare(a, b) when is_number(a) and is_number(b) do
+  def compare(a, b) when is_number(a) and is_number(b), do: by_value(a, b)
+
+  def compare(%a_kind{} = a, %b_kind{} = b) when a_kind in @kinds and b_kind in @kinds,
+    do: by_value(Order.instant(a), Order.instant(b))
+
+  defp by_value(a, b) do
     cond do
       a < b -> :lt
       a > b -> :gt
@@ -43,9 +65,18 @@ defmodule Macaw.Data.Window do
     end
   end
 
-  def compare(%DateTime{} = a, %DateTime{} = b), do: DateTime.compare(a, b)
-  def compare(%NaiveDateTime{} = a, %NaiveDateTime{} = b), do: NaiveDateTime.compare(a, b)
-  def compare(%Date{} = a, %Date{} = b), do: Date.compare(a, b)
+  @doc """
+  Whether two values share the scale `compare/2` compares them on: both numbers, or both
+  instants of any kinds. Any other value, `nil` included, shares none.
+
+      iex> Macaw.Data.Window.comparable?(~D[2026-01-01], ~U[2026-01-01 00:00:00Z])
+      true
+      iex> Macaw.Data.Window.comparable?(5, ~U[2026-01-01 00:00:00Z])
+      false
+  """
+  @spec comparable?(term(), term()) :: boolean()
+  def comparable?(a, b) when is_number(a) and is_number(b), do: true
+  def comparable?(a, b), do: instant?(a) and instant?(b)
 
   @doc "Whether a value is one a window can be over: a number or an instant."
   @spec time?(term()) :: boolean()
@@ -77,7 +108,17 @@ defmodule Macaw.Data.Window do
   defp of?(value, :number), do: is_number(value)
   defp of?(value, :time), do: instant?(value)
 
-  @doc "Whether a time lies within a window, both bounds inclusive; `nil` lies in none but `nil`."
+  @doc """
+  Whether a time lies within a window, both bounds inclusive, compared as `compare/2`
+  compares (an instant of any kind against bounds of any kind); `nil` lies in none but
+  `nil`, and so does a value that shares no scale with a closed bound (a number in a window
+  of instants, a string), which has no reading there.
+
+      iex> Macaw.Data.Window.within?(~N[2026-01-01 12:00:00], [~U[2026-01-01 00:00:00Z], ~D[2026-01-02]])
+      true
+      iex> Macaw.Data.Window.within?(5, [~U[2026-01-01 00:00:00Z], nil])
+      false
+  """
   @spec within?(time() | nil, t()) :: boolean()
   def within?(_time, nil), do: true
   def within?(nil, _window), do: false
@@ -95,7 +136,7 @@ defmodule Macaw.Data.Window do
   def newer(rows, field, time) do
     Enum.filter(rows, fn row ->
       value = Table.get(row, field)
-      value != nil and compare(value, time) == :gt
+      comparable?(value, time) and compare(value, time) == :gt
     end)
   end
 
@@ -114,7 +155,9 @@ defmodule Macaw.Data.Window do
   def before(rows, field, from, upper) do
     Enum.filter(rows, fn row ->
       time = Table.get(row, field)
-      time != nil and after_from?(time, from) and (upper == nil or compare(time, upper) == :lt)
+
+      time != nil and after_from?(time, from) and
+        (upper == nil or (comparable?(time, upper) and compare(time, upper) == :lt))
     end)
   end
 
@@ -184,17 +227,23 @@ defmodule Macaw.Data.Window do
   def intersect(window, nil), do: window
   def intersect([f1, t1], [f2, t2]), do: [latest(f1, f2), earliest(t1, t2)]
 
-  @doc "The later of two times, a `nil` ignored."
+  @doc """
+  The later of two times, a `nil` ignored; the first of two that share no scale
+  (`comparable?/2`), which are not compared.
+  """
   @spec latest(time() | nil, time() | nil) :: time() | nil
   def latest(nil, b), do: b
   def latest(a, nil), do: a
-  def latest(a, b), do: if(compare(a, b) == :lt, do: b, else: a)
+  def latest(a, b), do: if(comparable?(a, b) and compare(a, b) == :lt, do: b, else: a)
 
-  @doc "The earlier of two times, a `nil` ignored."
+  @doc """
+  The earlier of two times, a `nil` ignored; the first of two that share no scale
+  (`comparable?/2`), which are not compared.
+  """
   @spec earliest(time() | nil, time() | nil) :: time() | nil
   def earliest(nil, b), do: b
   def earliest(a, nil), do: a
-  def earliest(a, b), do: if(compare(a, b) == :gt, do: b, else: a)
+  def earliest(a, b), do: if(comparable?(a, b) and compare(a, b) == :gt, do: b, else: a)
 
   @doc """
   A time as a number, for a reduction's `x`: a number itself, a `DateTime` its Unix
@@ -385,18 +434,12 @@ defmodule Macaw.Data.Window do
     end
   end
 
+  # Two ends of the field's type (`ends_faults/3`) share a scale: two instants of any kinds
+  # compare on the instant scale (macaw_data#124), so only an inverted range is refused.
   defp order_faults(_path, from, to) when from == nil or to == nil, do: []
 
-  defp order_faults(path, from, to) do
-    cond do
-      kind(from) != kind(to) -> [{path, {:window, :mixed}}]
-      compare(from, to) == :gt -> [{path, {:window, :inverted}}]
-      true -> []
-    end
-  end
-
-  defp kind(value) when is_number(value), do: :number
-  defp kind(%module{}), do: module
+  defp order_faults(path, from, to),
+    do: if(compare(from, to) == :gt, do: [{path, {:window, :inverted}}], else: [])
 
   defp latest_faults(false, _field, _schema), do: []
 
@@ -413,8 +456,8 @@ defmodule Macaw.Data.Window do
   end
 
   defp after_from?(_time, nil), do: true
-  defp after_from?(time, from), do: compare(time, from) != :lt
+  defp after_from?(time, from), do: comparable?(time, from) and compare(time, from) != :lt
 
   defp before_to?(_time, nil), do: true
-  defp before_to?(time, to), do: compare(time, to) != :gt
+  defp before_to?(time, to), do: comparable?(time, to) and compare(time, to) != :gt
 end
