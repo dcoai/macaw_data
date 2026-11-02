@@ -246,21 +246,21 @@ defmodule Macaw.Data.Window do
   def earliest(a, b), do: if(comparable?(a, b) and compare(a, b) == :gt, do: b, else: a)
 
   @doc """
-  A time as a number, for a reduction's `x`: a number itself, a `DateTime` its Unix
-  microseconds, a `NaiveDateTime` its Gregorian seconds, a `Date` its Gregorian days;
-  anything else `nil`, a gap.
+  A time as a number, for `latest` and a reduction's `x` (spec/01 §2.4): a number itself,
+  and an instant of any kind its `Macaw.Data.Source.Order.instant/1`, integer Unix
+  microseconds on one scale (macaw_data#127): a `DateTime`'s UTC instant, a
+  `NaiveDateTime`'s wall clock, a `Date` at midnight. So naive times a microsecond apart
+  have different positions, and a series reduces to the same rows whichever kind of time
+  it is given as. Anything else is `nil`, a gap.
+
+      iex> Macaw.Data.Window.position(~N[1970-01-01 00:00:00.000001])
+      1
+      iex> Macaw.Data.Window.position(~D[1970-01-02])
+      86_400_000_000
   """
   @spec position(term()) :: number() | nil
   def position(value) when is_number(value), do: value
-  def position(%DateTime{} = value), do: DateTime.to_unix(value, :microsecond)
-
-  def position(%NaiveDateTime{} = value) do
-    {seconds, micro} = NaiveDateTime.to_gregorian_seconds(value)
-    seconds + micro / 1_000_000
-  end
-
-  def position(%Date{} = value), do: Date.to_gregorian_days(value)
-  def position(_value), do: nil
+  def position(value), do: Order.instant(value)
 
   @doc """
   Whether a position `{longitude, latitude}` lies in a box, bounds inclusive; a box whose

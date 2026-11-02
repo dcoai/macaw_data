@@ -222,9 +222,9 @@ defmodule Macaw.Data.Source.Finish.Columns do
   end
 
   @doc false
-  # Each row's `Window.position/1` by a field, `nil` where it has none. A UTC or zoned
-  # buffer holds the very position, Unix microseconds, read as it lies; any other column is
-  # read value by value.
+  # Each row's `Window.position/1` by a field, `nil` where it has none. A time buffer (UTC,
+  # zoned, naive or date) holds the very position, `Order.instant/1`'s microseconds, read
+  # as it lies; any other column is read value by value.
   @spec positions(Table.t(), Table.name() | nil) :: [number() | nil]
   def positions(table, field) do
     case column(table, field) do
@@ -234,8 +234,11 @@ defmodule Macaw.Data.Source.Finish.Columns do
       name ->
         Enum.flat_map(Table.chunks(table), fn {chunk, first, count} ->
           case kind(storage(chunk, name, first, count)) do
-            DateTime -> Chunk.instants(chunk, name, first, count)
-            _other -> chunk |> Chunk.values(name, first, count) |> Enum.map(&Window.position/1)
+            time when time in [DateTime, NaiveDateTime, Date] ->
+              Chunk.instants(chunk, name, first, count)
+
+            _other ->
+              chunk |> Chunk.values(name, first, count) |> Enum.map(&Window.position/1)
           end
         end)
     end

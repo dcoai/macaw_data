@@ -357,7 +357,8 @@ defmodule Macaw.Data.FinishTest do
     assert Window.intersect([0, 10], [5, nil]) == [5, 10]
     assert Window.intersect(nil, [1, 2]) == [1, 2]
     assert Window.position(~U[1970-01-01 00:00:01Z]) == 1_000_000
-    assert Window.position(~D[0000-01-03]) == 2
+    assert Window.position(~D[1970-01-03]) == 2 * 86_400_000_000
+    assert Window.position(~N[1970-01-01 00:00:01.5]) == 1_500_000
     assert Window.position("x") == nil
     assert Window.newer([%{t: 1}, %{t: 5}, %{t: 9}], :t, 5) == [%{t: 9}]
     assert Window.within?(nil, [0, 1]) == false

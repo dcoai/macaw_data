@@ -89,6 +89,29 @@ defmodule Macaw.Data.FinishColumnsCostTest do
     assert search < 20_000
   end
 
+  # Latest over a naive or a date column reads its buffer's instants as it lies, as over a
+  # UTC one (macaw_data#127): 609,472 each when this was written, against 2,009,465 (naive)
+  # and 1,567,973 (date) when their positions were read value by value.
+  @tag verifies: "finish-columns-cost"
+  test "latest over a naive or a date column reads its buffer as over a UTC one" do
+    table = readings()
+    {utc, {:ok, _newest}} = Work.reductions(fn -> finish(table, latest: true) end)
+
+    for to <- [&DateTime.to_naive/1, &DateTime.to_date/1] do
+      retimed =
+        Table.new!([
+          {:t, :time, Enum.map(Table.column(table, :t), to)},
+          {:host, :category, Table.column(table, :host)},
+          {:cpu, :number, Table.column(table, :cpu)}
+        ])
+
+      {latest, {:ok, newest}} = Work.reductions(fn -> finish(retimed, latest: true) end)
+      assert Table.size(newest.rows) == 50
+      assert latest < 750_000
+      assert latest < utc * 1.1
+    end
+  end
+
   # A region reads its ranged columns, a scan of each packed buffer, intersected: 718,109
   # when this was written, 3,697,471 by rows. An order with a budget sorts the row indexes
   # by the order's columns and gathers its head alone: 1,569,977, 7,851,916 by rows. A

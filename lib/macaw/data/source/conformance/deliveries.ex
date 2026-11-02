@@ -450,11 +450,10 @@ defmodule Macaw.Data.Source.Conformance.Deliveries do
     |> Enum.map(fn {a, b} -> {seconds(a, b), kind(a)} end)
   end
 
-  # The gap in the window field's own units: seconds for date-times, the values for numbers.
+  # The gap in the window field's own units: seconds for times, whose positions are
+  # microseconds whatever their kind, the values for numbers.
   defp seconds(a, b) when is_number(a), do: b - a
-  defp seconds(%DateTime{} = a, b), do: (Window.position(b) - Window.position(a)) / 1_000_000
-  defp seconds(%NaiveDateTime{} = a, b), do: Window.position(b) - Window.position(a)
-  defp seconds(%Date{} = a, b), do: (Window.position(b) - Window.position(a)) * 86_400
+  defp seconds(a, b), do: (Window.position(b) - Window.position(a)) / 1_000_000
 
   defp spacing(resolution, _kind) when is_number(resolution), do: resolution
   defp spacing(resolution, :number) when is_atom(resolution), do: nil
