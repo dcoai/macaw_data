@@ -12,7 +12,7 @@ defmodule Macaw.Data.Source.Finish.Columns do
 
   alias Macaw.Data.{Schema, Table, Window}
   alias Macaw.Data.Source.Order
-  alias Macaw.Data.Table.{Chunk, Column}
+  alias Macaw.Data.Table.{Bitmap, Chunk, Column, Subset}
   alias Macaw.Layers.Names
 
   @doc false
@@ -303,6 +303,66 @@ defmodule Macaw.Data.Source.Finish.Columns do
         end)
     end
   end
+
+  # -- :budget ------------------------------------------------------------------------------
+
+  @doc false
+  # One series of a table as a budget's reducer reads it (macaw_data#146): a table of the
+  # series' rows, `"x"` the window field's column as it is packed (`nil` for the row's
+  # place in the series), `"y"` the field's, and `"i"` each row's index in the table, so
+  # the reducer's kept rows name the table's rows. Every column but `"i"` is the table's
+  # storage, read where it lies: no value is decoded and none packed again. `indexes` are
+  # the series' rows of `table`, ascending; the table's columns are ones `series?/3`
+  # passes.
+  @spec series(Table.t(), Table.name() | nil, Table.name(), [non_neg_integer()]) :: Table.t()
+  def series(table, time, field, indexes) do
+    x = column(table, time)
+    y = column(table, field)
+    rows = if length(indexes) == Table.size(table), do: table, else: Subset.at(table, indexes)
+    x_type = if x, do: Table.column_type(table, x), else: :number
+    header = [{"x", x_type}, {"y", Table.column_type(table, y)}, {"i", :number}]
+
+    {views, {[], _place}} =
+      Enum.map_reduce(Table.chunks(rows), {indexes, 0}, fn {chunk, first, count}, {left, place} ->
+        {here, left} = Enum.split(left, count)
+
+        columns = %{
+          "x" =>
+            if(x,
+              do: Chunk.storage(chunk, x, first, count),
+              else: ints(place..(place + count - 1)//1, count)
+            ),
+          "y" => Chunk.storage(chunk, y, first, count),
+          "i" => ints(here, count)
+        }
+
+        {{Chunk.of_storage(header, columns, count), 0, count}, {left, place + count}}
+      end)
+
+    sorted = if x != nil and Table.sorted(rows) == x, do: "x"
+    {:ok, series} = Table.from_chunks(header, views, sorted: sorted)
+    series
+  end
+
+  @doc false
+  # Whether a budget's reducer reads the table's columns where they lie (`series/4`): a
+  # column for every field, and a window field, if any, whose column is a `:time` or a
+  # `:number` one, which the reducer places exactly at the rows' positions
+  # (`positions/2`: a time's `Order.instant/1` microseconds on its time scale, a number
+  # itself). Any other is read by value.
+  @spec series?(Table.t(), Table.name() | nil, [Table.name()]) :: boolean()
+  def series?(table, time, fields) do
+    Enum.all?(fields, &(column(table, &1) != nil)) and
+      (time == nil or
+         case column(table, time) do
+           nil -> false
+           x -> Table.column_type(table, x) in [:time, :number]
+         end)
+  end
+
+  # Integers, `count` of them and none missing, as an int64 column.
+  defp ints(values, count),
+    do: {:int64, for(v <- values, into: <<>>, do: <<v::signed-little-64>>), Bitmap.ones(count)}
 
   # -- :latest ------------------------------------------------------------------------------
 

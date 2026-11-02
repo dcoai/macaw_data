@@ -367,16 +367,14 @@ defmodule Macaw.Data.Source.Finish do
           |> Map.values()
       end
 
-    x = if time, do: form |> positions(time) |> List.to_tuple()
     share = length(groups) * length(numbers)
     node = node!(method, budget, share, registry)
-
-    ys = for field <- numbers, do: {field, form |> read(field) |> List.to_tuple()}
+    readings = readings(form, time, numbers)
 
     result =
-      for group <- groups, {field, y} <- ys, reduce: {:ok, MapSet.new()} do
+      for group <- groups, field <- numbers, reduce: {:ok, MapSet.new()} do
         {:ok, kept} ->
-          with {:ok, picked} <- pick(group, x, y, field, node, method),
+          with {:ok, picked} <- pick(readings, group, field, node, method),
                do: {:ok, Enum.reduce(picked, kept, &MapSet.put(&2, &1))}
 
         {:error, _faults} = error ->
@@ -399,11 +397,34 @@ defmodule Macaw.Data.Source.Finish do
     checked
   end
 
+  # How the series' readings are read, once: a table's columns where they lie
+  # (macaw_data#146, `Columns.series?/3`), or the window field's positions and each
+  # field's values by index, for rows and for a table whose columns the reducer can't
+  # read as they lie.
+  defp readings({:table, table} = form, time, numbers) do
+    if Columns.series?(table, time, numbers),
+      do: {:columns, table, time},
+      else: by_value(form, time, numbers)
+  end
+
+  defp readings(form, time, numbers), do: by_value(form, time, numbers)
+
+  defp by_value(form, time, numbers) do
+    x = if time, do: form |> positions(time) |> List.to_tuple()
+    {:values, x, Map.new(numbers, &{&1, form |> read(&1) |> List.to_tuple()})}
+  end
+
   # One series' readings of one field, as the reducer's [x, y], reduced by its node: the
   # indexes of the rows it keeps; or the reducer's fault over the readings, at the field
   # (`{[:rows, field], reason}`). `x` is each row's position by the window field, or its
-  # place in the series without one.
-  defp pick(series, x, y, field, node, {module, _count, _per, _least}) do
+  # place in the series without one. A table's series is read from its own columns, the
+  # window field's buffer the very positions (`Columns.series/4`), so a budget packs no
+  # reading again.
+  defp pick({:columns, table, time}, series, field, node, method),
+    do: table |> Columns.series(time, field, series) |> reduce_series(field, node, method)
+
+  defp pick({:values, x, ys}, series, field, node, method) do
+    y = Map.fetch!(ys, field)
     xs = if x, do: Enum.map(series, &elem(x, &1)), else: Enum.to_list(0..(length(series) - 1)//1)
 
     table =
@@ -413,6 +434,10 @@ defmodule Macaw.Data.Source.Finish do
         {"i", :number, series}
       ])
 
+    reduce_series(table, field, node, method)
+  end
+
+  defp reduce_series(table, field, node, {module, _count, _per, _least}) do
     case module.run(node, table, %{}) do
       %Table{} = reduced -> {:ok, Table.column(reduced, "i")}
       {:error, {_key, reason}} -> {:error, [{[:rows, field], reason}]}

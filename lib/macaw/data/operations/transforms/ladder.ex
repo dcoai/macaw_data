@@ -134,20 +134,38 @@ defmodule Macaw.Data.Operations.Transforms.Ladder do
 
   defp extent(views, bound, false, op) do
     Enum.reduce(views, nil, fn view, extent ->
-      {xs, kind} = x_readings(view, bound)
+      case x_readings(view, bound) do
+        # Instants place in the order they read, so their least and greatest are placed
+        # alone, read in one pass that calls nothing a row (macaw_data#146).
+        {xs, kind} when kind in [:instant, :instant_seconds] ->
+          case least_greatest(xs, nil, nil) do
+            nil ->
+              extent
 
-      Enum.reduce(xs, extent, fn
-        nil, extent ->
-          extent
+            {lo, hi} ->
+              widen(extent, at_space(lo, kind, bound, op), at_space(hi, kind, bound, op))
+          end
 
-        x, nil ->
-          {at_space(x, kind, bound, op), at_space(x, kind, bound, op)}
-
-        x, {lo, hi} ->
-          {min(lo, at_space(x, kind, bound, op)), max(hi, at_space(x, kind, bound, op))}
-      end)
+        {xs, kind} ->
+          Enum.reduce(xs, extent, fn
+            nil, extent -> extent
+            x, extent -> widen(extent, at_space(x, kind, bound, op), at_space(x, kind, bound, op))
+          end)
+      end
     end)
   end
+
+  defp widen(nil, lo, hi), do: {lo, hi}
+  defp widen({a, b}, lo, hi), do: {min(a, lo), max(b, hi)}
+
+  # The least and greatest of integers, `nil`s skipped; `nil` for none.
+  defp least_greatest([], nil, nil), do: nil
+  defp least_greatest([], lo, hi), do: {lo, hi}
+  defp least_greatest([nil | xs], lo, hi), do: least_greatest(xs, lo, hi)
+  defp least_greatest([x | xs], nil, nil), do: least_greatest(xs, x, x)
+  defp least_greatest([x | xs], lo, hi) when x < lo, do: least_greatest(xs, x, hi)
+  defp least_greatest([x | xs], lo, hi) when x > hi, do: least_greatest(xs, lo, x)
+  defp least_greatest([_x | xs], lo, hi), do: least_greatest(xs, lo, hi)
 
   # The rows of a view of a sorted column before its gaps, which come last.
   defp present_count({chunk, first, count}, name),

@@ -119,7 +119,8 @@ defmodule Macaw.Data.FinishColumnsCostTest do
   # 816,397 once one field's sort read its column's keys (macaw_data#140). A
   # budget reduces each host's series from its columns and gathers the kept rows:
   # 5,685,119, 10,263,925 by rows; most of it is the reducer's own work, which the rows
-  # paid too.
+  # paid too. With each series' columns read where they lie (macaw_data#146) it is
+  # 4,573,772 (5,484,998 just before): 50 series of 1,000 rows each gather their rows first.
   @tag verifies: "finish-columns-cost"
   test "finishing a 50k-row table by region, order and budget stays under its bounds" do
     table = readings()
@@ -139,7 +140,41 @@ defmodule Macaw.Data.FinishColumnsCostTest do
 
     {budget, {:ok, reduced}} = Work.reductions(fn -> finish(table, budget: 1_000) end)
     assert Table.size(reduced.rows) <= 1_000
-    assert budget < 6_500_000
+    assert budget < 5_000_000, "budget #{budget}"
+  end
+
+  # visualize#998's budget (macaw_data#146): one series of 50,000 UTC readings and two
+  # number fields reduced to 4,000. Each field's reducer reads the table's own columns, x
+  # the time buffer's instants where they lie, so no series is packed again: 2,853,780
+  # on the Elixir path when this was written (2,265,790 for a table known sorted by
+  # time, whose extent is read at its ends), 8,781,648 when each field's series was
+  # packed into a fresh table first. With the kernels 1,339,034 (752,040 sorted), from
+  # 8,212,293: the packing was most of the budget's work.
+  @tag verifies: "finish-columns-cost"
+  test "a budget over one 50k-row series of two fields reads its columns where they lie" do
+    schema =
+      Schema.new!(%{t: %{type: :time, window: true}, v: %{type: :number}, w: %{type: :number}})
+
+    n = 50_000
+
+    table =
+      Table.new!([
+        {:t, :time, for(i <- 0..(n - 1), do: DateTime.add(@base, i, :second))},
+        {:v, :number, for(i <- 0..(n - 1), do: :math.sin(i / 40) * 10 + rem(i * 7919, 13))},
+        {:w, :number, for(i <- 0..(n - 1), do: :math.cos(i / 97) * 5)}
+      ])
+
+    run = fn -> Finish.reduce(Delivery.new!(table), schema, 4_000) end
+
+    {elixir, {:ok, reduced}} = Work.reductions(fn -> Native.elixir(run) end)
+    assert Table.size(reduced.rows) <= 4_000
+    assert reduced.served.reduced_by == :runtime
+    assert elixir < 3_200_000, "Elixir path #{elixir}"
+
+    if Native.loaded?() do
+      {kernels, {:ok, ^reduced}} = Work.reductions(fn -> Native.normal_schedulers(run) end)
+      assert kernels < 1_500_000, "kernels #{kernels}"
+    end
   end
 
   # A derived source's request window over a table input is the same finishing: 319,907

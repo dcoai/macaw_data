@@ -493,7 +493,16 @@ defmodule Macaw.Data.Table.Chunk do
   @spec detached(t(), [{term(), atom()}], non_neg_integer(), non_neg_integer()) :: t()
   def detached(%__MODULE__{} = chunk, header, first, count) do
     columns = Map.new(header, fn {name, _type} -> {name, storage(chunk, name, first, count)} end)
+    of_storage(header, columns, count)
+  end
 
+  # A chunk of `count` rows of the packed `columns` (a name's storage, as `storage/4`
+  # answers it) under `header`, with no id, digest, derivation, delta or fetch: rows
+  # other chunks hold, read as a chunk of their own and copied from none
+  # (`detached/4`; the budget's reducer input, `Source.Finish.Columns.series/4`).
+  @doc false
+  @spec of_storage([{term(), atom()}], %{term() => Column.t()}, non_neg_integer()) :: t()
+  def of_storage(header, columns, count) do
     %__MODULE__{
       size: count,
       columns: columns,
