@@ -473,7 +473,7 @@ defmodule Macaw.Data.Operations do
   defp reading(:number), do: "a number"
   defp reading(:time), do: "a time or a number"
   defp reading(:positive), do: "a number above zero"
-  defp reading(:comparable), do: "a number, or a time of the first reading's kind"
+  defp reading(:comparable), do: "a number among numbers, or a time among times"
   defp reading(:point), do: "a number or a point [x, y]"
 
   defp words(:field), do: "a field name"

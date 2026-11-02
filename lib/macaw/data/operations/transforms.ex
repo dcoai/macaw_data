@@ -21,7 +21,7 @@ defmodule Macaw.Data.Operations.Transforms do
   | `spectrum` | `field*`, `time`, `every`, `samples`, `window`, `detrend`, `as` |
   """
 
-  alias Macaw.Data.Table
+  alias Macaw.Data.{Table, Window}
   alias Macaw.Data.Operations.Option
 
   @doc "The modules of the table operations, in spec/04 §4's order."
@@ -134,7 +134,7 @@ defmodule Macaw.Data.Operations.Transforms do
   @typedoc """
   What a step reads a column's values as (spec/04 §3.1): `:number`; `:time`, a time or a
   number as seconds (`seconds!/3`); `:positive`, a number above zero (a log scale's x);
-  `:comparable`, numbers, or instants of one kind; `:point`, a number or a point `[x, y]`;
+  `:comparable`, numbers, or times of any kinds, not both; `:point`, a number or a point `[x, y]`;
   `:any`, anything.
   """
   @type reading :: :number | :time | :positive | :comparable | :point | :any
@@ -191,9 +191,9 @@ defmodule Macaw.Data.Operations.Transforms do
 
   defp reads?(_other, :time), do: false
 
-  defp same_kind?(a, b) when is_number(a) and is_number(b), do: true
-  defp same_kind?(%kind{}, %kind{}) when kind in [DateTime, NaiveDateTime, Date], do: true
-  defp same_kind?(_a, _b), do: false
+  # Numbers with numbers, times of any kinds with times: the scale `Window.compare/2`
+  # orders them on (macaw_data#141).
+  defp same_kind?(a, b), do: Window.comparable?(a, b)
 
   @doc false
   # The option every aggregate-naming step shares (spec/04 §4.9, §4.10).

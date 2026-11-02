@@ -195,4 +195,82 @@ defmodule Macaw.Data.Operations.FaultsTest do
       end
     end
   end
+
+  # A time of each kind at hour `h` of 2026-01-01: UTC, another zone (built by its fields,
+  # no time-zone database involved), naive, and a date (midnight).
+  defp time_of(:utc, h), do: DateTime.add(~U[2026-01-01 00:00:00Z], h, :hour)
+
+  defp time_of(:zoned, h) do
+    wall = DateTime.add(~U[2026-01-01 00:00:00Z], h + 1, :hour)
+    %{wall | time_zone: "Europe/Paris", zone_abbr: "CET", utc_offset: 3600, std_offset: 0}
+  end
+
+  defp time_of(:naive, h), do: NaiveDateTime.add(~N[2026-01-01 00:00:00], h, :hour)
+  defp time_of(:date, h), do: Date.add(~D[2026-01-01], div(h, 24))
+
+  defp mixed_time,
+    do:
+      one_of([
+        constant(nil),
+        bind(member_of([:utc, :zoned, :naive, :date]), fn kind ->
+          map(integer(-48..48), &time_of(kind, &1))
+        end)
+      ])
+
+  # The recurrence guard of macaw_data#141: a typed time column whose values are of
+  # different kinds (the list form, spec/01 §1.1) reached `min`'s fold and raised. Every
+  # aggregate the registry names, grouped and not, over such a column answers a table or
+  # faults, never a raise; and min, max and extent answer what `aggregate/4` answers.
+  @tag verifies: "operations-run-faults"
+  property "apply never raises over a time column of mixed kinds, through every aggregate" do
+    check all(
+            times <- list_of(mixed_time(), min_length: 1, max_length: 12),
+            groups <- list_of(member_of(["a", "b", nil]), length: length(times)),
+            cuts <- list_of(integer(1..4), max_length: 3),
+            name <- member_of(Operations.aggregates(@registry)),
+            by? <- boolean()
+          ) do
+      table =
+        times
+        |> Enum.zip(groups)
+        |> chunked(cuts)
+        |> Enum.map(fn piece ->
+          {ts, gs} = Enum.unzip(piece)
+          Table.new!([{"t", :time, ts}, {"g", :category, gs}])
+        end)
+        |> Enum.reduce(fn piece, acc ->
+          {:ok, joined} = Table.append(acc, piece)
+          joined
+        end)
+
+      options = if name == "quantile", do: %{"p" => 0.5}, else: %{}
+      node = Map.merge(%{"op" => "aggregate", "fn" => name, "field" => "t"}, options)
+      node = if by?, do: Map.put(node, "by", "g"), else: node
+
+      case Operations.apply(@registry, [node], table, %{}) do
+        {:ok, %Table{} = out} ->
+          if name in ~w(min max extent) and not by? do
+            assert {:ok, value} = Operations.aggregate(@registry, name, times, options)
+            assert Table.column(out, name) == [value]
+          end
+
+        {:error, [_ | _] = faults} ->
+          assert name not in ~w(min max extent count distinct)
+          for fault <- faults, do: assert(is_binary(Operations.format_error(fault)))
+      end
+    end
+  end
+
+  # The pairs cut into pieces of the sizes `cuts` gives, the rest last.
+  defp chunked(pairs, cuts) do
+    {pieces, rest} =
+      Enum.reduce(cuts, {[], pairs}, fn cut, {pieces, rest} ->
+        case Enum.split(rest, cut) do
+          {[], rest} -> {pieces, rest}
+          {piece, rest} -> {[piece | pieces], rest}
+        end
+      end)
+
+    Enum.reverse(if(rest == [], do: pieces, else: [rest | pieces]))
+  end
 end

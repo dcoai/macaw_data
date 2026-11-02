@@ -71,7 +71,7 @@ defmodule Macaw.Data.Aggregate do
   @doc """
   What every reading is read as (spec/04 §3.1, §5), checked over the readings before any
   is reduced, so `reduce/2` and `step/3` never meet another: `:number`, `:comparable`
-  (numbers, or instants of one kind), `:point` (a number or a point `[x, y]`), or `:any`,
+  (numbers, or times of any kinds, not both), `:point` (a number or a point `[x, y]`), or `:any`,
   the default when an aggregate does not say.
   """
   @callback reads() :: :number | :comparable | :point | :any

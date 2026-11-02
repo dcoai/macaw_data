@@ -7,7 +7,7 @@ defmodule Macaw.Data.Operations.Aggregates do
   |---|---|---|---|---|
   | `count` | the number of readings | `0` | `:number` | dropped |
   | `distinct` | the number of distinct readings (`===`, a category by spelling) | `0` | `:number` | dropped |
-  | `min`, `max` | the least, the greatest reading, numbers or times | `nil` | the input's | kept |
+  | `min`, `max` | the least, the greatest reading, numbers or times of any kinds | `nil` | the input's | kept |
   | `extent` | `[min, max]` | `nil` | `:term` | kept |
   | `sum` | the sum of numbers | `0` | `:number` | kept |
   | `mean` | the arithmetic mean | `nil` | `:number` | kept |
@@ -18,7 +18,10 @@ defmodule Macaw.Data.Operations.Aggregates do
   | `slope` | the least-squares slope; a number is the point `[i, v]` | `nil`, of one, or every `x` equal | `:number` | dropped |
   | `delta` | the last reading minus the first | `nil` (`0` of one) | `:number` | kept |
 
-  The readings come with every `nil` dropped. A reading of the wrong kind is refused before
+  The readings come with every `nil` dropped. `min`, `max` and `extent` order times of any
+  kinds together, as instants on one scale (`Macaw.Data.Window.compare/2`), and answer the
+  reading itself, of its own kind; of two at one instant, the first (macaw_data#141). A
+  reading of the wrong kind is refused before
   the fold, by what each statistic `reads/0` (spec/04 §5): `Macaw.Data.Operations.aggregate/4`
   answers `{["values"], {:reads, kind}}`, and the step naming it refuses the column the same
   way. Every statistic but `median` and
@@ -66,20 +69,20 @@ defmodule Macaw.Data.Operations.Aggregates do
   def number!(name, value), do: wrong!(name, value, "a number")
 
   @doc false
-  # A reading min and max can order: a number, or an instant of the first reading's kind.
+  # A reading min and max can order against the first: a number with a number, or a time
+  # of any kind with a time, both on the one scale `Window.compare/2` compares them on
+  # (macaw_data#141). The step's reading check (`Transforms.readings/3`) and
+  # `Operations.aggregate/4` refuse any other before the fold, so this is an invariant.
   @spec comparable!(String.t(), term(), term()) :: term()
-  def comparable!(_name, value, nil) when is_number(value), do: value
-
   def comparable!(name, value, nil) do
-    if Window.instant?(value), do: value, else: wrong!(name, value, "a number or a time")
+    if Window.time?(value), do: value, else: wrong!(name, value, "a number or a time")
   end
 
-  def comparable!(_name, value, first) when is_number(value) and is_number(first), do: value
-
-  def comparable!(_name, %kind{} = value, %kind{}) when kind in [DateTime, NaiveDateTime, Date],
-    do: value
-
-  def comparable!(name, value, _first), do: wrong!(name, value, "of the first reading's kind")
+  def comparable!(name, value, first) do
+    if Window.comparable?(value, first),
+      do: value,
+      else: wrong!(name, value, "a number with numbers, or a time with times")
+  end
 
   @doc false
   @spec wrong!(String.t(), term(), String.t()) :: no_return()

@@ -40,6 +40,59 @@ defmodule Macaw.Data.Operations.AggregatesTest do
       for name <- ~w(min max extent), do: assert(agg(name, [nil]) == nil)
     end
 
+    # macaw_data#141: times of different kinds compare on the instant scale
+    # (`Order.instant/1`), as a window's do (#124), and the answer is the reading itself,
+    # of its own kind; the first of two readings at one instant is kept.
+    @tag verifies: "operations-statistics-values"
+    test "min, max and extent over times of mixed kinds compare by instant and answer the readings" do
+      alias Macaw.Data.Table
+
+      mixed = [~U[2026-01-02 00:00:00Z], ~D[2026-01-01], nil, ~N[2026-01-01 12:00:00]]
+      assert agg("min", mixed) == ~D[2026-01-01]
+      assert agg("max", mixed) == ~U[2026-01-02 00:00:00Z]
+      assert agg("extent", mixed) == [~D[2026-01-01], ~U[2026-01-02 00:00:00Z]]
+      # A zoned time is its UTC instant (07:00 at +01:00 is 06:00 UTC, before a naive 06:30);
+      # one instant in two kinds keeps the first.
+      # A zoned time is its UTC instant; one instant in two kinds keeps the first.
+      paris = %{
+        ~U[2026-01-01 07:00:00Z]
+        | time_zone: "Europe/Paris",
+          zone_abbr: "CET",
+          utc_offset: 3600,
+          std_offset: 0
+      }
+
+      assert agg("min", [~N[2026-01-01 07:00:00], paris]) == paris
+      assert agg("max", [paris, ~N[2026-01-01 06:30:00]]) == ~N[2026-01-01 06:30:00]
+      assert agg("min", [~N[2026-01-01 00:00:00], ~D[2026-01-01]]) == ~N[2026-01-01 00:00:00]
+      assert agg("max", [~D[2026-01-01], ~N[2026-01-01 00:00:00]]) == ~D[2026-01-01]
+
+      # The #141 snippet: the step answers what aggregate/4 answers, grouped and not, and
+      # however the column is chunked.
+      values = [~U[2026-01-02 00:00:00Z], ~D[2026-01-01], ~N[2026-01-01 12:00:00]]
+      t = Table.new!([{"t", :time, values}, {"g", :category, ["a", "b", "a"]}])
+
+      {:ok, two} =
+        Table.append(
+          Table.new!([{"t", :time, Enum.take(values, 1)}, {"g", :category, ["a"]}]),
+          Table.new!([{"t", :time, Enum.drop(values, 1)}, {"g", :category, ["b", "a"]}])
+        )
+
+      for name <- ~w(min max extent), table <- [t, two] do
+        node = %{"op" => "aggregate", "fn" => name, "field" => "t"}
+        assert {:ok, out} = Operations.apply(Operations.registry(), [node], table, %{})
+        assert Table.column(out, name) == [agg(name, values)]
+
+        assert {:ok, grouped} =
+                 Operations.apply(Operations.registry(), [Map.put(node, "by", "g")], table, %{})
+
+        assert Table.column(grouped, name) == [
+                 agg(name, [Enum.at(values, 0), Enum.at(values, 2)]),
+                 agg(name, [Enum.at(values, 1)])
+               ]
+      end
+    end
+
     @tag verifies: "operations-statistics-values"
     test "sum, mean and median" do
       assert agg("sum", [1, 2, 3.5]) == 6.5
@@ -182,7 +235,7 @@ defmodule Macaw.Data.Operations.AggregatesTest do
             {"delta", [1, @t1]},
             {"min", [1, @t1]},
             {"max", ["a"]},
-            {"extent", [@t1, ~D[2026-01-01]]}
+            {"extent", [~D[2026-01-01], 2]}
           ] do
         options = if name == "quantile", do: %{p: 0.5}, else: %{}
         {:ok, module} = Operations.aggregate(Operations.registry(), name)
@@ -198,7 +251,8 @@ defmodule Macaw.Data.Operations.AggregatesTest do
                Macaw.Data.Aggregate.reads(module)
              end) == [:any, :any, :comparable, :comparable, :comparable, :number, :number, :point]
 
-      # A time of one kind is comparable; times of two kinds are not, nor is a nil alone a kind.
+      # Times of any kinds are comparable, on the instant scale (macaw_data#141); a number
+      # with a time is not, nor is a nil alone a kind.
       assert agg("min", [@t1, nil, ~U[2026-01-01 00:00:00Z]]) == ~U[2026-01-01 00:00:00Z]
       assert agg("max", [nil]) == nil
     end
