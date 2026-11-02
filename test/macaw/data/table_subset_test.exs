@@ -2,13 +2,14 @@ defmodule Macaw.Data.TableSubsetTest do
   @moduledoc """
   Rows of a table in any order across its chunks (spec/01 §2.4, macaw_data#128): gathered
   by their slots, each column joined across the chunks where they share a form, and equal
-  to the same rows packed afresh, over every form, gaps, partial views and mixed forms.
+  to the same rows packed afresh, over every form, gaps, partial views and mixed forms:
+  text beside binary pieces, dictionaries of different strings, booleans beside names.
   """
   use ExUnit.Case, async: true
   use ExUnitProperties
 
   alias Macaw.Data.Table
-  alias Macaw.Data.Table.Subset
+  alias Macaw.Data.Table.{Chunk, Subset}
 
   @base ~U[2026-01-01 00:00:00Z]
 
@@ -23,6 +24,10 @@ defmodule Macaw.Data.TableSubsetTest do
   defp value(:date, k), do: Date.add(~D[2026-01-01], k)
   defp value(:text, k), do: "s#{k}"
   defp value(:category, k), do: Enum.at(["a", "b", "c"], rem(abs(k), 3))
+  defp value(:bytes, k), do: <<255, k + 10>>
+
+  defp value(:flagged, k),
+    do: if(rem(k, 2) == 0, do: k > 0, else: Enum.at(["c", "d"], rem(abs(k), 2)))
 
   # A column's kinds across the chunks: one kind throughout, or each chunk its own of one
   # type, so pieces of one column may hold different forms (int64 beside float64, whole
@@ -32,8 +37,8 @@ defmodule Macaw.Data.TableSubsetTest do
       case type do
         :number -> [:int, :float, :huge]
         :time -> [:utc, :micro, :naive, :date]
-        :text -> [:text]
-        :category -> [:category]
+        :text -> [:text, :bytes]
+        :category -> [:category, :flagged]
       end
 
     one_of([
@@ -148,5 +153,39 @@ defmodule Macaw.Data.TableSubsetTest do
     assert Table.equal?(taken, packed(table, indexes))
     assert Enum.map(Table.chunks(taken), &elem(&1, 2)) |> Enum.max() == Table.chunk_rows()
     assert Table.column(taken, :t) |> hd() == value(:utc, 2 * n - 1)
+  end
+
+  # The form of a table's one chunk's column, as stored.
+  defp form(table, name) do
+    [{chunk, first, count}] = Table.chunks(table)
+    elem(Chunk.storage(chunk, name, first, count), 0)
+  end
+
+  @tag verifies: "finish-subset-gather"
+  test "text, binary and dictionary pieces join, a dictionary's codes moved to one dictionary" do
+    a =
+      Table.new!([
+        {:s, :text, ["x", nil, "yy"]},
+        {:c, :category, ["a", true, nil]},
+        {:b, :text, [<<255>>, nil, <<254>>]}
+      ])
+
+    b =
+      Table.new!([
+        {:s, :text, ["zzz", "w"]},
+        {:c, :category, ["b", "a"]},
+        {:b, :text, [<<253>>, <<252, 1>>]}
+      ])
+
+    {:ok, table} = Table.append(a, b)
+    indexes = [4, 0, 2, 3, 1]
+    taken = Subset.at(table, indexes)
+
+    assert Table.equal?(taken, packed(table, indexes))
+    assert Table.column(taken, :c) == ["a", "a", nil, "b", true]
+    assert Table.column(taken, :s) == ["w", "x", "yy", "zzz", nil]
+    assert form(taken, :s) == :text
+    assert form(taken, :c) == :dictionary
+    assert form(taken, :b) == :binary
   end
 end

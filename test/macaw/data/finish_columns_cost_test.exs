@@ -161,9 +161,10 @@ defmodule Macaw.Data.FinishColumnsCostTest do
   # joined across the chunks (macaw_data#128): a random permutation of 50k rows of an int64,
   # a float64 and a UTC column cost 1,228,251 reductions on the Elixir path when this was
   # written (448,160 with the kernels), against 4,088,217 when every column was decoded and
-  # packed again. A full order by cpu: 3,040,751 (2,520,795 with the kernels; its sort
-  # 1,471,715), against 5,316,721; the category column is still packed again
-  # (macaw_data#138). Counted on the Elixir path, which every job runs alike.
+  # packed again. A full order by cpu: 2,856,710 (2,076,736 with the kernels; its sort
+  # 1,471,715), against 5,316,721, its category column's codes joined too (macaw_data#138).
+  # A reorder of a text and a category column: 1,156,091 (896,060), against 2,064,177.
+  # Counted on the Elixir path, which every job runs alike.
   @tag verifies: "finish-columns-cost"
   test "rows in another order across chunks are gathered by their slots, a full order too" do
     n = 50_000
@@ -191,6 +192,18 @@ defmodule Macaw.Data.FinishColumnsCostTest do
       end)
 
     assert Table.size(ordered.rows) == n
-    assert order < 3_300_000
+    assert order < 3_000_000
+
+    named =
+      Table.new!([
+        {:s, :text, for(i <- 1..n, do: "row-#{i}")},
+        {:host, :category, Table.column(table, :host)}
+      ])
+
+    {strings, taken} =
+      Work.reductions(fn -> Native.elixir(fn -> Subset.at(named, shuffled) end) end)
+
+    assert Table.column(taken, :s) == Enum.map(shuffled, &"row-#{&1 + 1}")
+    assert strings < 1_500_000
   end
 end

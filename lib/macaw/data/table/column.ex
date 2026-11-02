@@ -950,49 +950,11 @@ defmodule Macaw.Data.Table.Column do
 
   @doc false
   # Columns of `n` values each, `[{column, n}]`, as one column of their values in order,
-  # nothing decoded (macaw_data#128): fixed-width buffers of one form (int64, float64, date,
-  # utc, naive) joined as binaries, their validity bitmaps joined bit by bit, a time's
-  # precision kept where every piece shares it and spelled per value where not. `:general`
-  # for any other form, or pieces of different forms, which a caller reads value by value.
+  # nothing decoded (macaw_data#128, #138): fixed-width buffers, text and binary data and
+  # dictionary codes joined (`Macaw.Data.Table.Column.Concat`); `:general` for any other
+  # form, or pieces of different forms, which a caller reads value by value.
   @spec concat([{t(), non_neg_integer()}]) :: {:ok, t()} | :general
-  def concat([{_column, _n} | _] = pieces) do
-    case Enum.uniq_by(pieces, fn {column, _n} -> shape(column) end) do
-      [{column, _n}] -> joined(shape(column), pieces)
-      _shapes -> :general
-    end
-  end
-
-  def concat([]), do: :general
-
-  defp shape({form, _data, _validity}) when form in [:int64, :float64, :date], do: form
-  defp shape({form, _us, _validity, _precision}) when form in [:utc, :naive], do: form
-  defp shape(_column), do: :general
-
-  defp joined(:general, _pieces), do: :general
-
-  defp joined(form, pieces) when form in [:int64, :float64, :date] do
-    data = IO.iodata_to_binary(for {{_form, data, _validity}, _n} <- pieces, do: data)
-    {:ok, {form, data, Bitmap.concat(for {{_f, _d, validity}, n} <- pieces, do: {validity, n})}}
-  end
-
-  defp joined(form, pieces) when form in [:utc, :naive] do
-    us = IO.iodata_to_binary(for {{_form, us, _validity, _precision}, _n} <- pieces, do: us)
-    validity = Bitmap.concat(for {{_f, _us, validity, _p}, n} <- pieces, do: {validity, n})
-
-    precision =
-      case Enum.uniq(for {{_f, _us, _v, precision}, _n} <- pieces, do: precision) do
-        [p] when is_integer(p) ->
-          p
-
-        _several ->
-          IO.iodata_to_binary(
-            for {{_f, _us, _v, p}, n} <- pieces,
-                do: if(is_integer(p), do: :binary.copy(<<p>>, n), else: p)
-          )
-      end
-
-    {:ok, {form, us, validity, precision}}
-  end
+  defdelegate concat(pieces), to: Macaw.Data.Table.Column.Concat
 
   # -- gathering --------------------------------------------------------------------------
 
@@ -1036,12 +998,26 @@ defmodule Macaw.Data.Table.Column do
 
   def gather({form, offsets, data, validity}, indexes) when form in [:text, :binary] do
     {parts, ends, _at} =
-      Enum.reduce(runs(indexes), {[], [], 0}, fn {first, n}, {parts, ends, at} ->
-        <<from::signed-little-32>> = binary_part(offsets, first * 4, 4)
-        bounds = for <<o::signed-little-32 <- binary_part(offsets, first * 4 + 4, n * 4)>>, do: o
-        shifted = for o <- bounds, do: <<at + o - from::little-32>>
-        last = List.last(bounds)
-        {[binary_part(data, from, last - from) | parts], [shifted | ends], at + last - from}
+      Enum.reduce(runs(indexes), {[], [], 0}, fn
+        # One slot, as most are in a reorder: its two offsets read in one match.
+        {first, 1}, {parts, ends, at} ->
+          skip = first * 4
+
+          <<_::binary-size(^skip), from::signed-little-32, to::signed-little-32, _::binary>> =
+            offsets
+
+          at = at + to - from
+          {[binary_part(data, from, to - from) | parts], [<<at::little-32>> | ends], at}
+
+        {first, n}, {parts, ends, at} ->
+          <<from::signed-little-32>> = binary_part(offsets, first * 4, 4)
+
+          bounds =
+            for <<o::signed-little-32 <- binary_part(offsets, first * 4 + 4, n * 4)>>, do: o
+
+          shifted = for o <- bounds, do: <<at + o - from::little-32>>
+          last = List.last(bounds)
+          {[binary_part(data, from, last - from) | parts], [shifted | ends], at + last - from}
       end)
 
     {form, IO.iodata_to_binary([<<0::32>> | Enum.reverse(ends)]),
