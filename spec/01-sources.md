@@ -869,6 +869,12 @@ for generated rows and options, good and bad, new/2 never raises: it answers {:o
 
 The subscriber holds a `Macaw.Data.Source.Push`, a value, not a process: `receive/2` takes each message, `:ignore` for one not under its reference; `snapshot/2` takes a snapshot the holder fetched (§4.1); `drain/2` applies what is buffered; `held/1` is the relation as it stands, the integral of the increments (§2.5); `refetch/1` is `nil`, or why the holder must fetch a snapshot.
 
+**A holder reads a `Push` through its functions, never its fields** (macaw_data#123): `take_errors/1` answers `{errors, push}`, the errors recorded since they were last taken, in the order recorded (a gap, §4.1; a schema `describe` could not answer; a change's fault, §4.2; rows that don't pack, `{:table, faults}`), and the push holding none, so a subscription that lives long holds only what its holder has not read. Taking them changes nothing else. `pending?/1` is whether `drain/2` has anything buffered to apply: a snapshot or an increment received or handed in since the last drain, or increments held back waiting on a gap, which apply once the numbers before them or a snapshot arrive (§4.1). A schema message is cached as it is received, so it leaves nothing pending.
+
+```test:push-accessors
+take_errors/1 after a gap, rows that don't pack and an unresolvable version gives them in that order and leaves none, taking again gives none, and nothing else changes; pending?/1 is false when new, after a schema message and after a drain, and true after a received or handed-in snapshot, a received increment, and while an increment waits on a gap until the snapshot that fills it is drained
+```
+
 - **The handshake sends the schema first,** so an increment naming its version resolves from the cache without asking the source.
 - **An increment's rows are insertions, merged by the window field.** Its rows after what is held are appended and its late rows placed among the held, every one of them: rows are not deduplicated (§4.1). The rows stay ordered by the window field, and the served window grows to cover them. A schema with no window field keeps the newest `limit` rows (100 000), marking the delivery `capped` when it drops any.
 - **The holding is as stale as the last answer applied** (macaw_data#148): a snapshot's `served.stale` becomes the holding's, and an applied increment's replaces it, since a source that pushes a change answers as of that change. An increment that is not applied (at another resolution, §4.3) leaves it as it was.

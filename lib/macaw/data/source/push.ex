@@ -16,6 +16,9 @@ defmodule Macaw.Data.Source.Push do
   holder fetched itself, and `drain/2` applies everything buffered since the last pulse
   at once, so a burst of pushes between two pulses costs one drain. `held/1` is the
   relation as it stands; `refetch/1` says when the holder must fetch a snapshot.
+  `take_errors/1` hands the holder the errors recorded since it last took them, and
+  `pending?/1` says whether a drain has anything to apply, so a holder needs no field of
+  the struct.
 
   - **The handshake sends the schema first.** A delivery names its schema's version; one
     naming a version not yet cached falls back to `describe` (`drain/2`'s function, the
@@ -208,6 +211,33 @@ defmodule Macaw.Data.Source.Push do
   """
   @spec refetch(t()) :: term()
   def refetch(%__MODULE__{refetch: refetch}), do: refetch
+
+  @doc """
+  The errors recorded since they were last taken, in the order recorded, and the push
+  holding none (macaw_data#123): a gap, an unresolvable schema, a fault of a change or of
+  packing rows (`{:table, faults}`). A holder takes them after each drain, so a
+  subscription that lives long holds only what it has not yet read.
+
+      iex> alias Macaw.Data.Source.Push
+      iex> {[], push} = Push.take_errors(Push.new!(:ticks, make_ref()))
+      iex> push.errors
+      []
+  """
+  @spec take_errors(t()) :: {[term()], t()}
+  def take_errors(%__MODULE__{errors: errors} = push), do: {errors, %{push | errors: []}}
+
+  @doc """
+  Whether `drain/2` has anything buffered to apply (macaw_data#123): a message received
+  or a snapshot handed in since the last drain, or increments held back waiting on a gap
+  (spec/01 §4.1), which apply once the numbers before them, or a snapshot, arrive.
+
+      iex> alias Macaw.Data.Source.Push
+      iex> Push.pending?(Push.new!(:ticks, make_ref()))
+      false
+  """
+  @spec pending?(t()) :: boolean()
+  def pending?(%__MODULE__{pending: pending, waiting: waiting}),
+    do: pending != [] or map_size(waiting) > 0
 
   # -- the handoff (spec/01 §4.1) ---------------------------------------------------------
 
