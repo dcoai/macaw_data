@@ -235,7 +235,7 @@ last n over a table is Table.equal? to the row window over its rows, over genera
 | Reason | Meaning |
 |---|---|
 | `{:unknown_column, name}` | the table has no column `name` names |
-| `{:wrong_type, name, expected, actual}` | a typed accessor (`numbers`, `instants`, `sum`, `mean`, `min`, `max`) read column `name`, of type `actual`, which is none of the types in the list `expected` |
+| `{:wrong_type, name, expected, actual}` | a typed accessor (`numbers`, `instants`, `time_kind`, `sum`, `mean`, `min`, `max`) read column `name`, of type `actual`, which is none of the types in the list `expected` |
 | `{:type, :name}` | a column was named by something other than an atom or a string |
 | `{:type, :table}` | the input given is not a `Macaw.Data.Table` |
 | `{:overflow, name}` | `sum` or `mean` of column `name` sums beyond a float's range, which no float holds |
@@ -251,6 +251,7 @@ Each accessor has a **`!` variant** (`sum!/2`, `names!/1`, …) that answers the
 | `numbers/2` | a `:number` column's values in order, `nil` at a gap |
 | `instants/2` | a `:time` column's instants in order, `nil` at a gap: integer Unix microseconds on `Source.Order.instant/1`'s scale (a naive time by its wall clock, a date by its midnight), read from the buffer with no time made |
 | `valid/2` | the presence mask in order, `true` where a value is present |
+| `time_kind/2` | the kind of time a `:time` column holds (macaw_data#149): `DateTime` (UTC or zoned storage, whose instants order alike), `NaiveDateTime` or `Date` when every chunk holding a value holds that one kind, else `:mixed`. It is read from each chunk's storage form alone (`Table.Chunk.time_kind/4`, [01 §1.1.5](01-sources.md#sources-table-read)), nothing decoded. A column with no value present, an empty table's included, packs as `DateTime` and answers it. It is for host code: it is not on the sandbox allowlist (§6.2), since its answer is a module |
 | `count/2` | the number of readings, the values present |
 | `sum/2`, `mean/2` | a `:number` column's exact sum (`Macaw.Data.Exact`, [04 §5](04-operations.md#operations-statistics): an integer when every reading is one, `0` of none), and the exact sum over the count (`nil` of none) |
 | `min/2`, `max/2` | a `:number` or `:time` column's least and greatest reading, the first on a tie, `nil` of none. A time is compared by its instant and answered as its value |
@@ -270,6 +271,10 @@ every accessor agrees with the row view over the same table: names, types, value
 
 ```test:derived-columns-errors
 every accessor answers its reason rather than raising: an unknown column, a name that is no atom or string and an input that is no table, from each accessor that takes one; a typed read of another type with the types it expected and the type it found; take and slice given bad counts; the values of no readings are the aggregates'; each ! variant raises ArgumentError in format_error's words
+```
+
+```test:derived-columns-time-kind
+time_kind/2 agrees with the kinds of the decoded values for generated columns of every kind, mixed and missing, over several chunks, each run's kind its values'; an unknown column, a column not of times, a name that is no atom or string and an input not a table are its reasons, and time_kind!/2 raises their words
 ```
 
 ```test:derived-columns-native
@@ -439,7 +444,7 @@ a variable read before it is bound, a call in a guard that is not guard-safe and
 - **Control:** `case`, `cond`, `if`, `unless`, `with`, `for`, `fn`, pattern matching (`=`), guards (`when`), the pin `^`, blocks, and `&` captures, of an allowed function (`&Enum.sum/1`, `&max/2`) or of an expression over `&1`, `&2`, ….
 - **Math and comparison:** `+`, `-`, `*`, `/` and unary `-` and `+`; `==`, `!=`, `===`, `!==`, `<`, `>`, `<=`, `>=`; `and`, `or`, `not`, `&&`, `||`, `!`; `in` and `not in`; `div/2`, `rem/2`, `abs/1`, `round/1`, `trunc/1`, `min/2`, `max/2` and `**/2`; and every `is_*` guard of `Kernel`.
 - **Data:** literals, ranges (`..`, `..//`), tuples, lists (`|`, `++`, `--`), maps (`%{}`, `%{m | k: v}`), binaries (`<<>>` with the segment types `binary`, `bits`, `bitstring`, `bytes`, `integer`, `float`, `utf8`, `utf16`, `utf32`, `signed`, `unsigned`, `big`, `little`, `native`, `size/1` and `unit/1`; `<>`), `|>`, `[]` access (`row[:key]`, `Access.get/2`) and `row.field`; `to_string/1`, and with it **string interpolation**: `"#{x}"` is a binary whose segment calls `Kernel.to_string/1`, so a label is `"#{row.host}: #{row.load}"`. An atom written with interpolation (`:"a#{x}"`) stays refused, as `{:restricted, {:erlang, :binary_to_existing_atom, 2}}`; a sigil with interpolation is refused as every sigil is.
-- **Modules:** `Enum`, `Map`, `Keyword`, `String`, `Integer`, `Float`, `:math`, `Macaw.Data.Ops` and `Macaw.Data.Derived.Columns`, each an explicit list of `{function, arity}`. Every export of these modules on the Elixir and OTP the library is built with is on its module's allowed list or its excluded list, and the test suite holds each module's exports to the union of the two, exactly: a new Elixir that adds a function fails that test, and the function is reviewed before it is allowed. `Macaw.Data.Ops` is the library's own: `aggregate/2,3` and `transform/2,3` reach the registered operations by literal name ([04 §6](04-operations.md#operations-sandbox)), and which operations is the registry's, never this list. `Integer.is_even/1` and `Integer.is_odd/1` are macros and allowed. `Macaw.Data.Derived.Columns` is the library's own too (macaw_data#107): every accessor of §2.2 and its `!` variant, written by its full name, and `format_error/1` read only what they are given and make nothing else, so all thirty-one are allowed and none excluded. A stored function that matches `{:ok, v} =` on a bad call raises `MatchError`, and a `!` variant raises `ArgumentError`: either is the runner's `{:error, :raised, module}` (§6.4), its detail the exception's module, never the rows'.
+- **Modules:** `Enum`, `Map`, `Keyword`, `String`, `Integer`, `Float`, `:math`, `Macaw.Data.Ops` and `Macaw.Data.Derived.Columns`, each an explicit list of `{function, arity}`. Every export of these modules on the Elixir and OTP the library is built with is on its module's allowed list or its excluded list, and the test suite holds each module's exports to the union of the two, exactly: a new Elixir that adds a function fails that test, and the function is reviewed before it is allowed. `Macaw.Data.Ops` is the library's own: `aggregate/2,3` and `transform/2,3` reach the registered operations by literal name ([04 §6](04-operations.md#operations-sandbox)), and which operations is the registry's, never this list. `Integer.is_even/1` and `Integer.is_odd/1` are macros and allowed. `Macaw.Data.Derived.Columns` is the library's own too (macaw_data#107): every accessor of §2.2 and its `!` variant, written by its full name, and `format_error/1` read only what they are given and make nothing else, so those thirty-one are allowed. `time_kind/2` and `time_kind!/2` are excluded (`:atoms`, macaw_data#149): they answer a module, and only host code has asked for them. A stored function that matches `{:ok, v} =` on a bad call raises `MatchError`, and a `!` variant raises `ArgumentError`: either is the runner's `{:error, :raised, module}` (§6.4), its detail the exception's module, never the rows'.
 
 | Module | Excluded | Why |
 |---|---|---|
@@ -453,7 +458,7 @@ a variable read before it is bound, a call in a guard that is not guard-safe and
 | `Map` | `map/2`, `size/1` | `:deprecated` |
 | `Keyword` | `delete/3`, `map/2`, `size/1` | `:deprecated` |
 | `:math` | none | pure; random numbers live in `:rand`, which is not on the list |
-| `Macaw.Data.Derived.Columns` | none | each accessor reads only the table it is given (§2.2) |
+| `Macaw.Data.Derived.Columns` | `time_kind/2`, `time_kind!/2` | `:atoms`: the answer is a module, which a stored function would get back as an atom (macaw_data#149); host code reads it. Every other accessor reads only the table it is given (§2.2) |
 | `Macaw.Data.Ops` | `__run__/5` | `:internal`: the call a checked `aggregate` or `transform` is compiled to ([04 §6.1](04-operations.md#operations-allowlist)) |
 
 `Enum.into/2,3` is allowed with a literal empty target only (§6.1). Everything else these modules export is allowed, `String.splitter/2,3` included.

@@ -371,10 +371,13 @@ defmodule Macaw.Data.Table.Chunk do
   def values(%__MODULE__{} = chunk, name, first, count),
     do: chunk |> storage(name, first, count) |> Column.values(count)
 
-  @doc false
-  # The instants of time column `name` in the run of `count` rows from `first`
-  # (`Macaw.Data.Source.Order.instant/1` of each value, `nil` where one is missing), read
-  # from a packed form's buffer, else value by value.
+  @doc """
+  The instants of `:time` column `name` in the run of `count` rows from `first`, in order
+  (spec/01 §1.1.5): `Macaw.Data.Source.Order.instant/1` of each value, integer Unix
+  microseconds on one scale whatever the kind of time (a `NaiveDateTime` by its wall
+  clock, a `Date` at its midnight), `nil` where one is missing. A packed form's buffer is
+  read as it lies, no time made; the general form, a run of mixed kinds, value by value.
+  """
   @spec instants(t(), term(), non_neg_integer(), non_neg_integer()) :: [integer() | nil]
   def instants(%__MODULE__{} = chunk, name, first, count) do
     case chunk |> storage(name, first, count) |> Column.instants(count) do
@@ -382,6 +385,30 @@ defmodule Macaw.Data.Table.Chunk do
       instants -> instants
     end
   end
+
+  @doc """
+  The kind of time `:time` column `name` holds in the run of `count` rows from `first`
+  (spec/01 §1.1.5, macaw_data#149), read from its storage form alone, nothing decoded: a
+  chunk's column is one form, so a run's kind is its chunk's. `DateTime` for UTC and zoned
+  storage, whose instants order alike; `NaiveDateTime`; `Date`; `:mixed` for the general
+  form, which holds times of more than one kind. A column with no value present packs as
+  `DateTime`, and is that. `nil` for a column the chunk does not hold, or one that is not
+  `:time`, which holds no kind of time.
+  """
+  @spec time_kind(t(), term(), non_neg_integer(), non_neg_integer()) ::
+          DateTime | NaiveDateTime | Date | :mixed | nil
+  def time_kind(%__MODULE__{header: header} = chunk, name, first, count)
+      when is_integer(first) and first >= 0 and is_integer(count) and count >= 0 do
+    case List.keyfind(header, name, 0) do
+      {^name, :time} -> chunk |> packed(name) |> elem(0) |> time_form_kind()
+      _none -> nil
+    end
+  end
+
+  defp time_form_kind(form) when form in [:utc, :zoned], do: DateTime
+  defp time_form_kind(:naive), do: NaiveDateTime
+  defp time_form_kind(:date), do: Date
+  defp time_form_kind(:list), do: :mixed
 
   @doc """
   The value of column `name` at row `i` of the chunk, as read: one slot of its storage,

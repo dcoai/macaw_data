@@ -10,7 +10,8 @@ defmodule Macaw.Data.Derived.Sandbox.Allowlist do
   own and held the same way: through it a stored function reaches the registered transforms
   and aggregates by literal name, and which ones is the registry's, never a list here
   (spec/04 §6). `Macaw.Data.Derived.Columns` is the library's too, every accessor of a
-  function's input read as columns allowed (spec/02 §2.2). Ported from visualize's `Visualize.VirtualSource.Sandbox.Allowlist`.
+  function's input read as columns allowed (spec/02 §2.2) but `time_kind/2` and its `!` twin,
+  which answer a module and are for host code (`:atoms`, macaw_data#149). Ported from visualize's `Visualize.VirtualSource.Sandbox.Allowlist`.
   """
 
   @modules [
@@ -455,7 +456,7 @@ defmodule Macaw.Data.Derived.Sandbox.Allowlist do
     ],
     :math => [],
     Macaw.Data.Ops => [{{:__run__, 5}, :internal}],
-    Macaw.Data.Derived.Columns => []
+    Macaw.Data.Derived.Columns => [{{:time_kind, 2}, :atoms}, {{:time_kind!, 2}, :atoms}]
   }
 
   @allowed %{

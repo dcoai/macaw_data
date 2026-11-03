@@ -28,7 +28,9 @@ defmodule Macaw.Data.Derived.Columns do
     `Macaw.Data.Table.column/2` gives them; `numbers/2` a number column's; `instants/2` a
     time column's instants, integer Unix microseconds on
     `Macaw.Data.Source.Order.instant/1`'s scale (a naive time by its wall clock, a date
-    by its midnight), read straight from the buffer; `valid/2` the presence mask.
+    by its midnight), read straight from the buffer; `valid/2` the presence mask; and
+    `time_kind/2` the kind of time a time column holds, read from its storage form, for
+    host code alone (not on the sandbox allowlist).
   - **Reductions** over the column's readings, its values present, with the semantics of
     the package's aggregates (spec/04 §5): `count/2`, `sum/2` (exact, `0` of none),
     `mean/2` (`nil` of none), and `min/2` and `max/2` of a number or a time column, the
@@ -128,6 +130,41 @@ defmodule Macaw.Data.Derived.Columns do
        Enum.flat_map(Table.chunks(ready(table)), fn {chunk, first, n} ->
          Chunk.instants(chunk, found, first, n)
        end)}
+    end
+  end
+
+  @doc """
+  The kind of time a `:time` column holds (macaw_data#149): `DateTime` (UTC or zoned,
+  whose instants order alike), `NaiveDateTime` or `Date` when every chunk holding a value
+  holds that one kind, else `:mixed`. It is read from each chunk's storage form alone
+  (`Macaw.Data.Table.Chunk.time_kind/4`), so no value is decoded. A column with no value
+  present, an empty table's included, packs as `DateTime` and answers it.
+
+  It is for host code (visualize's board placement): a stored function cannot call it,
+  since its answer is a module (spec/02 §6.2).
+
+      iex> alias Macaw.Data.Derived.Columns
+      iex> table = Macaw.Data.Table.new!([{"t", :time, [~N[2026-01-01 00:00:00], nil]}])
+      iex> Columns.time_kind(table, "t")
+      {:ok, NaiveDateTime}
+      iex> Columns.time_kind(Macaw.Data.Table.new!([{"t", :time, [~D[2026-01-01], ~U[2026-01-01 00:00:00Z]]}]), :t)
+      {:ok, :mixed}
+  """
+  @spec time_kind(Table.t(), name()) :: result(DateTime | NaiveDateTime | Date | :mixed)
+  def time_kind(table, name) do
+    with {:ok, table, found} <- typed(table, name, [:time]) do
+      kinds =
+        for {chunk, first, n} = view <- Table.chunks(ready(table)),
+            kind = Chunk.time_kind(chunk, found, first, n),
+            kind != DateTime or count_view(view, found) > 0,
+            uniq: true,
+            do: kind
+
+      case kinds do
+        [] -> {:ok, DateTime}
+        [kind] -> {:ok, kind}
+        _several -> {:ok, :mixed}
+      end
     end
   end
 
@@ -273,6 +310,10 @@ defmodule Macaw.Data.Derived.Columns do
   @doc "As `instants/2`, the value, or `ArgumentError` worded by `format_error/1`."
   @spec instants!(Table.t(), name()) :: [integer() | nil]
   def instants!(table, name), do: value!(instants(table, name))
+
+  @doc "As `time_kind/2`, the kind, or `ArgumentError` worded by `format_error/1`."
+  @spec time_kind!(Table.t(), name()) :: DateTime | NaiveDateTime | Date | :mixed
+  def time_kind!(table, name), do: value!(time_kind(table, name))
 
   @doc "As `valid/2`, the value, or `ArgumentError` worded by `format_error/1`."
   @spec valid!(Table.t(), name()) :: [boolean()]

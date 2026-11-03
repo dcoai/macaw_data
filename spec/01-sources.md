@@ -300,6 +300,16 @@ compaction happens when a delta reaches a quarter of its base, keeps the id, the
 
 **Reading costs the slots, not the bits** (macaw_data#41). A column none of whose values is missing is read without expanding its validity bitmap (§1.1): the bitmap's bytes are checked once, then its values buffer is decoded as it lies. A slice's bitmap is cut as one little-endian integer, shifted down to its first bit and masked, never a bit at a time. A gather takes a bitmap whose bits are all set as all set, reading none of them, and a step's run of a chunk (`Table.Chunk.gather/5`, `reshape/7`) is gathered from the chunk's own storage at the run's offset, never sliced first. Each reads back exactly what reading bit by bit does, so no result and no digest changes.
 
+**A chunk's run is read by two public readers of a `:time` column** (macaw_data#149), for host code that places rows by time without decoding them (visualize's board placement and viewport cut):
+- **`Table.Chunk.instants(chunk, name, first, count)`** answers the run's instants in order, `Source.Order.instant/1` of each value (integer Unix microseconds on one scale, a `NaiveDateTime` by its wall clock, a `Date` at its midnight, §2.3), `nil` where one is missing. A packed form's buffer is read as it lies, no time made; the general form, value by value.
+- **`Table.Chunk.time_kind(chunk, name, first, count)`** answers the kind of time the run holds from its storage form alone, nothing decoded. A chunk's column is one form, so a run's kind is its chunk's: UTC and zoned storage are `DateTime`, whose instants order alike; naive storage is `NaiveDateTime`; date storage is `Date`; the general form, which holds times of more than one kind, is `:mixed`. A column with no value present packs as `DateTime` (§1.1) and is that. A column the chunk does not hold, or one not `:time`, is `nil`.
+
+`Derived.Columns.time_kind/2` answers it of a whole table ([02 §2.2](02-derived.md#derived-input-windows)). The storage forms themselves stay internal: these readers are the contract, so a layout can change under them.
+
+```test:table-time-kind
+each storage form gives its kind per chunk run, UTC and zoned DateTime, naive NaiveDateTime, date Date, a chunk of two kinds mixed, a run its chunk's kind whatever its bounds, a column not held or not of times nil; a column with no value is DateTime and a chunk with none takes no part in a table's kind; the kind is read without decoding a value (no Column.values/2, Order.instant/1 or Table.column/2 call) at a cost of chunks, not rows; Chunk.instants/4 reads a run's instants, every kind on one scale
+```
+
 ```test:table-read-cost
 for generated columns of every packed form, with gaps and without, a column's values, slices and gathers read back as reading bit by bit does, and a run of a chunk gathers as its slice does; an all-valid float column reads at most two reductions a row and a constant, expanding no bitmap
 ```
