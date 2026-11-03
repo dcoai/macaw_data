@@ -82,13 +82,25 @@ raises:
   script:
     - elixir ci/raises.exs
 
-# Every spec link resolves (ci/spec_links.exs): links into another Macaw
-# repository's spec are checked by shape here, where no sibling checkout exists.
+# Every spec link resolves (ci/spec_links.exs, the family's copy, #162): links into
+# another Macaw repository are checked by shape here, where no sibling checkout exists.
+# The self-test plants a broken link of each kind first, so a check that checks nothing
+# fails.
 spec-links:
   image: $ELIXIR_IMAGE
   stage: check
   script:
+    - elixir ci/spec_links.exs --self-test
     - elixir ci/spec_links.exs
+
+# No locked package has a security advisory or is retired, outside the reasoned
+# allowlist ci/advisories_allowlist.exs (ci/advisories.exs, the family's copy,
+# dco-tek/macaw/macaw#214, #162, spec/00 §3). It needs the dependencies fetched.
+audit:
+  extends: .elixir
+  stage: check
+  script:
+    - elixir ci/advisories.exs
 
 # The native kernels (spec/04 §1.7) need Zig of the version Zigler targets: `mix zig.get`
 # fetches it from ziglang.org into Zigler's cache, where the build finds it (tar.xz, so

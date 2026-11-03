@@ -29,6 +29,14 @@ It requires one library at runtime, **`macaw_layers`**, the document kernel: a s
 
 **No version is written here.** The requirements are `mix.exs`'s, and only there, so this section cannot fall behind them (#34).
 
+**No locked dependency carries a security advisory or is retired** (macaw_data#162, dco-tek/macaw/macaw#214), outside the reasoned allowlist `ci/advisories_allowlist.exs`, empty by default. CI's `audit` job runs `ci/advisories.exs`, the Macaw family's guard, over `mix hex.audit`. An advisory the list does not name fails it, by any id the audit prints for it; so does a retired package, which has no entry and is updated, an entry the audit no longer reports, a malformed entry, and an audit that fails without a finding (Hex unreachable is no clean answer).
+
+```test:data-dependencies-advisories
+the advisory guard passes this library's lock; a seeded advisory outside the list fails at its heading, by its id or an aka; a retired package, a stale entry, a malformed one and an audit failing without a finding each fail
+```
+
+**A Hex publish is of the clean, pushed release tag** (macaw_data#162, dco-tek/macaw/macaw#190). `mix hex.publish` first runs `ci/release_guard.exs` with the version, the family's guard, as macaw, macaw_layers and macaw_component do: it refuses a working tree with changes, a HEAD that is not `vVERSION`, and a tag not on origin.
+
 ## 4. Order of work {#data-order}
 
 Built in the family's order of work, which puts first what adopters consume:

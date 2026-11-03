@@ -12,6 +12,8 @@ defmodule Macaw.Data.MixProject do
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
       deps: deps(),
+      # A publish is of the clean, pushed release tag (spec/00 §3, the family's guard, #162).
+      aliases: ["hex.publish": ["cmd elixir ci/release_guard.exs #{@version}", "hex.publish"]],
       description:
         "Macaw's data layer: the interaction event, the data model, the source contract, derived sources, and the transforms and aggregates they share with designs.",
       source_url: @source_url,
