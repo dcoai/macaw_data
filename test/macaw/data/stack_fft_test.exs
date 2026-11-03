@@ -13,7 +13,7 @@ defmodule Macaw.Data.StackFFTTest do
 
   defp layout(stack, data) do
     stack
-    |> Stack.generate(data)
+    |> Stack.generate!(data)
     |> Enum.map(fn s -> {s.key, s.index, Enum.map(s.points, &{&1.y0, &1.y1})} end)
   end
 
@@ -70,7 +70,7 @@ defmodule Macaw.Data.StackFFTTest do
         Stack.new()
         |> Stack.keys([:a, :b])
         |> Stack.value(fn d, key -> 10 * Map.fetch!(d, key) end)
-        |> Stack.generate([%{a: 1, b: 2}])
+        |> Stack.generate!([%{a: 1, b: 2}])
 
       assert Enum.map(series, &{hd(&1.points).y0, hd(&1.points).y1}) == [{0, 10}, {10, 30}]
     end
@@ -80,7 +80,7 @@ defmodule Macaw.Data.StackFFTTest do
       data = [%{a: 1, b: 2}, %{a: 3, b: 1}]
 
       series =
-        Stack.new() |> Stack.keys([:a, :b]) |> Stack.order(:reverse) |> Stack.generate(data)
+        Stack.new() |> Stack.keys([:a, :b]) |> Stack.order(:reverse) |> Stack.generate!(data)
 
       assert Enum.map(series, & &1.key) == [:a, :b]
       assert Enum.map(series, & &1.index) == [1, 0]
@@ -93,7 +93,7 @@ defmodule Macaw.Data.StackFFTTest do
         Stack.new()
         |> Stack.keys([:a, :b, :c])
         |> Stack.order(order)
-        |> Stack.generate(sums)
+        |> Stack.generate!(sums)
         |> Enum.map(&{&1.key, &1.index})
       end
 
@@ -105,7 +105,7 @@ defmodule Macaw.Data.StackFFTTest do
     test "a fixed order stacks exactly as listed, unlisted keys above in key order" do
       data = [%{a: 5, b: 1, c: 3}, %{a: 1, b: 9, c: 2}]
       stack = Stack.new() |> Stack.keys([:a, :b, :c]) |> Stack.order({:keys, [:b, :c, :a]})
-      series = Stack.generate(stack, data)
+      series = Stack.generate!(stack, data)
 
       assert Enum.map(series, &{&1.key, &1.index}) == [a: 2, b: 0, c: 1]
       [a, b, c] = Enum.map(series, &Enum.map(&1.points, fn p -> {p.y0, p.y1} end))
@@ -114,14 +114,14 @@ defmodule Macaw.Data.StackFFTTest do
       assert a == [{4, 9}, {11, 12}]
 
       # The same keys over other data keep the same places: no value is read.
-      assert Enum.map(Stack.generate(stack, [%{a: 100, b: 0, c: 50}]), & &1.index) == [2, 0, 1]
+      assert Enum.map(Stack.generate!(stack, [%{a: 100, b: 0, c: 50}]), & &1.index) == [2, 0, 1]
 
       four = Stack.new() |> Stack.keys([:a, :b, :c, :d])
 
       by = fn order ->
         four
         |> Stack.order(order)
-        |> Stack.generate([%{a: 1, b: 2, c: 3, d: 4}])
+        |> Stack.generate!([%{a: 1, b: 2, c: 3, d: 4}])
         |> Enum.map(&{&1.key, &1.index})
       end
 
@@ -139,7 +139,7 @@ defmodule Macaw.Data.StackFFTTest do
       Stack.new()
       |> Stack.keys(keys)
       |> Stack.order(:insideout)
-      |> Stack.generate(data)
+      |> Stack.generate!(data)
       |> Enum.map(&{&1.key, &1.index})
     end
 
@@ -165,6 +165,55 @@ defmodule Macaw.Data.StackFFTTest do
     end
   end
 
+  describe "Stack.generate/2 of any source (#161)" do
+    defp opaque(term), do: :erlang.binary_to_term(:erlang.term_to_binary(term))
+
+    @tag verifies: "operations-stack-source"
+    test "a source rows/1 reads is {:ok, series}, a table and a column map among them" do
+      stack = Stack.new() |> Stack.keys([:a, :b])
+      rows = [%{a: 1, b: 2}, %{a: 3, b: 4}]
+      series = Stack.generate!(stack, rows)
+      {:ok, table} = Macaw.Data.Table.from(rows)
+
+      assert Stack.generate(stack, rows) == {:ok, series}
+      assert Stack.generate(stack, %{a: [1, 3], b: [2, 4]}) == {:ok, series}
+
+      assert {:ok, from_table} = Stack.generate(stack, table)
+
+      assert Enum.map(from_table, &Enum.map(&1.points, fn p -> {p.y0, p.y1} end)) ==
+               Enum.map(series, &Enum.map(&1.points, fn p -> {p.y0, p.y1} end))
+    end
+
+    @tag verifies: "operations-stack-source"
+    test "a source source/1 refuses is its faults, and generate!/2 raises exactly those" do
+      stack = Stack.new() |> Stack.keys([:a])
+
+      for source <- [%{a: [1, 2], b: [1]}, Nx.iota({2, 2, 2}), URI.parse("http://x")] do
+        source = opaque(source)
+        {:error, faults} = Macaw.Data.Table.source(source)
+
+        assert Stack.generate(stack, source) == {:error, faults}
+        error = assert_raise Macaw.Data.Error, fn -> Stack.generate!(stack, source) end
+        assert error.reason == faults
+      end
+    end
+
+    @tag verifies: "operations-stack-source"
+    test "unnamed rows are {[:names], :required} under the default value function only" do
+      stack = Stack.new() |> Stack.keys([:a])
+
+      for source <- [[{1, 2}], Nx.tensor([1, 2]), Nx.tensor([[1, 2]])] do
+        source = opaque(source)
+        assert Stack.generate(stack, source) == {:error, [{[:names], :required}]}
+        error = assert_raise Macaw.Data.Error, fn -> Stack.generate!(stack, source) end
+        assert error.reason == [{[:names], :required}]
+      end
+
+      first = Stack.value(stack, fn row, _key -> elem(row, 0) end)
+      assert {:ok, [%{points: [%{y1: 1}]}]} = Stack.generate(first, [{1, 2}])
+    end
+  end
+
   describe "Stack's cost (#126)" do
     # Counted in reductions, as the FFT's is: an offset indexing each column of each series
     # was quadratic, sixteen times the work for four times the rows.
@@ -179,8 +228,8 @@ defmodule Macaw.Data.StackFFTTest do
         stack =
           Stack.new() |> Stack.keys([:a, :b, :c]) |> Stack.order(order) |> Stack.offset(offset)
 
-        {small, _} = Work.reductions(fn -> Stack.generate(stack, data.(2_000)) end)
-        {large, series} = Work.reductions(fn -> Stack.generate(stack, data.(8_000)) end)
+        {small, _} = Work.reductions(fn -> Stack.generate!(stack, data.(2_000)) end)
+        {large, series} = Work.reductions(fn -> Stack.generate!(stack, data.(8_000)) end)
 
         assert length(hd(series).points) == 8_000
 

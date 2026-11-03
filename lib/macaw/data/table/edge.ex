@@ -184,17 +184,20 @@ defmodule Macaw.Data.Table.Edge do
 
   # -- types suggested ------------------------------------------------------------------------
 
-  # Both read a source through `Table.rows!/1`, so a source `source/1` refuses raises its
-  # faults: their answering a value instead is macaw_data#161.
+  # Both read a source through `Table.rows/1`: `{:ok, value}`, or the faults `source/1`
+  # answers for a source of no shape it reads (macaw_data#161).
   def time_columns(source) do
-    rows = Macaw.Data.Table.rows!(source)
-
-    rows
-    |> column_names()
-    |> Enum.filter(fn name -> temporal_column?(Enum.map(rows, &Map.get(&1, name))) end)
+    with {:ok, rows} <- Macaw.Data.Table.rows(source) do
+      {:ok,
+       rows
+       |> column_names()
+       |> Enum.filter(fn name -> temporal_column?(Enum.map(rows, &Map.get(&1, name))) end)}
+    end
   end
 
-  def column_types(source), do: source |> Macaw.Data.Table.rows!() |> infer()
+  def column_types(source) do
+    with {:ok, rows} <- Macaw.Data.Table.rows(source), do: {:ok, infer(rows)}
+  end
 
   defp infer(rows) do
     for name <- column_names(rows),

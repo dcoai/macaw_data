@@ -205,23 +205,25 @@ defmodule Macaw.Data.TableTest do
         }
       ]
 
-      assert Table.column_types(rows) == %{
-               t: :time,
-               d: :time,
-               n: :number,
-               f: :number,
-               s: :text,
-               k: :category,
-               b: :category
-             }
+      assert Table.column_types(rows) ==
+               {:ok,
+                %{
+                  t: :time,
+                  d: :time,
+                  n: :number,
+                  f: :number,
+                  s: :text,
+                  k: :category,
+                  b: :category
+                }}
     end
 
     @tag verifies: "table-inference"
     test "a column that stops being temporal is text, a column map and a tuple table" do
-      assert Table.column_types([%{d: "2024-01-01"}, %{d: "later"}]) == %{d: :text}
-      assert Table.column_types(%{t: [1, 2], s: ["a", "b"]}) == %{t: :number, s: :text}
-      assert Table.column_types([{1, 2}, {3, 4}]) == %{}
-      assert Table.column_types([]) == %{}
+      assert Table.column_types([%{d: "2024-01-01"}, %{d: "later"}]) == {:ok, %{d: :text}}
+      assert Table.column_types(%{t: [1, 2], s: ["a", "b"]}) == {:ok, %{t: :number, s: :text}}
+      assert Table.column_types([{1, 2}, {3, 4}]) == {:ok, %{}}
+      assert Table.column_types([]) == {:ok, %{}}
     end
 
     @tag verifies: "table-inference"
@@ -234,13 +236,56 @@ defmodule Macaw.Data.TableTest do
         %{c: nil, l: red, x: nil, n: "blue", m: nil}
       ]
 
-      assert Table.column_types(rows) == %{c: :color, l: :color, x: :text, n: :text}
+      assert Table.column_types(rows) == {:ok, %{c: :color, l: :color, x: :text, n: :text}}
 
       # Packing infers it too, where no type is given.
       assert {:ok, table} = Table.from(rows)
       assert Table.column_type(table, :c) == :color
       assert Table.column_type(table, :x) == :text
       assert Table.column_type(table, :m) == :term
+    end
+  end
+
+  describe "column_types/1 and time_columns/1 of a source rows/1 refuses (#161)" do
+    # Each opaque to the type checker, which would prove the refused calls' twins raise.
+    defp opaque(term), do: :erlang.binary_to_term(:erlang.term_to_binary(term))
+
+    @tag verifies: "table-inference-source"
+    test "a source source/1 refuses is its faults, and the twins raise exactly those" do
+      for source <- [
+            %{a: [1, 2], b: [1]},
+            %{a: [1, 2], b: :x},
+            Nx.iota({2, 2, 2}),
+            [%{t: 1}, 2],
+            URI.parse("http://x"),
+            :not_a_source
+          ] do
+        source = opaque(source)
+        {:error, faults} = Table.source(source)
+
+        assert Table.column_types(source) == {:error, faults}
+        assert Table.time_columns(source) == {:error, faults}
+
+        for bang <- [&Table.column_types!/1, &Table.time_columns!/1] do
+          error = assert_raise Macaw.Data.Error, fn -> bang.(source) end
+          assert error.reason == faults
+          assert error.message =~ ~r/^not a source of rows: /
+        end
+      end
+    end
+
+    @tag verifies: "table-inference-source"
+    test "a valid source is {:ok, value}, a table its declared types, and the twins the value" do
+      rows = [%{t: ~D[2024-01-01], v: 1}, %{t: ~D[2024-01-02], v: 2.5}]
+      {:ok, table} = Table.from(rows)
+
+      assert Table.column_types(rows) == {:ok, %{t: :time, v: :number}}
+      assert Table.time_columns(rows) == {:ok, [:t]}
+      assert Table.column_types(table) == {:ok, %{t: :time, v: :number}}
+      assert Table.time_columns(table) == {:ok, [:t]}
+      assert Table.column_types!(rows) == %{t: :time, v: :number}
+      assert Table.time_columns!(table) == [:t]
+      assert Table.column_types(Nx.tensor([1, 2])) == {:ok, %{}}
     end
   end
 
@@ -257,28 +302,28 @@ defmodule Macaw.Data.TableTest do
         strings: ["2024-01-01", "tomorrow"]
       }
 
-      assert Table.time_columns(source) == [:d, :dt, :iso, :ndt]
+      assert Table.time_columns(source) == {:ok, [:d, :dt, :iso, :ndt]}
     end
 
     @tag verifies: "table-inference"
     test "nil is a gap, not a value; an all-nil column is not temporal" do
-      assert Table.time_columns(%{t: [nil, ~D[2024-01-01]], u: [nil, nil]}) == [:t]
+      assert Table.time_columns(%{t: [nil, ~D[2024-01-01]], u: [nil, nil]}) == {:ok, [:t]}
     end
 
     @tag verifies: "table-inference"
     test "a first-row check would pass what the whole column fails" do
-      assert Table.time_columns([%{t: ~D[2024-01-01]}, %{t: "later"}]) == []
+      assert Table.time_columns([%{t: ~D[2024-01-01]}, %{t: "later"}]) == {:ok, []}
     end
 
     @tag verifies: "table-inference"
     test "names are the union of every row's keys, sorted; a row missing a key is a gap" do
       rows = [%{b: ~D[2024-01-01]}, %{a: ~D[2024-01-02], b: ~D[2024-01-02]}]
-      assert Table.time_columns(rows) == [:a, :b]
+      assert Table.time_columns(rows) == {:ok, [:a, :b]}
     end
 
     @tag verifies: "table-inference"
     test "tuple rows have no columns" do
-      assert Table.time_columns([{~D[2024-01-01], 1}]) == []
+      assert Table.time_columns([{~D[2024-01-01], 1}]) == {:ok, []}
     end
 
     @tag verifies: "table-inference"

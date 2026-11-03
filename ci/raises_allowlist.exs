@@ -391,10 +391,20 @@
     reason: "new/1's twin: raises the faults new/1 answers, as Macaw.Data.Error"
   },
   %{
+    at: {Macaw.Data.Stack, :generate!, 2},
+    class: :bang,
+    reason: "generate/2's twin: raises the faults generate/2 answers, as Macaw.Data.Error"
+  },
+  %{
     at: {Macaw.Data.Table.Digest, :not_data, 1},
     class: :invariant,
     reason:
       "a value that is not data in a digest: Table.new/2 refuses one ({[name, i], :not_data}) before any chunk is built, so a chunk's canonical form never holds one (spec/01 §1.1.2)"
+  },
+  %{
+    at: {Macaw.Data.Table, :column_types!, 1},
+    class: :bang,
+    reason: "column_types/1's twin: raises the faults column_types/1 answers, as Macaw.Data.Error"
   },
   %{
     at: {Macaw.Data.Table, :new!, 2},
@@ -405,6 +415,11 @@
     at: {Macaw.Data.Table, :rows!, 1},
     class: :bang,
     reason: "rows/1's twin: raises the faults rows/1 answers, as Macaw.Data.Error"
+  },
+  %{
+    at: {Macaw.Data.Table, :time_columns!, 1},
+    class: :bang,
+    reason: "time_columns/1's twin: raises the faults time_columns/1 answers, as Macaw.Data.Error"
   },
   %{
     at: {Macaw.Data.Unit, :convert!, 3},

@@ -15,8 +15,8 @@ defmodule Macaw.Data.Stack do
       stack = Macaw.Data.Stack.new()
         |> Macaw.Data.Stack.keys([:apples, :oranges, :bananas])
 
-      series = Macaw.Data.Stack.generate(stack, data)
-      # Returns one series per key, in key order, each with :key, :index (its position
+      {:ok, series} = Macaw.Data.Stack.generate(stack, data)
+      # One series per key, in key order, each with :key, :index (its position
       # in the stacking order) and :points. Points have :data, :y0 (baseline), :y1 (top).
 
   """
@@ -43,17 +43,21 @@ defmodule Macaw.Data.Stack do
         }
   @type series :: %{key: any(), index: non_neg_integer(), points: [point()]}
 
-  @doc "Creates a new stack generator"
+  @doc """
+  Creates a new stack generator. Its value function reads a datum's `key` by name
+  (`Macaw.Data.Table.get/2`), `nil` read as `0`, so it reads rows that have names.
+  """
   @spec new() :: t()
-  def new do
-    %__MODULE__{
-      value: fn d, key ->
-        case Macaw.Data.Table.get(d, key) do
-          nil -> 0
-          value -> value
-        end
-      end
-    }
+  def new, do: %__MODULE__{value: &__MODULE__.by_name/2}
+
+  @doc false
+  # The default value function: an external capture, so `generate/2` knows it is the one
+  # stacking and can refuse rows it cannot read by name.
+  def by_name(d, key) do
+    case Macaw.Data.Table.get(d, key) do
+      nil -> 0
+      value -> value
+    end
   end
 
   @doc """
@@ -95,7 +99,7 @@ defmodule Macaw.Data.Stack do
       iex> Stack.new()
       ...> |> Stack.keys([:a, :b, :c])
       ...> |> Stack.order({:keys, [:c, :x, :a]})
-      ...> |> Stack.generate([%{a: 1, b: 2, c: 3}])
+      ...> |> Stack.generate!([%{a: 1, b: 2, c: 3}])
       ...> |> Enum.map(&{&1.key, &1.index})
       [a: 1, b: 2, c: 0]
   """
@@ -127,20 +131,53 @@ defmodule Macaw.Data.Stack do
   @doc """
   Generates the stacked series data.
 
-  Returns one series per key, **in key order**, each a map with:
+  `{:ok, series}`: one series per key, **in key order**, each a map with:
   - `:key` - The series key
   - `:index` - The series' position in the stacking order (0 is the bottom)
   - `:points` - One point per datum with `:data`, `:value`, `:y0`, `:y1`, `:index`
+
+  The data is any source, read by `Macaw.Data.Table.rows/1`; a source of no shape it
+  reads is `Macaw.Data.Table.source/1`'s `{:error, faults}` (macaw_data#161). Rows with
+  no names, a tensor's or tuple rows, are `{:error, [{[:names], :required}]}` under the
+  default value function, which reads by name: `Macaw.Data.Table.named/2` names them, or
+  `value/2` reads them another way.
+
+      iex> alias Macaw.Data.Stack
+      iex> Stack.new() |> Stack.keys([:a]) |> Stack.generate([%{a: 1}, 2])
+      {:error, [{[], {:type, :rows}}]}
+      iex> Stack.new() |> Stack.keys([:a]) |> Stack.generate([{1, 2}])
+      {:error, [{[:names], :required}]}
   """
-  @spec generate(t(), Macaw.Data.Table.source()) :: [series()]
-  # The data read through `Table.rows!/1`, so a source `Table.source/1` refuses raises its
-  # faults: its answering a value instead is macaw_data#161.
-  def generate(%__MODULE__{} = stack, data),
-    do: generate_rows(stack, Macaw.Data.Table.rows!(data))
+  @spec generate(t(), Macaw.Data.Table.source()) ::
+          {:ok, [series()]} | {:error, [{list(), term()}, ...]}
+  def generate(%__MODULE__{} = stack, data) do
+    with {:ok, rows} <- Macaw.Data.Table.rows(data),
+         :ok <- readable(stack, data),
+         do: {:ok, generate_rows(stack, rows)}
+  end
+
+  defp readable(%__MODULE__{value: value}, data) do
+    if value == (&__MODULE__.by_name/2) and Macaw.Data.Table.unnamed?(data),
+      do: {:error, [{[:names], :required}]},
+      else: :ok
+  end
+
+  @doc "As `generate/2`, the series alone, raising `Macaw.Data.Error` with the source's faults."
+  @spec generate!(t(), Macaw.Data.Table.source()) :: [series()]
+  def generate!(%__MODULE__{} = stack, data) do
+    case generate(stack, data) do
+      {:ok, series} ->
+        series
+
+      {:error, faults} ->
+        raise Macaw.Data.Error, reason: faults, what: "not a source of rows", root: "source"
+    end
+  end
 
   @doc """
   As `generate/2`, over a list of data each given to the value function as it is: no
-  source read as rows. The `stack` step stacks row places so (spec/04 §4.8).
+  source read as rows, so nothing is refused; the value function must read every element.
+  The `stack` step stacks row places so (spec/04 §4.8).
   """
   @spec series(t(), [term()]) :: [series()]
   def series(%__MODULE__{} = stack, data) when is_list(data), do: generate_rows(stack, data)

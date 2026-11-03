@@ -29,7 +29,7 @@ defmodule Macaw.Data.Operations.SeriesTest do
       rows = run(%{op: "stack", fields: [:a, :b, :c], offset: :expand}, @rows)
 
       series =
-        Stack.new() |> Stack.keys([:a, :b, :c]) |> Stack.offset(:expand) |> Stack.generate(@rows)
+        Stack.new() |> Stack.keys([:a, :b, :c]) |> Stack.offset(:expand) |> Stack.generate!(@rows)
 
       expected =
         for s <- series, p <- s.points do
@@ -56,7 +56,7 @@ defmodule Macaw.Data.Operations.SeriesTest do
         Stack.new()
         |> Stack.keys([:a, :b, :c])
         |> Stack.order(:insideout)
-        |> Stack.generate(@rows)
+        |> Stack.generate!(@rows)
 
       assert inside |> Enum.map(& &1["series"]) |> Enum.uniq() == Enum.map(direct, & &1.index)
 

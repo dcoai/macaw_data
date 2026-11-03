@@ -675,6 +675,12 @@ every offset's work is linear in the rows, four times the rows under five times 
 every order and offset matches d3-shape's on the reference fixtures, keys fixed and the others computed from the rows; nil reads as zero and a non-number is the step's fault; each row carries the datum's columns and its key, series, value, y0 and y1
 ```
 
+**`Macaw.Data.Stack.generate/2`** stacks any source, read by `Macaw.Data.Table.rows/1`: `{:ok, series}`, or `Macaw.Data.Table.source/1`'s `{:error, faults}` for a source of no shape it reads, never a raise (macaw_data#161, 00 §5). Rows with no names, a tensor's or tuple rows, are `{[:names], :required}` under the default value function, which reads a datum's key by name (`Macaw.Data.Table.named/2` names them, or a value function of the caller's reads them). `generate!/2` answers the series alone or raises `Macaw.Data.Error` with the faults. `series/2` stacks a list as it is, each element given to the value function, and refuses nothing; the step stacks row places so, with a value function of its own.
+
+```test:operations-stack-source
+Stack.generate/2 answers {:ok, series} for any source rows/1 reads, a table and a column map among them, and source/1's faults for a column map of unequal columns, a tensor of rank 3 and any other term, and {[:names], :required} for unnamed rows under the default value function; generate!/2 raises exactly those faults as Macaw.Data.Error
+```
+
 ### 4.9 bin {#operations-bin}
 
 `field` (`:field`, required); `thresholds` (`{:one_of, [{:integer, 1}, {:list, :number}]}`, `10`); `as` (`:name`, `"count"`); `fn` (`:aggregate`, `nil`) and the named aggregate's options. The readings of `field` with `nil`s dropped, binned:

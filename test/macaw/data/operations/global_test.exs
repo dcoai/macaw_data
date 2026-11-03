@@ -111,7 +111,7 @@ defmodule Macaw.Data.Operations.GlobalTest do
       |> Stack.value(fn row, f -> row[f] || 0 end)
       |> Stack.order(order)
       |> Stack.offset(offset)
-      |> Stack.generate(rows)
+      |> Stack.generate!(rows)
       |> Map.new(&{&1.key, &1})
 
     for f <- fields, s = series[f], s != nil, p <- s.points do

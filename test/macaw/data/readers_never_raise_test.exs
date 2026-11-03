@@ -9,7 +9,7 @@ defmodule Macaw.Data.ReadersNeverRaiseTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
-  alias Macaw.Data.{Derived, Error, Fault, Schema, Table}
+  alias Macaw.Data.{Derived, Error, Fault, Schema, Stack, Table}
   alias Macaw.Data.Source.{Description, Finish, Push, Request}
 
   # A leaf of any kind, small: the shapes are the generators' work, not the values'.
@@ -106,6 +106,45 @@ defmodule Macaw.Data.ReadersNeverRaiseTest do
       case Table.from(source, opts) do
         {:ok, %Table{}} -> :ok
         {:error, [_ | _] = faults} -> assert is_binary(Fault.sentence(faults))
+      end
+    end
+  end
+
+  # A tensor of rank 1 to 3: rank 3 is refused.
+  defp tensor do
+    bind(integer(1..3), fn rank ->
+      map(list_of(integer(1..2), length: rank), &Nx.iota(List.to_tuple(&1)))
+    end)
+  end
+
+  # The readers of a caller's source besides from/2 (#161): each answers source/1's faults.
+  @tag verifies: "data-errors-readers"
+  property "column_types/1, time_columns/1 and Stack.generate/2 answer any source or faults" do
+    stack = Stack.new() |> Stack.keys([:a, "b"])
+
+    check all(
+            source <-
+              one_of([
+                value(),
+                list_of(one_of([map_of(name(), leaf(), max_length: 3), leaf()]), max_length: 3),
+                list_of(tuple({leaf(), leaf()}), max_length: 3),
+                map_of(name(), one_of([list_of(leaf(), max_length: 3), leaf()]), max_length: 3),
+                tensor()
+              ])
+          ) do
+      refused =
+        case Table.source(source) do
+          :ok -> nil
+          {:error, faults} -> {:error, faults}
+        end
+
+      for {value, bang} <- [
+            {fn -> Table.column_types(source) end, fn -> Table.column_types!(source) end},
+            {fn -> Table.time_columns(source) end, fn -> Table.time_columns!(source) end},
+            {fn -> Stack.generate(stack, source) end, fn -> Stack.generate!(stack, source) end}
+          ] do
+        answer = answers(value, bang)
+        if refused, do: assert(match?(%Error{}, answer) and {:error, answer.reason} == refused)
       end
     end
   end

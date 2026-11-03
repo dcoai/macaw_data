@@ -898,13 +898,32 @@ defmodule Macaw.Data.Table do
 
   @doc """
   The names of the columns whose values are all temporal: at least one value not `nil`,
-  and every value `nil` or `temporal?/1`. The whole column is read.
+  and every value `nil` or `temporal?/1`. The whole column is read. `{:ok, names}`, or
+  `source/1`'s `{:error, faults}` for a source of no shape `rows/1` reads (macaw_data#161);
+  a table's are its `:time` columns.
+
+      iex> Macaw.Data.Table.time_columns(%{t: [~D[2024-01-01], nil], v: [1, 2]})
+      {:ok, [:t]}
+      iex> Macaw.Data.Table.time_columns([%{t: ~D[2024-01-01]}, 2])
+      {:error, [{[], {:type, :rows}}]}
   """
-  @spec time_columns(source() | t()) :: [name()]
+  @spec time_columns(source() | t()) :: {:ok, [name()]} | {:error, [{list(), term()}, ...]}
   def time_columns(%__MODULE__{} = table),
-    do: for(name <- table.names, column_type(table, name) == :time, do: name)
+    do: {:ok, for(name <- table.names, column_type(table, name) == :time, do: name)}
 
   def time_columns(source), do: Edge.time_columns(source)
+
+  @doc "As `time_columns/1`, the names alone, raising `Macaw.Data.Error` with the source's faults."
+  @spec time_columns!(source() | t()) :: [name()]
+  def time_columns!(source) do
+    case time_columns(source) do
+      {:ok, names} ->
+        names
+
+      {:error, faults} ->
+        raise Macaw.Data.Error, reason: faults, what: "not a source of rows", root: "source"
+    end
+  end
 
   @doc """
   Every named column's type, read whole: all non-`nil` values temporal is `:time`, all
@@ -912,19 +931,34 @@ defmodule Macaw.Data.Table do
   color, `Macaw.Data.Schema.color?/1`), all atoms or booleans `:category`. A string is
   never a color, so a column of CSS text is `:text`. A mixed or empty column is left out.
   A suggestion for a tool, never something a reader relies on; a table's own declared
-  types are `column_type/2`'s.
+  types are `column_type/2`'s, and a table answers those. `{:ok, types}`, or `source/1`'s
+  `{:error, faults}` for a source of no shape `rows/1` reads (macaw_data#161).
 
       iex> rows = [%{t: ~U[2024-01-01 00:00:00Z], v: 1, k: :a, s: "x", c: {:color, "good"}, m: 1},
       ...>         %{t: ~U[2024-01-02 00:00:00Z], v: 2.5, k: :b, s: "y", c: nil, m: "two"}]
       iex> Macaw.Data.Table.column_types(rows)
-      %{t: :time, v: :number, k: :category, s: :text, c: :color}
+      {:ok, %{t: :time, v: :number, k: :category, s: :text, c: :color}}
+      iex> Macaw.Data.Table.column_types([%{t: 1}, 2])
+      {:error, [{[], {:type, :rows}}]}
   """
   @spec column_types(source() | t()) ::
-          %{name() => :time | :number | :category | :text | :color}
+          {:ok, %{name() => type()}} | {:error, [{list(), term()}, ...]}
   def column_types(%__MODULE__{} = table),
-    do: Map.new(table.names, &{&1, column_type(table, &1)})
+    do: {:ok, Map.new(table.names, &{&1, column_type(table, &1)})}
 
   def column_types(source), do: Edge.column_types(source)
+
+  @doc "As `column_types/1`, the types alone, raising `Macaw.Data.Error` with the source's faults."
+  @spec column_types!(source() | t()) :: %{name() => type()}
+  def column_types!(source) do
+    case column_types(source) do
+      {:ok, types} ->
+        types
+
+      {:error, faults} ->
+        raise Macaw.Data.Error, reason: faults, what: "not a source of rows", root: "source"
+    end
+  end
 
   @doc """
   Whether a value is a point in time: a `DateTime`, `Date` or `NaiveDateTime`, or a string
