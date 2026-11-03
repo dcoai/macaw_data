@@ -63,35 +63,124 @@ defmodule Macaw.Data.Derived.Sandbox.Runtime do
   def rows(t), do: answer(Columns.rows(t), &Enum.map(&1, fn row -> row(row) end))
 
   @doc false
-  def names!(t), do: value!(names(t))
+  def names!(t) do
+    case names(t) do
+      {:ok, value} -> value
+      {:error, reason} -> raise error(reason)
+    end
+  end
+
   @doc false
-  def type!(t, name), do: value!(type(t, name))
+  def type!(t, name) do
+    case type(t, name) do
+      {:ok, value} -> value
+      {:error, reason} -> raise error(reason)
+    end
+  end
+
   @doc false
-  def size!(t), do: value!(size(t))
+  def size!(t) do
+    case size(t) do
+      {:ok, value} -> value
+      {:error, reason} -> raise error(reason)
+    end
+  end
+
   @doc false
-  def column!(t, name), do: value!(column(t, name))
+  def column!(t, name) do
+    case column(t, name) do
+      {:ok, value} -> value
+      {:error, reason} -> raise error(reason)
+    end
+  end
+
   @doc false
-  def numbers!(t, name), do: value!(numbers(t, name))
+  def numbers!(t, name) do
+    case numbers(t, name) do
+      {:ok, value} -> value
+      {:error, reason} -> raise error(reason)
+    end
+  end
+
   @doc false
-  def instants!(t, name), do: value!(instants(t, name))
+  def instants!(t, name) do
+    case instants(t, name) do
+      {:ok, value} -> value
+      {:error, reason} -> raise error(reason)
+    end
+  end
+
   @doc false
-  def valid!(t, name), do: value!(valid(t, name))
+  def valid!(t, name) do
+    case valid(t, name) do
+      {:ok, value} -> value
+      {:error, reason} -> raise error(reason)
+    end
+  end
+
   @doc false
-  def count!(t, name), do: value!(count(t, name))
+  def count!(t, name) do
+    case count(t, name) do
+      {:ok, value} -> value
+      {:error, reason} -> raise error(reason)
+    end
+  end
+
   @doc false
-  def sum!(t, name), do: value!(sum(t, name))
+  def sum!(t, name) do
+    case sum(t, name) do
+      {:ok, value} -> value
+      {:error, reason} -> raise error(reason)
+    end
+  end
+
   @doc false
-  def mean!(t, name), do: value!(mean(t, name))
+  def mean!(t, name) do
+    case mean(t, name) do
+      {:ok, value} -> value
+      {:error, reason} -> raise error(reason)
+    end
+  end
+
   @doc false
-  def min!(t, name), do: value!(min(t, name))
+  def min!(t, name) do
+    case min(t, name) do
+      {:ok, value} -> value
+      {:error, reason} -> raise error(reason)
+    end
+  end
+
   @doc false
-  def max!(t, name), do: value!(max(t, name))
+  def max!(t, name) do
+    case max(t, name) do
+      {:ok, value} -> value
+      {:error, reason} -> raise error(reason)
+    end
+  end
+
   @doc false
-  def slice!(t, start, count), do: value!(slice(t, start, count))
+  def slice!(t, start, count) do
+    case slice(t, start, count) do
+      {:ok, value} -> value
+      {:error, reason} -> raise error(reason)
+    end
+  end
+
   @doc false
-  def take!(t, n), do: value!(take(t, n))
+  def take!(t, n) do
+    case take(t, n) do
+      {:ok, value} -> value
+      {:error, reason} -> raise error(reason)
+    end
+  end
+
   @doc false
-  def rows!(t), do: value!(rows(t))
+  def rows!(t) do
+    case rows(t) do
+      {:ok, value} -> value
+      {:error, reason} -> raise error(reason)
+    end
+  end
 
   # A reason's words, by their spellings: the atoms a reason holds, read back from the
   # strings a stored function writes for them. A fixed table; no atom is made.
@@ -116,10 +205,9 @@ defmodule Macaw.Data.Derived.Sandbox.Runtime do
   defp answer({:ok, value}, spell), do: {:ok, spell.(value)}
   defp answer({:error, reason}, _spell), do: {:error, spelled(reason)}
 
-  defp value!({:ok, value}), do: value
-
-  defp value!({:error, reason}),
-    do: raise(Macaw.Data.Error, reason: reason, message: format_error(reason))
+  # What the bang twins raise: their twin's reason, and its words (spec/00 §5).
+  defp error(reason),
+    do: Macaw.Data.Error.exception(reason: reason, message: format_error(reason))
 
   defp each(values), do: Enum.map(values, &Names.spelling/1)
   defp row(row), do: Map.new(row, fn {k, v} -> {Names.spelling(k), Names.spelling(v)} end)

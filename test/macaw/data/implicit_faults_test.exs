@@ -11,6 +11,10 @@ defmodule Macaw.Data.ImplicitFaultsTest do
   alias Macaw.Data.Derived.Engine
   alias Macaw.Data.Source.{Finish, Push}
 
+  # A term the type checker cannot see through: a call it can prove raises is still made,
+  # on purpose, as the twin's raise is what the test asserts.
+  defp opaque(term), do: :erlang.binary_to_term(:erlang.term_to_binary(term))
+
   defp stored(id) do
     Derived.new!(
       id: id,
@@ -73,7 +77,7 @@ defmodule Macaw.Data.ImplicitFaultsTest do
     assert_raise Macaw.Data.Error, ~r/:vibes is not a quantity/, fn -> Quantity.kind!(:vibes) end
 
     assert_raise Macaw.Data.Error, ~r/:imperial is not a unit system/, fn ->
-      Quantity.family!(:mass, "kg", :imperial)
+      Quantity.family!(:mass, "kg", opaque(:imperial))
     end
   end
 end

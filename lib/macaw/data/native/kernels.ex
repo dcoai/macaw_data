@@ -140,6 +140,18 @@ case Toolchain.decide(
         do: :erlang.nif_error(:not_built)
     end
 
-  {:fail, message} ->
-    raise CompileError, description: message
+  {:fail, _message} ->
+    # `native: :required` and no toolchain: the build fails, in the module's own body so
+    # the raise is the module's (spec/04 §1.7). A module body sees no variable from
+    # outside it, so the decision is read again here.
+    defmodule Macaw.Data.Native.Kernels do
+      @moduledoc false
+      {:fail, message} =
+        Toolchain.decide(
+          Toolchain.detect(),
+          Application.compile_env(:macaw_data, :native, :optional)
+        )
+
+      raise CompileError, description: message
+    end
 end

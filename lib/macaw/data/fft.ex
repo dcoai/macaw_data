@@ -51,7 +51,12 @@ defmodule Macaw.Data.FFT do
 
   @doc "As `fft/1`, the terms alone, raising `Macaw.Data.Error` in `format_error/1`'s words."
   @spec fft!([number() | complex()]) :: [complex()]
-  def fft!(sequence), do: value!(fft(sequence))
+  def fft!(sequence) do
+    case fft(sequence) do
+      {:ok, value} -> value
+      {:error, reason} -> raise error(reason)
+    end
+  end
 
   @typedoc "Why a transform or a spectrum is refused (`format_error/1`)."
   @type reason ::
@@ -79,11 +84,9 @@ defmodule Macaw.Data.FFT do
   defp term?({re, im}) when is_number(re) and is_number(im), do: true
   defp term?(_other), do: false
 
-  # The bang twins' one raise: their twin's reason in `format_error/1`'s words.
-  defp value!({:ok, value}), do: value
-
-  defp value!({:error, reason}),
-    do: raise(Macaw.Data.Error, reason: reason, message: format_error(reason))
+  # What the bang twins raise: their twin's reason, and its words (spec/00 §5).
+  defp error(reason),
+    do: Macaw.Data.Error.exception(reason: reason, message: format_error(reason))
 
   @doc "The magnitude `sqrt(re² + im²)` of every term."
   @spec magnitudes([complex()]) :: [float()]
@@ -155,7 +158,12 @@ defmodule Macaw.Data.FFT do
 
   @doc "As `spectrum/3`, the lines alone, raising `Macaw.Data.Error` in `format_error/1`'s words."
   @spec spectrum!([number()], number(), keyword()) :: [line()]
-  def spectrum!(values, every, opts \\ []), do: value!(spectrum(values, every, opts))
+  def spectrum!(values, every, opts \\ []) do
+    case spectrum(values, every, opts) do
+      {:ok, value} -> value
+      {:error, reason} -> raise error(reason)
+    end
+  end
 
   defp lines(values, every, samples, kind, opts) do
     count = length(values)

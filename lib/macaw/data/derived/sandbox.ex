@@ -155,7 +155,7 @@ defmodule Macaw.Data.Derived.Sandbox do
 
   # A `Macaw.Data.Ops` call, piped into or not, becomes `Ops.__run__/5` with the registry it
   # was checked against, escaped into the code (spec/04 §6.1), its kind the function's
-  # name, `!` and all. The rest are map reads.
+  # name; a `!` call becomes its twin, `Ops.__run__!/5`. The rest are map reads.
   defp rewrite(quoted, registry) do
     Macro.prewalk(quoted, fn
       {:|>, _meta, [left, {{:., _dm, [receiver, name]}, call_meta, args}]} = node
@@ -209,7 +209,14 @@ defmodule Macaw.Data.Derived.Sandbox do
         [options] -> options
       end
 
-    {{:., meta, [Macaw.Data.Ops, :__run__]}, Keyword.delete(meta, :no_parens),
+    {run, kind} =
+      case kind do
+        :aggregate! -> {:__run__!, :aggregate}
+        :transform! -> {:__run__!, :transform}
+        kind -> {:__run__, kind}
+      end
+
+    {{:., meta, [Macaw.Data.Ops, run]}, Keyword.delete(meta, :no_parens),
      [kind, Macro.escape(registry), name, subject, options]}
   end
 

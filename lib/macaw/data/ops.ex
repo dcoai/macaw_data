@@ -67,7 +67,12 @@ defmodule Macaw.Data.Ops do
 
   @doc "As `aggregate/3`, the value alone, raising `Macaw.Data.Error` naming every fault."
   @spec aggregate!(Enumerable.t(), String.t(), map()) :: term()
-  def aggregate!(values, name, options), do: value!(name, aggregate(values, name, options))
+  def aggregate!(values, name, options) do
+    case aggregate(values, name, options) do
+      {:ok, value} -> value
+      {:error, faults} -> raise error(name, faults)
+    end
+  end
 
   @doc "As `transform/3` with no options."
   @spec transform(Table.source() | Table.t(), String.t()) ::
@@ -91,7 +96,12 @@ defmodule Macaw.Data.Ops do
 
   @doc "As `transform/3`, the rows alone, raising `Macaw.Data.Error` naming every fault."
   @spec transform!(Table.source() | Table.t(), String.t(), map()) :: [map()]
-  def transform!(rows, name, options), do: value!(name, transform(rows, name, options))
+  def transform!(rows, name, options) do
+    case transform(rows, name, options) do
+      {:ok, rows} -> rows
+      {:error, faults} -> raise error(name, faults)
+    end
+  end
 
   @doc """
   A fault in words, `Macaw.Data.Operations.format_error/1`'s, its reason read back from
@@ -116,11 +126,17 @@ defmodule Macaw.Data.Ops do
     end
   end
 
-  def __run__(:aggregate!, %Registry{} = registry, name, subject, options),
-    do: value!(name, run(:aggregate, registry, name, subject, options))
-
-  def __run__(:transform!, %Registry{} = registry, name, subject, options),
-    do: value!(name, run(:transform, registry, name, subject, options))
+  @doc false
+  # A `!` call compiled against `registry`: `__run__/5`'s value alone, or its faults raised
+  # in words, which the runner reports as `:raised` (spec/02 §6.4).
+  @spec __run__!(atom(), Registry.t(), String.t(), term(), term()) :: term()
+  def __run__!(kind, %Registry{} = registry, name, subject, options)
+      when kind in [:aggregate, :transform] do
+    case run(kind, registry, name, subject, options) do
+      {:ok, value} -> value
+      {:error, faults} -> raise error(name, faults)
+    end
+  end
 
   defp run(_kind, _registry, _name, _subject, options) when not is_map(options),
     do: {:error, [{["options"], {:type, :map}}]}
@@ -141,11 +157,10 @@ defmodule Macaw.Data.Ops do
     end
   end
 
-  defp value!(_name, {:ok, value}), do: value
-
-  defp value!(name, {:error, faults}),
+  # What the `!` calls raise: the faults, and their words under the operation's name.
+  defp error(name, faults),
     do:
-      raise(Macaw.Data.Error,
+      Macaw.Data.Error.exception(
         reason: faults,
         message: "#{name}: " <> Enum.map_join(faults, "; ", &format_error/1)
       )

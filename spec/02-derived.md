@@ -459,7 +459,7 @@ a variable read before it is bound, a call in a guard that is not guard-safe and
 | `Keyword` | `delete/3`, `map/2`, `size/1` | `:deprecated` |
 | `:math` | none | pure; random numbers live in `:rand`, which is not on the list |
 | `Macaw.Data.Derived.Columns` | `time_kind/2`, `time_kind!/2` | `:atoms`: the answer is a module, which a stored function would get back as an atom (macaw_data#149); host code reads it. Every other accessor reads only the table it is given (§2.2) |
-| `Macaw.Data.Ops` | `__run__/5` | `:internal`: the call a checked `aggregate` or `transform` is compiled to ([04 §6.1](04-operations.md#operations-allowlist)) |
+| `Macaw.Data.Ops` | `__run__/5`, `__run__!/5` | `:internal`: the calls a checked `aggregate` or `transform`, and its `!` variant, are compiled to ([04 §6.1](04-operations.md#operations-allowlist)) |
 
 `Enum.into/2,3` is allowed with a literal empty target only (§6.1). Everything else these modules export is allowed, `String.splitter/2,3` included.
 

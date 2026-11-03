@@ -12,6 +12,10 @@ defmodule Macaw.Data.Derived.ColumnsTest do
   alias Macaw.Data.Source.Order
   alias Macaw.Data.Test.Gen
 
+  # A term the type checker cannot see through: a call it can prove raises is still made,
+  # on purpose, as the twin's raise is what the test asserts.
+  defp opaque(term), do: :erlang.binary_to_term(:erlang.term_to_binary(term))
+
   doctest Columns
 
   @paris {"Europe/Paris", "CET", 3600, 0}
@@ -262,8 +266,12 @@ defmodule Macaw.Data.Derived.ColumnsTest do
     end
 
     assert_raise Macaw.Data.Error, ~r/an atom or a string/, fn -> Columns.count!(table, 1) end
-    assert_raise Macaw.Data.Error, ~r/not a Macaw.Data.Table/, fn -> Columns.size!(nil) end
-    assert_raise Macaw.Data.Error, ~r/integer count/, fn -> Columns.take!(table, :x) end
+
+    assert_raise Macaw.Data.Error, ~r/not a Macaw.Data.Table/, fn ->
+      Columns.size!(opaque(nil))
+    end
+
+    assert_raise Macaw.Data.Error, ~r/integer count/, fn -> Columns.take!(table, opaque(:x)) end
 
     assert_raise Macaw.Data.Error, ~r/non-negative integers/, fn ->
       Columns.slice!(table, 0, -1)

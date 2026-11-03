@@ -60,15 +60,16 @@ Each module's `format_error/1` gives a reason's words, and each converted functi
 every ! twin raises Macaw.Data.Error whose reason is exactly its value twin's error term and whose message is words with no inspected fault; the formatter words a fault list by path, a bare reason, a module's own reason through words:, and an unknown reason as its term
 ```
 
-**The guard**, `ci/raises.exs`, holds the library to this. It reads every `.ex` file under `lib/` as code, so a raise in a doc or a comment is no site, and finds each `raise`, `reraise` and `throw` with the function it sits in, `Module.name/arity`. A public `name!` whose module also defines `name` of the same arity is a twin and passes. Every other site must be named in `ci/raises_allowlist.exs` with how many sites its function holds, a class and a reason, and an entry whose count is not what its function holds fails too. The classes are:
-- `:bang`: a private helper the twins share;
-- `:compile`: compile-time code;
-- `:invariant`: a named invariant.
+**The guard**, `ci/raises.exs`, holds the library to this. It is the Macaw family's guard, vendored byte for byte from `claude-tools/macaw_ci/raises.exs` and checked for drift before a release, as the family's other CI scripts are (macaw_data#130, #160; macaw#243, #247). It reads every `.ex` file under `lib/` as code, so a raise in a doc or a comment is no site. It finds each `raise`, `reraise`, `throw` and `exit`, their `Kernel.` and `:erlang.` forms, and `Mix.raise`, each with the function it is written in, `{Module, name, arity}`, or the module body, `{Module, nil, nil}`. Every site's function must be named in `ci/raises_allowlist.exs`, `%{at: {Module, name, arity}, class: class, reason: words}`, and the guard verifies the class:
+- `:bang`: a `!` twin. Its name ends in `!` and its module defines the twin of the same name without it, at the same arity. Each twin raises its own `Macaw.Data.Error`; no helper raises for it.
+- `:compile`: a macro, or a module body, refusing bad code while the caller compiles. A raise in the code a macro generates runs in the caller and is refused.
+- `:mix_task`: a Mix task's failure (this library has none).
+- `:invariant`: a case no input can reach, kept with the reason it can't.
 
-Bad input has no class: the milestone's `:convert` class, which listed each site still to convert, is retired and refused (macaw_data#121).
+A site outside the list fails, and so does an entry whose class doesn't hold, an entry that matches no raise, a malformed entry and a file that doesn't parse. Bad input has no class.
 
 ```test:data-errors-guard
-the raise guard passes this library; it fails on a raise outside a bang twin and the allowlist, at its line, and on an allowlist entry whose count is stale, whose class is unknown (the retired :convert among them), or that names no site; a raise in a doc or a comment is no site
+the vendored raise guard passes this library and its allowlist; a raise, a throw or an exit outside the list fails at its line, a raise in a doc is no site; a listed twin passes, while a :bang entry without its twin, an entry that matches no raise and a :compile entry on a def fail
 ```
 
 **What once raised implicitly answers too** (macaw_data#121). A function's option it does not take is `{[key], :unknown_key}` and a missing required one `{[key], :required}`, where `Keyword.validate!/2` and `Keyword.fetch!/2` would raise; a quantity not in `Macaw.Data.Quantity.all/0` is `{:unknown_quantity, quantity}`, a system none of `systems/0` `{:unknown_system, system}` and a metric kind none of `:gauge`, `:counter` and `:rate` `{:unknown_metric_kind, kind}`, where a map read would raise. What stays an implicit raise reads only what the library itself built: an engine's map by a path it defined, a chunk's column by its header's name, a word table by a word the checker produced. **`Macaw.Data.Table.rows/1` answers a source `Table.source/1` refuses with its faults** (macaw_data#130, #158), as `Delivery.rows/1` does under `[:rows]`, each with a `rows!/1` twin, so reading rows is no named invariant. An aggregate's `reduce/2` and `step/3` take readings as its `reads/0` declares, checked by `Operations.aggregate/4` and the steps: those two are named invariants in the guard's allowlist.

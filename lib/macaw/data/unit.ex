@@ -322,7 +322,12 @@ defmodule Macaw.Data.Unit do
 
   @doc "As `dimension/1`, the dimension alone, raising `Macaw.Data.Error` in `format_error/1`'s words."
   @spec dimension!(code()) :: dimension()
-  def dimension!(code), do: value!(dimension(code))
+  def dimension!(code) do
+    case dimension(code) do
+      {:ok, value} -> value
+      {:error, reason} -> raise error(reason)
+    end
+  end
 
   @doc """
   The exact factor of a code to its base: `{numerator, denominator}`, or
@@ -352,7 +357,12 @@ defmodule Macaw.Data.Unit do
 
   @doc "As `factor/1`, the factor alone, raising `Macaw.Data.Error` in `format_error/1`'s words."
   @spec factor!(code()) :: exact() | nil
-  def factor!(code), do: value!(factor(code))
+  def factor!(code) do
+    case factor(code) do
+      {:ok, value} -> value
+      {:error, reason} -> raise error(reason)
+    end
+  end
 
   @doc """
   The ISO 4217 code a code is in when it is a currency alone — `{iso4217:USD}` is
@@ -398,7 +408,12 @@ defmodule Macaw.Data.Unit do
 
   @doc "As `minor_units/1`, the units alone, raising `Macaw.Data.Error` in `format_error/1`'s words."
   @spec minor_units!(String.t()) :: non_neg_integer() | nil
-  def minor_units!(iso), do: value!(minor_units(iso))
+  def minor_units!(iso) do
+    case minor_units(iso) do
+      {:ok, value} -> value
+      {:error, reason} -> raise error(reason)
+    end
+  end
 
   @doc """
   How a code's values relate to its base (spec/03 §2): `:affine` for a code holding
@@ -417,7 +432,12 @@ defmodule Macaw.Data.Unit do
 
   @doc "As `kind/1`, the kind alone, raising `Macaw.Data.Error` in `format_error/1`'s words."
   @spec kind!(code()) :: kind()
-  def kind!(code), do: value!(kind(code))
+  def kind!(code) do
+    case kind(code) do
+      {:ok, value} -> value
+      {:error, reason} -> raise error(reason)
+    end
+  end
 
   @doc """
   The exact conversion from one code to another (spec/03 §6, D-155):
@@ -490,7 +510,12 @@ defmodule Macaw.Data.Unit do
 
   @doc "As `convert/3`, the float alone, raising `Macaw.Data.Error` in `format_error/1`'s words."
   @spec convert!(number(), code(), code()) :: float()
-  def convert!(value, from, to), do: value!(convert(value, from, to))
+  def convert!(value, from, to) do
+    case convert(value, from, to) do
+      {:ok, value} -> value
+      {:error, reason} -> raise error(reason)
+    end
+  end
 
   @doc """
   The code a person means by a symbol they typed (spec/03 §3, D-155): `°C`, `lb`,
@@ -598,7 +623,12 @@ defmodule Macaw.Data.Unit do
 
   @doc "As `symbol/2`, the symbol alone, raising `Macaw.Data.Error` in `format_error/1`'s words."
   @spec symbol!(code(), keyword()) :: String.t()
-  def symbol!(code, opts \\ []), do: value!(symbol(code, opts))
+  def symbol!(code, opts \\ []) do
+    case symbol(code, opts) do
+      {:ok, value} -> value
+      {:error, reason} -> raise error(reason)
+    end
+  end
 
   defp symbol_of(components, opts) do
     annotations? = Keyword.get(opts, :annotations, false)
@@ -790,11 +820,9 @@ defmodule Macaw.Data.Unit do
   defp parsed(code) when is_binary(code), do: parse(code)
   defp parsed(other), do: {:error, {:syntax, inspect(other)}}
 
-  # The bang twins' one raise: their twin's reason in `format_error/1`'s words.
-  defp value!({:ok, value}), do: value
-
-  defp value!({:error, reason}),
-    do: raise(Macaw.Data.Error, reason: reason, message: format_error(reason))
+  # What the bang twins raise: their twin's reason, and its words (spec/00 §5).
+  defp error(reason),
+    do: Macaw.Data.Error.exception(reason: reason, message: format_error(reason))
 
   # -- factors ------------------------------------------------------------------------
 

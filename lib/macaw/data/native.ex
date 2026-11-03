@@ -169,15 +169,20 @@ defmodule Macaw.Data.Native do
     :ok
   end
 
-  # The built kernels are asked their interface version in a process of its own: a library
-  # that did not load raises there, and its exit reason is the answer, with nothing caught.
+  # The built kernels are asked their interface version in a process of its own, which
+  # sends it back and ends: a library that did not load raises there, and the process's
+  # exit reason is the answer, with nothing caught.
   defp probe do
-    {pid, ref} = spawn_monitor(fn -> exit({:abi, Kernels.abi()}) end)
+    parent = self()
+    {pid, ref} = spawn_monitor(fn -> send(parent, {:abi, self(), Kernels.abi()}) end)
 
     receive do
-      {:DOWN, ^ref, :process, ^pid, {:abi, @abi}} -> :ok
-      {:DOWN, ^ref, :process, ^pid, {:abi, other}} -> {:error, {:abi, other, @abi}}
-      {:DOWN, ^ref, :process, ^pid, reason} -> {:error, reason}
+      {:abi, ^pid, abi} ->
+        receive do: ({:DOWN, ^ref, :process, ^pid, _normal} -> :ok)
+        if abi == @abi, do: :ok, else: {:error, {:abi, abi, @abi}}
+
+      {:DOWN, ^ref, :process, ^pid, reason} ->
+        {:error, reason}
     end
   end
 end

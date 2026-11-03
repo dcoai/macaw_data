@@ -73,8 +73,9 @@ atoms:
   script:
     - elixir ci/atoms.exs
 
-# Errors are values (ci/raises.exs, spec/00 §5): no raise in lib/ outside the bang twins
-# and the allowlist, whose :convert entries the "Errors are values" milestone removes.
+# Errors are values (ci/raises.exs, spec/00 §5): no raise, throw or exit in lib/ outside
+# ci/raises_allowlist.exs, each entry's class verified. The family's guard, vendored byte for
+# byte from claude-tools/macaw_ci (#160).
 raises:
   image: $ELIXIR_IMAGE
   stage: check

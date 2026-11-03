@@ -97,7 +97,11 @@ defmodule Macaw.Data.Derived.AllowlistTest do
              transform!: 3
            ]
 
-    assert Allowlist.excluded(Macaw.Data.Ops) == [{{:__run__, 5}, :internal}]
+    assert Allowlist.excluded(Macaw.Data.Ops) == [
+             {{:__run__, 5}, :internal},
+             {{:__run__!, 5}, :internal}
+           ]
+
     refute Macaw.Data.Reduce in Allowlist.modules()
     assert Allowlist.allowed(Macaw.Data.Reduce) == []
   end

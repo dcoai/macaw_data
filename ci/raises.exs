@@ -1,175 +1,251 @@
-# Errors are values (spec/00 §5, #114): fails on a `raise` in lib/ outside the
-# allowed places.
+# raises.exs — no `raise`, `throw` or `exit` in lib/ outside the project's reasoned
+# allowlist, ci/raises_allowlist.exs (dco-tek/macaw/macaw#243, #247). The Macaw family's
+# reference copy is claude-tools' macaw_ci/raises.exs, vendored into each project's ci/
+# byte for byte.
 #
-#     elixir ci/raises.exs          # report and exit 1 on any problem
+#   elixir ci/raises.exs         # checks ./lib against ./ci/raises_allowlist.exs
+#   elixir ci/raises.exs DIR     # checks DIR/lib against DIR/ci/raises_allowlist.exs
 #
-# A public function answers bad input with `{:error, reason}`; it does not raise. The
-# check reads every `.ex` file under `lib/` as code (`Code.string_to_quoted/2`, so a
-# `raise` in a doc or a comment is no site) and finds each `raise`, `reraise` and `throw`
-# with the function it sits in, `Module.name/arity`. A site passes when:
+# A Macaw library answers a failure as a value. A raise is allowed only where an entry
+# names its function and says why, in one of four classes the check verifies:
 #
-# - it is in a public `name!` function whose module also defines `name` of the same
-#   arity: the bang twin, which raises its twin's `{:error, _}` (found, never listed);
-# - or the allowlist `ci/raises_allowlist.exs` names its function, with how many sites
-#   the function holds, the site's class and its reason.
+#   %{at: {Macaw.Registry, :new!, 2}, class: :bang, reason: "..."}
 #
-# The classes:
+#   :bang      a `!` twin: the function ends in `!` and the module defines its value twin,
+#              the same name without `!`, at the same arity
+#   :mix_task  how a Mix task fails: the module is a `Mix.Tasks.*`
+#   :compile   refusing bad code while the caller compiles: a macro (`__using__`,
+#              `__before_compile__` among them), or the module body, `at: {Module, nil, nil}`
+#   :invariant a case no input can reach, kept with the reason it can't
 #
-#   :bang       a private helper the bang twins share to raise their twin's reason
-#   :compile    a macro's misuse, which fails the build: there is no caller to answer
-#   :invariant  a broken internal invariant: a bug in this library, never bad input
-#
-# Bad input is never a class: a site that raises on it is converted, not listed (the
-# "Errors are values" milestone, #114, removed the last such entry).
-#
-# An entry whose function holds a different number of sites fails too, so the list
-# cannot go stale. Its test loads this file with `:ci_no_main` set, so nothing runs on
-# load.
+# The calls found are `raise`, `reraise`, `throw`, `exit`, `Kernel.` and `:erlang.` forms of
+# these, and `Mix.raise`, each attributed to the function it is written in. An implicit
+# raise (`Map.fetch!/2`, `hd/1`, a failed match) can't be seen by reading the source: that
+# is the audit's and the property tests' job. A raise outside the list, an entry whose
+# class doesn't hold, a malformed entry and an entry that matches no raise each fail, as
+# does a file that doesn't parse. The list defaults empty: prefer answering a value.
 
-defmodule RaiseGate do
-  @scanned "lib"
+defmodule Raises do
   @allowlist "ci/raises_allowlist.exs"
-  @classes [:bang, :compile, :invariant]
+  @classes [:bang, :mix_task, :compile, :invariant]
   @defs [:def, :defp, :defmacro, :defmacrop]
-  @raising [:raise, :reraise, :throw]
+  @local [:raise, :reraise, :throw, :exit]
+  @erlang [:error, :exit, :throw, :raise]
 
-  @doc "Every problem under `root`, one line each; `[]` when there is none."
-  def run(root) do
-    {entries, _binding} = root |> Path.join(@allowlist) |> Code.eval_file()
-    run(root, entries)
+  @doc """
+  Every raise site in a source: `%{module:, function:, arity:, kind:, line:, call:}`,
+  `function` and `arity` nil in a module body; and every function the source defines,
+  `%{module:, function:, arity:, kind:}`. A source that doesn't parse is `{:error, words}`.
+  """
+  def scan(source, file) do
+    case Code.string_to_quoted(source, file: file, columns: false) do
+      {:ok, ast} ->
+        {:ok, walk(ast, %{module: nil, def: nil, quoted: false}, %{sites: [], defs: []})}
+
+      {:error, {meta, message, token}} ->
+        {:error, "#{file}:#{meta[:line]}: does not parse: #{message}#{token}"}
+    end
   end
 
-  @doc "The check against a given allowlist."
-  def run(root, entries) do
-    sites = sites(root)
-    # A malformed entry is reported once, and allows nothing.
-    {formed, malformed} = Enum.split_with(entries, &is_nil(malformed_entry(&1)))
-    malformed(malformed) ++ unallowed(sites, formed) ++ stale(sites, formed)
+  defp walk({:defmodule, _, [name, [do: body]]}, ctx, acc),
+    do: walk(body, %{ctx | module: module(name, ctx.module), def: nil}, acc)
+
+  # Code inside a `quote` is generated into the caller: a function it defines is not this
+  # module's, and a raise in it is attributed to the macro that writes it, marked quoted.
+  defp walk({:quote, _, args}, ctx, acc) when is_list(args),
+    do: walk(args, %{ctx | quoted: true}, acc)
+
+  defp walk({kind, _, [head | rest]}, %{module: module, quoted: false} = ctx, acc)
+       when kind in @defs and module != nil do
+    {name, arity} = head(head)
+    acc = %{acc | defs: [%{module: module, function: name, arity: arity, kind: kind} | acc.defs]}
+    walk(rest, %{ctx | def: {kind, name, arity}}, acc)
   end
 
-  @doc "Every `{file, line, site, twin?}` under `root`: each raise and the function it is in."
-  def sites(root) do
-    root
-    |> Path.join(@scanned <> "/**/*.ex")
-    |> Path.wildcard()
-    |> Enum.sort()
-    |> Enum.flat_map(fn path ->
-      file = Path.relative_to(path, root)
-      {:ok, ast} = path |> File.read!() |> Code.string_to_quoted(file: file, columns: false)
-
-      file_sites =
-        for line <- raises(ast), do: {file, line, "#{file} (file body)", false}
-
-      file_sites ++ (ast |> modules(nil) |> Enum.flat_map(&module_sites(file, &1)))
-    end)
-  end
-
-  # Every `{module_name, body}` in `ast`, wherever it is defined (a module defined under
-  # a compile-time `case` too), nested modules named in full.
-  defp modules(ast, outer) do
-    {_, found} =
-      Macro.prewalk(ast, [], fn
-        {:defmodule, _, [alias, [do: body]]}, acc ->
-          name = join(outer, Macro.to_string(alias))
-          {:skipped, [[{name, body} | modules(body, name)] | acc]}
-
-        node, acc ->
-          {node, acc}
-      end)
-
-    found |> Enum.reverse() |> Enum.concat()
-  end
-
-  defp join(nil, name), do: name
-  defp join(outer, name), do: outer <> "." <> name
-
-  defp module_sites(file, {module, body}) do
-    forms = forms(body)
-    public = for {kind, name, arity, _} <- forms, kind in [:def, :defmacro], do: {name, arity}
-
-    Enum.flat_map(forms, fn {kind, name, arity, form} ->
-      for line <- raises(form) do
-        bang = String.ends_with?(name, "!")
-        twin? = kind == :def and bang and {String.trim_trailing(name, "!"), arity} in public
-        {file, line, "#{module}.#{name}/#{arity}", twin?}
+  defp walk({call, meta, args}, ctx, acc) when is_list(args) do
+    acc =
+      case raise_call(call, args) do
+        nil -> acc
+        words -> %{acc | sites: [site(ctx, meta, words) | acc.sites]}
       end
-    end) ++
-      for line <- raises(module_level(body)), do: {file, line, "#{module} (module body)", false}
+
+    walk(args, ctx, if(is_atom(call), do: acc, else: walk(call, ctx, acc)))
   end
 
-  # Every `{kind, name, arity, form}` defined directly in a module's body.
-  defp forms({:__block__, _, forms}), do: Enum.flat_map(forms, &forms([&1]))
-  defp forms([{kind, _, [head | _]} = form]) when kind in @defs, do: [head(kind, head, form)]
-  defp forms([_]), do: []
-  defp forms(form), do: forms([form])
+  defp walk({left, right}, ctx, acc), do: walk(right, ctx, walk(left, ctx, acc))
+  defp walk(list, ctx, acc) when is_list(list), do: Enum.reduce(list, acc, &walk(&1, ctx, &2))
+  defp walk(_leaf, _ctx, acc), do: acc
 
-  defp head(kind, {:when, _, [head, _guard]}, form), do: head(kind, head, form)
+  # `raise/1,2`, `reraise/2,3`, `throw/1`, `exit/1`; their `Kernel.` and `:erlang.` forms;
+  # `Mix.raise/1,2`. A variable named `raise` has no argument list and is no call.
+  defp raise_call(name, args) when name in @local and args != [], do: Atom.to_string(name)
 
-  defp head(kind, {name, _, args}, form) when is_atom(name) do
-    {kind, Atom.to_string(name), length(List.wrap(args)), form}
+  defp raise_call({:., _, [{:__aliases__, _, [:Kernel]}, name]}, _args) when name in @local,
+    do: "Kernel.#{name}"
+
+  defp raise_call({:., _, [:erlang, name]}, _args) when name in @erlang, do: ":erlang.#{name}"
+  defp raise_call({:., _, [{:__aliases__, _, [:Mix]}, :raise]}, _args), do: "Mix.raise"
+  defp raise_call(_call, _args), do: nil
+
+  defp site(ctx, meta, words) do
+    {kind, name, arity} = ctx.def || {nil, nil, nil}
+
+    %{
+      module: ctx.module,
+      function: name,
+      arity: arity,
+      kind: kind,
+      line: meta[:line],
+      call: words,
+      quoted: ctx.quoted
+    }
   end
 
-  # A module's own code outside any function and outside nested modules: run as it compiles.
-  defp module_level({:__block__, _, forms}), do: Enum.reject(forms, &skipped?/1)
-  defp module_level(form), do: if(skipped?(form), do: [], else: [form])
+  defp head({:when, _, [head | _guards]}), do: head(head)
+  defp head({name, _, args}) when is_atom(name) and is_list(args), do: {name, length(args)}
+  defp head({name, _, _context}) when is_atom(name), do: {name, 0}
 
-  defp skipped?({kind, _, _}) when kind in [:defmodule | @defs], do: true
-  defp skipped?(_), do: false
+  # A name written with `unquote` (`def unquote(name)(...)`) is named by its source.
+  defp head({name, meta, args}), do: head({String.to_atom(Macro.to_string(name)), meta, args})
 
-  # The line of every raising call in `form`, nested modules left to their own entry.
-  defp raises(form) do
-    {_, lines} =
-      Macro.prewalk(form, [], fn
-        {:defmodule, _, _}, acc ->
-          {:skipped, acc}
+  # A nested `defmodule Inner` is `Outer.Inner`; `__MODULE__.Inner` is the same.
+  defp module({:__aliases__, _, [{:__MODULE__, _, _} | rest]}, outer),
+    do: Module.concat([outer | rest])
 
-        {call, meta, args} = node, acc when call in @raising and is_list(args) ->
-          {node, [meta[:line] | acc]}
+  defp module({:__aliases__, _, parts}, nil), do: Module.concat(parts)
+  defp module({:__aliases__, _, parts}, outer), do: Module.concat([outer | parts])
+  defp module(name, _outer) when is_atom(name), do: name
 
-        {{:., _, [{:__aliases__, _, [:Kernel]}, call]}, meta, args} = node, acc
-        when call in @raising and is_list(args) ->
-          {node, [meta[:line] | acc]}
-
-        node, acc ->
-          {node, acc}
+  @doc "Every problem in a tree's scans against the allowlist, one line each."
+  def problems(scans, entries) do
+    {sites, defs} =
+      Enum.reduce(scans, {[], []}, fn {file, {:ok, scan}}, {sites, defs} ->
+        {sites ++ Enum.map(scan.sites, &Map.put(&1, :file, file)), defs ++ scan.defs}
       end)
 
-    Enum.reverse(lines)
+    malformed = malformed(entries)
+    entries = entries -- Enum.map(malformed, &elem(&1, 0))
+    listed = MapSet.new(entries, & &1.at)
+
+    Enum.map(malformed, &elem(&1, 1)) ++
+      for(
+        site <- Enum.sort_by(sites, &{&1.file, &1.line}),
+        not MapSet.member?(listed, at(site)),
+        do:
+          "#{site.file}:#{site.line}: #{name(at(site))} calls #{site.call}: not in #{@allowlist}"
+      ) ++
+      Enum.flat_map(entries, &judge(&1, sites, defs))
   end
+
+  defp at(site), do: {site.module, site.function, site.arity}
+
+  defp name({module, nil, nil}), do: "#{inspect(module)} (module body)"
+  defp name({module, function, arity}), do: "#{inspect(module)}.#{function}/#{arity}"
 
   defp malformed(entries) do
-    for entry <- entries, problem = malformed_entry(entry), do: problem
+    duplicates =
+      entries |> Enum.frequencies_by(&Map.get(&1, :at)) |> Enum.filter(&(elem(&1, 1) > 1))
+
+    for(
+      entry <- entries,
+      not match?(
+        %{at: {m, f, a}, class: c, reason: r}
+        when is_atom(m) and m != nil and
+               ((is_atom(f) and f != nil and is_integer(a) and a >= 0) or (f == nil and a == nil)) and
+               c in @classes and is_binary(r) and r != "",
+        entry
+      ),
+      do:
+        {entry,
+         "#{@allowlist}: an entry needs at: {module, function, arity}, a class in #{inspect(@classes)} and a reason; got #{inspect(entry)}"}
+    ) ++
+      for {at, _n} <- duplicates,
+          at != nil,
+          do: {%{at: at}, "#{@allowlist}: #{inspect(at)} is listed more than once"}
   end
 
-  defp malformed_entry(%{site: site, count: count, class: class, reason: reason})
-       when is_binary(site) and is_integer(count) and count > 0 and class in @classes and
-              is_binary(reason) and reason != "",
-       do: nil
-
-  defp malformed_entry(entry),
-    do:
-      "#{@allowlist}: an entry needs site, count, a class of #{inspect(@classes)} and a " <>
-        "reason; got #{inspect(entry)}"
-
-  defp unallowed(sites, entries) do
-    listed = MapSet.new(entries, & &1.site)
-
-    for {file, line, site, false} <- sites,
-        site not in listed,
-        do: "#{file}:#{line}: #{site} raises; answer {:error, reason} instead"
+  # An entry matches a raise site, and its class holds of the function it names.
+  defp judge(%{at: at, class: class} = entry, sites, defs) do
+    case Enum.filter(sites, &(at(&1) == at)) do
+      [] -> ["#{@allowlist}: #{name(at)} no longer raises: remove the entry"]
+      found -> holds(class, at, found, defs, entry)
+    end
   end
 
-  defp stale(sites, entries) do
-    for %{site: site, count: count} <- entries,
-        held = Enum.count(sites, fn {_, _, s, twin?} -> s == site and not twin? end),
-        held != count,
-        do: "#{@allowlist}: #{site} holds #{held} raise(s), the entry says #{count}"
+  defp holds(:bang, {module, function, arity} = at, _sites, defs, _entry) do
+    words = Atom.to_string(function)
+    twin = String.trim_trailing(words, "!")
+
+    cond do
+      not String.ends_with?(words, "!") ->
+        ["#{@allowlist}: #{name(at)} is listed as :bang but its name doesn't end in `!`"]
+
+      Enum.any?(
+        defs,
+        &(match?(%{module: ^module, kind: :def, arity: ^arity}, &1) and
+              Atom.to_string(&1.function) == twin)
+      ) ->
+        []
+
+      true ->
+        [
+          "#{@allowlist}: #{name(at)} is listed as :bang but #{inspect(module)}.#{twin}/#{arity} isn't defined"
+        ]
+    end
   end
 
-  def main do
-    case run(File.cwd!()) do
+  defp holds(:mix_task, {module, _f, _a} = at, _sites, _defs, _entry) do
+    if String.starts_with?(inspect(module), "Mix.Tasks."),
+      do: [],
+      else: ["#{@allowlist}: #{name(at)} is listed as :mix_task but isn't in a Mix.Tasks module"]
+  end
+
+  # A raise in quoted code runs in the caller at run time, not while it compiles.
+  defp holds(:compile, at, [site | _] = sites, _defs, _entry) do
+    cond do
+      site.kind not in [:defmacro, :defmacrop, nil] ->
+        [
+          "#{@allowlist}: #{name(at)} is listed as :compile but is a #{site.kind}, not a macro or the module body"
+        ]
+
+      quoted = Enum.find(sites, & &1.quoted) ->
+        [
+          "#{@allowlist}: #{name(at)} is listed as :compile but line #{quoted.line} raises in the code it generates, which runs in the caller"
+        ]
+
+      true ->
+        []
+    end
+  end
+
+  defp holds(:invariant, _at, _sites, _defs, _entry), do: []
+
+  def main(argv) do
+    dir =
+      case argv do
+        [] -> "."
+        [dir] -> dir
+      end
+
+    allowlist = Path.join(dir, @allowlist)
+
+    unless File.exists?(allowlist) do
+      IO.puts("#{@allowlist} is missing: an empty list is `[]`")
+      System.halt(1)
+    end
+
+    {entries, _} = Code.eval_file(allowlist)
+
+    scans =
+      for file <- Path.wildcard(Path.join(dir, "lib/**/*.ex")) |> Enum.sort(),
+          do: {Path.relative_to(file, dir), scan(File.read!(file), Path.relative_to(file, dir))}
+
+    {parsed, unparsed} = Enum.split_with(scans, &match?({_file, {:ok, _}}, &1))
+    sites = parsed |> Enum.map(fn {_file, {:ok, scan}} -> length(scan.sites) end) |> Enum.sum()
+
+    case Enum.map(unparsed, fn {_file, {:error, words}} -> words end) ++ problems(parsed, entries) do
       [] ->
-        IO.puts("raises OK: no raise in lib/ outside the bang twins and the allowlist")
+        IO.puts("raises OK: #{sites} raise sites in lib/, every one in the allowlist")
 
       problems ->
         Enum.each(problems, &IO.puts/1)
@@ -178,4 +254,4 @@ defmodule RaiseGate do
   end
 end
 
-unless Application.get_env(:ci, :ci_no_main), do: RaiseGate.main()
+unless Application.get_env(:ci, :ci_no_main), do: Raises.main(System.argv())

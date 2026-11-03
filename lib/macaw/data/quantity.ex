@@ -123,7 +123,12 @@ defmodule Macaw.Data.Quantity do
 
   @doc "As `base_unit/1`, the unit alone, raising `Macaw.Data.Error` naming the quantity."
   @spec base_unit!(t()) :: Unit.code() | nil
-  def base_unit!(quantity), do: value!(base_unit(quantity))
+  def base_unit!(quantity) do
+    case base_unit(quantity) do
+      {:ok, value} -> value
+      {:error, reason} -> raise error(reason)
+    end
+  end
 
   @doc """
   How a quantity's values combine (spec/03 §9): `:linear`, `:affine` (a temperature),
@@ -145,7 +150,12 @@ defmodule Macaw.Data.Quantity do
 
   @doc "As `kind/1`, the kind alone, raising `Macaw.Data.Error` naming the quantity."
   @spec kind!(t()) :: kind()
-  def kind!(quantity), do: value!(kind(quantity))
+  def kind!(quantity) do
+    case kind(quantity) do
+      {:ok, value} -> value
+      {:error, reason} -> raise error(reason)
+    end
+  end
 
   @doc """
   Where a quantity's values physically lie, in its base unit, `{min | nil, max | nil}`
@@ -165,7 +175,12 @@ defmodule Macaw.Data.Quantity do
 
   @doc "As `bounds/1`, the bounds alone, raising `Macaw.Data.Error` naming the quantity."
   @spec bounds!(t()) :: {number() | nil, number() | nil}
-  def bounds!(quantity), do: value!(bounds(quantity))
+  def bounds!(quantity) do
+    case bounds(quantity) do
+      {:ok, value} -> value
+      {:error, reason} -> raise error(reason)
+    end
+  end
 
   @doc """
   A quantity's bounds in a unit of it: the base's, converted, as `{:ok, bounds}`. A unit
@@ -198,7 +213,12 @@ defmodule Macaw.Data.Quantity do
 
   @doc "As `bounds/2`, the bounds alone, raising `Macaw.Data.Error` in `Macaw.Data.Unit.format_error/1`'s words."
   @spec bounds!(t(), Unit.code()) :: {number() | nil, number() | nil}
-  def bounds!(quantity, unit), do: value!(bounds(quantity, unit))
+  def bounds!(quantity, unit) do
+    case bounds(quantity, unit) do
+      {:ok, value} -> value
+      {:error, reason} -> raise error(reason)
+    end
+  end
 
   @doc """
   Whether a sum of the quantity's values means anything (spec/03 §10, D-155):
@@ -248,7 +268,12 @@ defmodule Macaw.Data.Quantity do
 
   @doc "As `additivity/2`, the map alone, raising `Macaw.Data.Error` naming the reason."
   @spec additivity!(t() | nil, metric_kind() | nil) :: %{across: boolean(), over_time: boolean()}
-  def additivity!(quantity, metric_kind \\ nil), do: value!(additivity(quantity, metric_kind))
+  def additivity!(quantity, metric_kind \\ nil) do
+    case additivity(quantity, metric_kind) do
+      {:ok, value} -> value
+      {:error, reason} -> raise error(reason)
+    end
+  end
 
   @doc """
   The display family a unit of the quantity belongs to, smallest first; `[]` for a unit
@@ -274,7 +299,12 @@ defmodule Macaw.Data.Quantity do
 
   @doc "As `family/2`, the family alone, raising `Macaw.Data.Error` naming the reason."
   @spec family!(t(), Unit.code() | nil) :: [Unit.code()]
-  def family!(quantity, unit), do: value!(family(quantity, unit))
+  def family!(quantity, unit) do
+    case family(quantity, unit) do
+      {:ok, value} -> value
+      {:error, reason} -> raise error(reason)
+    end
+  end
 
   @doc """
   The display family a system shows a unit of the quantity in (spec/03 §11, D-158): the
@@ -332,17 +362,19 @@ defmodule Macaw.Data.Quantity do
 
   @doc "As `family/3`, the family alone, raising `Macaw.Data.Error` naming the reason."
   @spec family!(t(), Unit.code() | nil, system()) :: [Unit.code()]
-  def family!(quantity, unit, system), do: value!(family(quantity, unit, system))
+  def family!(quantity, unit, system) do
+    case family(quantity, unit, system) do
+      {:ok, value} -> value
+      {:error, reason} -> raise error(reason)
+    end
+  end
 
   # A quantity's facts, or the reason it has none (spec/03 §8).
   defp facts(quantity) when quantity in @all, do: {:ok, Facts.fetch!(quantity)}
   defp facts(quantity), do: {:error, {:unknown_quantity, quantity}}
 
-  # The bang twins' one raise: their twin's reason, worded.
-  defp value!({:ok, value}), do: value
-
-  defp value!({:error, reason}),
-    do: raise(Macaw.Data.Error, reason: reason, message: words(reason))
+  # What the bang twins raise: their twin's reason, and its words (spec/00 §5).
+  defp error(reason), do: Macaw.Data.Error.exception(reason: reason, message: words(reason))
 
   defp words({:unknown_quantity, quantity}),
     do: "#{inspect(quantity)} is not a quantity of Macaw.Data.Quantity.all/0"

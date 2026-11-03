@@ -70,7 +70,14 @@ defmodule Macaw.Data.Derived.Functions do
       |> Enum.uniq()
       |> Enum.map(fn name ->
         fns = for {^name, _arity, clause} <- clauses, do: clause
-        {name, arity!(name, clauses, env), Macro.to_string({:fn, [], fns})}
+
+        case arity(name, clauses) do
+          {:ok, arity} ->
+            {name, arity, Macro.to_string({:fn, [], fns})}
+
+          {:error, description} ->
+            raise CompileError, file: env.file, line: env.line, description: description
+        end
       end)
 
     quote do
@@ -80,20 +87,17 @@ defmodule Macaw.Data.Derived.Functions do
   end
 
   # One name, one arity: the engine calls a function by the arity recorded for its name.
-  defp arity!(name, clauses, env) do
+  defp arity(name, clauses) do
     case clauses
          |> Enum.flat_map(fn {n, a, _c} -> if n == name, do: [a], else: [] end)
          |> Enum.uniq() do
       [arity] ->
-        arity
+        {:ok, arity}
 
       arities ->
-        raise CompileError,
-          file: env.file,
-          line: env.line,
-          description:
-            "defsource #{name} has clauses of #{Enum.map_join(arities, " and ", &to_string/1)} " <>
-              "arguments; one function takes its inputs, or its inputs and its context"
+        {:error,
+         "defsource #{name} has clauses of #{Enum.map_join(arities, " and ", &to_string/1)} " <>
+           "arguments; one function takes its inputs, or its inputs and its context"}
     end
   end
 
@@ -105,44 +109,41 @@ defmodule Macaw.Data.Derived.Functions do
   defined clause by clause, as any function is, and listed once with every clause.
   """
   defmacro defsource(head, body) do
-    {name, args, guard} = head!(head, __CALLER__)
-    block = body!(body, __CALLER__)
-    patterns = if guard, do: [{:when, [], args ++ [guard]}], else: args
-    clause = Macro.escape({:->, [], [patterns, block]})
+    with {:ok, {name, args, guard}} <- head(head),
+         {:ok, block} <- body(body) do
+      patterns = if guard, do: [{:when, [], args ++ [guard]}], else: args
+      clause = Macro.escape({:->, [], [patterns, block]})
 
-    quote do
-      @macaw_derived_functions {unquote(name), unquote(length(args)), unquote(clause)}
-      def unquote(head), unquote(body)
+      quote do
+        @macaw_derived_functions {unquote(name), unquote(length(args)), unquote(clause)}
+        def unquote(head), unquote(body)
+      end
+    else
+      {:error, description} ->
+        raise CompileError, file: __CALLER__.file, line: __CALLER__.line, description: description
     end
   end
 
-  defp head!({:when, _meta, [head, guard]}, caller) do
-    {name, args, nil} = head!(head, caller)
-    {name, args, guard}
+  # A head of one argument or two, with a guard or none; else the words of why not.
+  defp head({:when, _meta, [head, guard]}) do
+    with {:ok, {name, args, nil}} <- head(head), do: {:ok, {name, args, guard}}
   end
 
-  defp head!({name, _meta, [_arg] = args}, _caller) when is_atom(name), do: {name, args, nil}
+  defp head({name, _meta, [_arg] = args}) when is_atom(name), do: {:ok, {name, args, nil}}
 
-  defp head!({name, _meta, [_inputs, _context] = args}, _caller) when is_atom(name),
-    do: {name, args, nil}
+  defp head({name, _meta, [_inputs, _context] = args}) when is_atom(name),
+    do: {:ok, {name, args, nil}}
 
-  defp head!(head, caller) do
-    raise CompileError,
-      file: caller.file,
-      line: caller.line,
-      description:
-        "defsource needs a head of one argument, `name(inputs)`, or two, " <>
-          "`name(inputs, context)`, as a stored function takes; got #{Macro.to_string(head)}"
+  defp head(head) do
+    {:error,
+     "defsource needs a head of one argument, `name(inputs)`, or two, " <>
+       "`name(inputs, context)`, as a stored function takes; got #{Macro.to_string(head)}"}
   end
 
-  defp body!([do: block], _caller), do: block
+  defp body(do: block), do: {:ok, block}
 
-  defp body!(body, caller) do
-    raise CompileError,
-      file: caller.file,
-      line: caller.line,
-      description: "defsource takes a do block alone; got #{Macro.to_string(body)}"
-  end
+  defp body(body),
+    do: {:error, "defsource takes a do block alone; got #{Macro.to_string(body)}"}
 
   @doc """
   The registry of `modules` (spec/02 §7): each function's name, its string, by the module

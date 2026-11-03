@@ -289,72 +289,151 @@ defmodule Macaw.Data.Derived.Columns do
 
   @doc "As `names/1`, the value, or `Macaw.Data.Error` worded by `format_error/1`."
   @spec names!(Table.t()) :: [Table.name()]
-  def names!(table), do: value!(names(table))
+  def names!(table) do
+    case names(table) do
+      {:ok, value} -> value
+      {:error, reason} -> raise error(reason)
+    end
+  end
 
   @doc "As `type/2`, the value, or `Macaw.Data.Error` worded by `format_error/1`."
   @spec type!(Table.t(), name()) :: Table.type()
-  def type!(table, name), do: value!(type(table, name))
+  def type!(table, name) do
+    case type(table, name) do
+      {:ok, value} -> value
+      {:error, reason} -> raise error(reason)
+    end
+  end
 
   @doc "As `size/1`, the value, or `Macaw.Data.Error` worded by `format_error/1`."
   @spec size!(Table.t()) :: non_neg_integer()
-  def size!(table), do: value!(size(table))
+  def size!(table) do
+    case size(table) do
+      {:ok, value} -> value
+      {:error, reason} -> raise error(reason)
+    end
+  end
 
   @doc "As `column/2`, the value, or `Macaw.Data.Error` worded by `format_error/1`."
   @spec column!(Table.t(), name()) :: [term()]
-  def column!(table, name), do: value!(column(table, name))
+  def column!(table, name) do
+    case column(table, name) do
+      {:ok, value} -> value
+      {:error, reason} -> raise error(reason)
+    end
+  end
 
   @doc "As `numbers/2`, the value, or `Macaw.Data.Error` worded by `format_error/1`."
   @spec numbers!(Table.t(), name()) :: [number() | nil]
-  def numbers!(table, name), do: value!(numbers(table, name))
+  def numbers!(table, name) do
+    case numbers(table, name) do
+      {:ok, value} -> value
+      {:error, reason} -> raise error(reason)
+    end
+  end
 
   @doc "As `instants/2`, the value, or `Macaw.Data.Error` worded by `format_error/1`."
   @spec instants!(Table.t(), name()) :: [integer() | nil]
-  def instants!(table, name), do: value!(instants(table, name))
+  def instants!(table, name) do
+    case instants(table, name) do
+      {:ok, value} -> value
+      {:error, reason} -> raise error(reason)
+    end
+  end
 
   @doc "As `time_kind/2`, the kind, or `Macaw.Data.Error` worded by `format_error/1`."
   @spec time_kind!(Table.t(), name()) :: DateTime | NaiveDateTime | Date | :mixed
-  def time_kind!(table, name), do: value!(time_kind(table, name))
+  def time_kind!(table, name) do
+    case time_kind(table, name) do
+      {:ok, value} -> value
+      {:error, reason} -> raise error(reason)
+    end
+  end
 
   @doc "As `valid/2`, the value, or `Macaw.Data.Error` worded by `format_error/1`."
   @spec valid!(Table.t(), name()) :: [boolean()]
-  def valid!(table, name), do: value!(valid(table, name))
+  def valid!(table, name) do
+    case valid(table, name) do
+      {:ok, value} -> value
+      {:error, reason} -> raise error(reason)
+    end
+  end
 
   @doc "As `count/2`, the value, or `Macaw.Data.Error` worded by `format_error/1`."
   @spec count!(Table.t(), name()) :: non_neg_integer()
-  def count!(table, name), do: value!(count(table, name))
+  def count!(table, name) do
+    case count(table, name) do
+      {:ok, value} -> value
+      {:error, reason} -> raise error(reason)
+    end
+  end
 
   @doc "As `sum/2`, the value, or `Macaw.Data.Error` worded by `format_error/1`."
   @spec sum!(Table.t(), name()) :: number()
-  def sum!(table, name), do: value!(sum(table, name))
+  def sum!(table, name) do
+    case sum(table, name) do
+      {:ok, value} -> value
+      {:error, reason} -> raise error(reason)
+    end
+  end
 
   @doc "As `mean/2`, the value, or `Macaw.Data.Error` worded by `format_error/1`."
   @spec mean!(Table.t(), name()) :: float() | nil
-  def mean!(table, name), do: value!(mean(table, name))
+  def mean!(table, name) do
+    case mean(table, name) do
+      {:ok, value} -> value
+      {:error, reason} -> raise error(reason)
+    end
+  end
 
   @doc "As `min/2`, the value, or `Macaw.Data.Error` worded by `format_error/1`."
   @spec min!(Table.t(), name()) :: number() | DateTime.t() | NaiveDateTime.t() | Date.t() | nil
-  def min!(table, name), do: value!(min(table, name))
+  def min!(table, name) do
+    case min(table, name) do
+      {:ok, value} -> value
+      {:error, reason} -> raise error(reason)
+    end
+  end
 
   @doc "As `max/2`, the value, or `Macaw.Data.Error` worded by `format_error/1`."
   @spec max!(Table.t(), name()) :: number() | DateTime.t() | NaiveDateTime.t() | Date.t() | nil
-  def max!(table, name), do: value!(max(table, name))
+  def max!(table, name) do
+    case max(table, name) do
+      {:ok, value} -> value
+      {:error, reason} -> raise error(reason)
+    end
+  end
 
   @doc "As `slice/3`, the value, or `Macaw.Data.Error` worded by `format_error/1`."
   @spec slice!(Table.t(), non_neg_integer(), non_neg_integer()) :: Table.t()
-  def slice!(table, start, count), do: value!(slice(table, start, count))
+  def slice!(table, start, count) do
+    case slice(table, start, count) do
+      {:ok, value} -> value
+      {:error, reason} -> raise error(reason)
+    end
+  end
 
   @doc "As `take/2`, the value, or `Macaw.Data.Error` worded by `format_error/1`."
   @spec take!(Table.t(), integer()) :: Table.t()
-  def take!(table, n), do: value!(take(table, n))
+  def take!(table, n) do
+    case take(table, n) do
+      {:ok, value} -> value
+      {:error, reason} -> raise error(reason)
+    end
+  end
 
   @doc "As `rows/1`, the value, or `Macaw.Data.Error` worded by `format_error/1`."
   @spec rows!(Table.t()) :: [map()]
-  def rows!(table), do: value!(rows(table))
+  def rows!(table) do
+    case rows(table) do
+      {:ok, value} -> value
+      {:error, reason} -> raise error(reason)
+    end
+  end
 
-  defp value!({:ok, value}), do: value
-
-  defp value!({:error, reason}),
-    do: raise(Macaw.Data.Error, reason: reason, message: format_error(reason))
+  # What the bang twins raise: their twin's reason, and its words (spec/00 §5).
+  defp error(reason),
+    do: Macaw.Data.Error.exception(reason: reason, message: format_error(reason))
 
   @doc """
   One reason as a line a person reads.

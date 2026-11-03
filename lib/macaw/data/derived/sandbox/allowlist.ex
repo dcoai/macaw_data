@@ -455,7 +455,7 @@ defmodule Macaw.Data.Derived.Sandbox.Allowlist do
       {{:to_string, 2}, :deprecated}
     ],
     :math => [],
-    Macaw.Data.Ops => [{{:__run__, 5}, :internal}],
+    Macaw.Data.Ops => [{{:__run__, 5}, :internal}, {{:__run__!, 5}, :internal}],
     Macaw.Data.Derived.Columns => [{{:time_kind, 2}, :atoms}, {{:time_kind!, 2}, :atoms}]
   }
 
