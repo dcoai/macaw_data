@@ -24,6 +24,9 @@ defmodule Macaw.Data.Delivery do
     - `resolution`: the spacing of the rows as served (seconds, or a name such as
       `:minute`), or `nil`;
     - `capped`: whether the source stopped short of the window it was asked for;
+    - `stale`: whether the source answered from a store it could not refresh, so the
+      answer may be out of date (its upstream failed, and it served its last good
+      answer); a fact of this one answer, as `capped` is, not a capability;
     - `reduced_by`: who brought the rows within budget, `:source` or `:runtime`, or `nil`
       when nobody had to;
     - `ordered`: who put the rows in the request's `order` (spec/01 §2.4): `:source`, which
@@ -87,6 +90,7 @@ defmodule Macaw.Data.Delivery do
     window: nil,
     resolution: nil,
     capped: false,
+    stale: false,
     reduced_by: nil,
     ordered: nil,
     params: %{},
@@ -106,6 +110,7 @@ defmodule Macaw.Data.Delivery do
           window: window(),
           resolution: term(),
           capped: boolean(),
+          stale: boolean(),
           reduced_by: :source | :runtime | nil,
           ordered: :source | :runtime | :sample | nil,
           params: map(),
@@ -426,6 +431,8 @@ defmodule Macaw.Data.Delivery do
   defp check(:resolution, _any), do: []
   defp check(:capped, capped) when is_boolean(capped), do: []
   defp check(:capped, _other), do: [{[:served, :capped], {:type, :boolean}}]
+  defp check(:stale, stale) when is_boolean(stale), do: []
+  defp check(:stale, _other), do: [{[:served, :stale], {:type, :boolean}}]
   defp check(:reduced_by, by) when by in @reduced_by, do: []
   defp check(:reduced_by, _other), do: [{[:served, :reduced_by], {:enum, @reduced_by}}]
   defp check(:ordered, by) when by in @ordered, do: []

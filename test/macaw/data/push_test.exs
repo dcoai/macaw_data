@@ -147,6 +147,42 @@ defmodule Macaw.Data.PushTest do
     assert Push.held(push).served.window == [0, 5]
   end
 
+  @tag verifies: "push-stale"
+  test "a stale snapshot makes the holding stale; each applied increment's stale replaces it" do
+    ref = make_ref()
+    cache = Cache.new([{:ticks, @schema}])
+    stale = increment([%{"t" => 1, "v" => 1}], window: [0, 1], position: 0, stale: true)
+
+    push =
+      Push.new!(:ticks, ref, cache: cache) |> Push.snapshot(stale) |> Push.drain(&no_describe/1)
+
+    assert Push.held(push).served.stale == true
+
+    step = fn push, seq, served ->
+      {:ok, push} =
+        Push.receive(
+          push,
+          Push.increment_message(ref, seq, increment([%{"t" => seq + 1, "v" => seq}], served))
+        )
+
+      Push.drain(push, &no_describe/1)
+    end
+
+    push = step.(push, 1, [])
+    assert {ts(push), Push.held(push).served.stale} == {[1, 2], false}
+
+    push = step.(push, 2, stale: true)
+    assert {ts(push), Push.held(push).served.stale} == {[1, 2, 3], true}
+
+    # An increment not applied (another resolution) leaves the holding's stale as it was.
+    push = step.(push, 3, resolution: 60)
+    assert {Push.held(push).served.stale, elem(Push.refetch(push), 0)} == {true, :resolution}
+
+    fresh = increment([%{"t" => 9, "v" => 9}], window: [0, 9], position: 3)
+    push = push |> Push.snapshot(fresh) |> Push.drain(&no_describe/1)
+    assert {ts(push), Push.held(push).served.stale} == {[9], false}
+  end
+
   @tag verifies: "push-coalesce"
   test "pushes between two pulses buffer, and one drain merges them all, in the order received" do
     ref = make_ref()

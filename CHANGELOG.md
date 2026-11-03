@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+Target: 0.12.0.
+
+### Changes
+
+- **Added:** `served.stale`, by which a source says its answer is stale (#148, #150, spec/01 §3). A source that answers from a store it could not refresh (its upstream failed, and it serves its last good answer) gives `Macaw.Data.Delivery.new/2` `served: [stale: true]`, beside a `note` for a person if it likes; it is `false` by default, and any other value is the fault `{[:served, :stale], {:type, :boolean}}`, worded "not a boolean". It is a fact of one answer, as `capped` is, not a capability in `supports`, so a reader can draw the answer as stale rather than live (macaw's fetch, a follow-up there). `Macaw.Data.Source.Finish` carries it through every step unchanged, and each reader of a pooled fetch keeps it through `Macaw.Data.Source.Finish.reduce/5` (spec/01 §2.4, §6.1). `Macaw.Data.Source.Push`'s holding takes a snapshot's `stale`, and each applied increment's replaces it (spec/01 §4). `Macaw.Data.Source.Conformance`'s `:deliveries` check finds a `stale` that is not a boolean malformed, as it does `capped`; a `down:` source answering a stale delivery is `:answered_down`, as any answer is (spec/01 §9). A served map built by hand, around `Delivery.new/2`, now needs the `stale` key.
+
 ## v0.11.0 (2026-11-02)
 
 **Every kind of time on one instant scale, and a table gathered and reduced on its columns across chunks** (#124, #127, #141, #128, #132, #133, #140). A window bound, a window position, latest, the budget's reducers and `min`/`max`/`extent` read a `Date`, a `NaiveDateTime` and a `DateTime` on one scale, `Macaw.Data.Source.Order.instant/1`'s integer Unix microseconds, so mixing kinds of time answers a value where it raised or was refused. Rows in another order across chunks are gathered by their slots, a one-field order sorts its column's keys, the `m4`/`lttb` ladder reads a time x as integers, and a budget is reduced over the table's own columns: on visualize#998's 50,000-row loop the finish of a frame reduced by `lttb` costs about a quarter of the reductions it did before #146 on the Elixir path and a tenth with the kernels, keeping the same rows. This release is breaking for an adopter that reads `Macaw.Data.Window.position/1` of a date or naive time, expects a budget over a `Date` or `NaiveDateTime` window field to keep 0.10.0's rows, matches the `{:window, :mixed}` refusal, or relies on a mixed-kind window or `min`/`max`/`extent` failing. The guide below lists what to change, and the entries after it give the detail.

@@ -123,6 +123,7 @@ defmodule Macaw.Data.DeliveryTest do
              window: [0, 10],
              resolution: :minute,
              capped: true,
+             stale: false,
              reduced_by: :source,
              ordered: nil,
              params: %{"region" => "eu"},
@@ -135,6 +136,7 @@ defmodule Macaw.Data.DeliveryTest do
              window: nil,
              resolution: nil,
              capped: false,
+             stale: false,
              reduced_by: nil,
              ordered: nil,
              params: %{},
@@ -161,6 +163,30 @@ defmodule Macaw.Data.DeliveryTest do
           {:capped, {[:served], {:type, :keyword}}}
         ] do
       assert Delivery.new(@rows, served: bad) == {:error, [fault]}
+    end
+  end
+
+  @tag verifies: "delivery-stale"
+  test "served says whether the answer is stale, false by default, and refuses any other value" do
+    assert Delivery.new!(@rows).served.stale == false
+    assert Delivery.new!(@rows, served: [stale: false]).served.stale == false
+
+    {:ok, d} =
+      Delivery.new(@rows, served: [stale: true, note: "NWS unavailable; last good answer"])
+
+    assert {d.served.stale, d.served.note} == {true, "NWS unavailable; last good answer"}
+    assert Delivery.new!(@rows, served: %{stale: true}).served.stale == true
+
+    for bad <- ["yes", :yes, 1, nil, [true]] do
+      assert Delivery.new(@rows, served: [stale: bad]) ==
+               {:error, [{[:served, :stale], {:type, :boolean}}]}
+    end
+
+    assert Delivery.format_error({[:served, :stale], {:type, :boolean}}) ==
+             "served.stale: not a boolean"
+
+    assert_raise ArgumentError, ~r/served\.stale: not a boolean/, fn ->
+      Delivery.new!(@rows, served: [stale: "yes"])
     end
   end
 
@@ -321,6 +347,7 @@ defmodule Macaw.Data.DeliveryTest do
     :window,
     :resolution,
     :capped,
+    :stale,
     :reduced_by,
     :ordered,
     :params,

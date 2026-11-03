@@ -11,7 +11,8 @@ defmodule Macaw.Data.Test.Sources do
     window field. It honors a numeric window, a budget (every `k`-th row,
     `reduced_by: :source`, the resolution `k`), `as_of` and push, declares itself viewer
     independent, and `emit/1` pushes one new row under a new version of its schema, the
-    schema first.
+    schema first. `:stale` is no flaw, as `:identified` is not: it answers honestly from a
+    store it says it could not refresh, `served.stale: true`.
     """
     @behaviour Macaw.Data.Source
 
@@ -32,6 +33,8 @@ defmodule Macaw.Data.Test.Sources do
       :missing_row,
       :capped_lie,
       :uncapped_lie,
+      :stale,
+      :stale_not_boolean,
       :reduction_unrecorded,
       :runtime_claim,
       :resolution_lie,
@@ -277,12 +280,14 @@ defmodule Macaw.Data.Test.Sources do
             %{source: :broken, request: "", as_of: as_of}
         end
 
-      Delivery.new!(rows,
+      rows
+      |> Delivery.new!(
         types: types(flaw),
         served: [
           window: [if(flaw == :served_window_lie, do: lo + 2, else: lo), hi],
           resolution: if(flaw == :resolution_lie, do: 2, else: step),
           capped: flaw == :capped_lie and from != nil,
+          stale: flaw == :stale,
           reduced_by: reduced_by
         ],
         origin: origin,
@@ -292,7 +297,14 @@ defmodule Macaw.Data.Test.Sources do
             else: Schema.version(schema(source))
           )
       )
+      |> stale_fact(flaw)
     end
+
+    # A delivery built by hand around `Delivery.new/2`, its `stale` not a boolean.
+    defp stale_fact(delivery, :stale_not_boolean),
+      do: %{delivery | served: %{delivery.served | stale: "yes"}}
+
+    defp stale_fact(delivery, _flaw), do: delivery
 
     # What three flaws add to every value: a count of the fetches (an answer moving with a
     # clock of the source's own), the viewer, or `now` where `as_of` was asked.

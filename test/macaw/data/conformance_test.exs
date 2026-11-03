@@ -73,6 +73,7 @@ defmodule Macaw.Data.ConformanceTest do
     served_window_lie: {:deliveries, :outside_served},
     missing_row: {:deliveries, :missing},
     capped_lie: {:deliveries, :capped},
+    stale_not_boolean: {:deliveries, :malformed},
     uncapped_lie: {:deliveries, :uncapped},
     reduction_unrecorded: {:deliveries, :unrecorded_reduction},
     runtime_claim: {:deliveries, :reduced_by},
@@ -108,10 +109,33 @@ defmodule Macaw.Data.ConformanceTest do
       assert Conformance.check(Broken.new(:identified), @opts) == []
     end
 
+    @tag verifies: "conformance-stale"
+    test "a stale answer is honest; a stale that is not a boolean is malformed" do
+      assert Conformance.check(Broken.new(:stale), @opts) == []
+
+      findings = Conformance.check(:deliveries, Broken.new(:stale_not_boolean), @opts)
+      assert {:deliveries, {:malformed, _probe, :stale, "yes"} = reason} = hd(findings)
+      assert Enum.all?(findings, &match?({:deliveries, {:malformed, _, :stale, "yes"}}, &1))
+      assert Conformance.format({:deliveries, reason}) =~ "stale"
+    end
+
+    @tag verifies: "conformance-stale"
+    test "a down source answering a stale delivery is answered_down, never stale rows" do
+      findings = Conformance.check(:errors, Broken.new(), down: Broken.new(:stale))
+
+      assert Enum.any?(
+               findings,
+               &match?(
+                 {:errors, {:answered_down, {:fetch, _}, {:ok, %{served: %{stale: true}}}}},
+                 &1
+               )
+             )
+    end
+
     @tag verifies: "conformance-flaws"
     test "every flaw is expected to fail a check, and every check is failed by a flaw" do
       assert Enum.sort(Keyword.keys(@expected)) ==
-               Enum.sort(Broken.flaws() -- [:down, :identified])
+               Enum.sort(Broken.flaws() -- [:down, :identified, :stale])
 
       assert @expected |> Keyword.values() |> Enum.map(&elem(&1, 0)) |> Enum.uniq() |> Enum.sort() ==
                Enum.sort(Conformance.checks())

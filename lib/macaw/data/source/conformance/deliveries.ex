@@ -124,6 +124,7 @@ defmodule Macaw.Data.Source.Conformance.Deliveries do
       row_faults ++
         malformed(:window, served_window?(window), window, probe) ++
         malformed(:capped, is_boolean(Map.get(served, :capped)), Map.get(served, :capped), probe) ++
+        malformed(:stale, is_boolean(Map.get(served, :stale)), Map.get(served, :stale), probe) ++
         malformed(:reduced_by, reduced_by in [nil, :source, :runtime], reduced_by, probe) ++
         malformed(:params, is_map(Map.get(served, :params)), Map.get(served, :params), probe) ++
         malformed(:schema, is_nil(d.schema) or is_binary(d.schema), d.schema, probe) ++

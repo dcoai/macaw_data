@@ -349,6 +349,84 @@ defmodule Macaw.Data.FinishTest do
     assert Table.size(Finish.reduce!(pooled, @numbers, 15) |> Delivery.table!()) == 15
   end
 
+  @hosts Schema.new!(%{
+           "t" => %{type: :number, window: true},
+           "host" => %{type: :category, identity: true},
+           "v" => %{type: :number}
+         })
+
+  @tag verifies: "finish-stale"
+  property "a stale answer stays stale through every step, and through each pooled reader's budget" do
+    check all(
+            stale <- boolean(),
+            n <- integer(0..80),
+            table? <- boolean(),
+            window <- one_of([constant(nil), tuple({integer(0..80), integer(0..80)})]),
+            region <- one_of([constant(nil), tuple({integer(0..5), integer(0..5)})]),
+            latest <- boolean(),
+            order <- member_of([nil, [{"v", :asc}], [{"t", :desc}]]),
+            budget <- one_of([constant(nil), integer(1..40)]),
+            supports <- list_of(member_of([:window, :region, :latest, :order, :budget])),
+            readers <- list_of(integer(1..40), max_length: 4)
+          ) do
+      rows = for t <- 1..n//1, do: %{"t" => t, "host" => "h#{rem(t, 3)}", "v" => rem(t * 7, 5)}
+      types = %{"t" => :number, "host" => :category, "v" => :number}
+      given = if table?, do: Delivery.table!(Delivery.new!(rows, types: types)), else: rows
+      d = Delivery.new!(given, types: types, served: [stale: stale])
+
+      ask =
+        [budget: budget] ++
+          if(window,
+            do: [
+              window: [
+                min(elem(window, 0), elem(window, 1)),
+                max(elem(window, 0), elem(window, 1))
+              ]
+            ],
+            else: []
+          ) ++
+          if(region,
+            do: [
+              region: %{
+                "v" => [
+                  min(elem(region, 0), elem(region, 1)),
+                  max(elem(region, 0), elem(region, 1))
+                ]
+              }
+            ],
+            else: []
+          ) ++
+          if(latest, do: [latest: true], else: []) ++
+          if(order, do: [order: order], else: [])
+
+      {:ok, finished} =
+        Finish.finish(d, described(@hosts, Enum.uniq(supports)), request(ask))
+
+      assert finished.served.stale == stale
+
+      for reader <- readers,
+          do: assert(Finish.reduce!(finished, @hosts, reader).served.stale == stale)
+    end
+  end
+
+  @tag verifies: "finish-stale"
+  test "a stale answer stays stale through a box, and a fresh one fresh" do
+    schema = Schema.new!(%{"at" => %{type: :point, window: true}, "name" => %{type: :text}})
+
+    places = [
+      %{"at" => {2.35, 48.86}, "name" => "Paris"},
+      %{"at" => {-74.0, 40.7}, "name" => "New York"}
+    ]
+
+    europe = %{west: -10, south: 35, east: 30, north: 60}
+
+    for stale <- [true, false] do
+      d = Delivery.new!(places, types: %{"at" => :point}, served: [stale: stale])
+      boxed = Finish.finish!(d, described(schema), request(box: europe))
+      assert {Table.size(Delivery.table!(boxed)), boxed.served.stale} == {1, stale}
+    end
+  end
+
   @tag verifies: "window-arithmetic"
   test "times compare on one scale; positions, intersections and the seams" do
     assert Window.compare(1, 1.0) == :eq

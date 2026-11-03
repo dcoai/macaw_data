@@ -41,6 +41,9 @@ defmodule Macaw.Data.Source.Push do
     cover them. Rows are never deduplicated: an identical row is a second row. A schema
     with no window field keeps the newest `limit` rows, marking the delivery `capped`
     when it drops any.
+  - **`stale` is the last answer's** (spec/01 §4): a snapshot's `served.stale` becomes
+    the holding's, and an applied increment's replaces it, as the source answers as of
+    that change.
   - **What is held is a chunked table** (spec/01 §2.6): `held/1`'s rows are a
     `Macaw.Data.Table` of the source's origin, its columns the schema's fields, packed as
     `Delivery.table/2` packs; every change reaches it through `Macaw.Data.Table.apply/2`,
@@ -370,6 +373,9 @@ defmodule Macaw.Data.Source.Push do
           from = window_from(held) || window_from(delivery) || earliest(Table.column(table, time))
           %{held | rows: table, schema: version, served: %{held.served | window: [from, to]}}
       end
+
+    # An increment answers as of its change, so its `stale` is the holding's (spec/01 §4).
+    held = %{held | served: %{held.served | stale: delivery.served.stale}}
 
     push = %{
       push
