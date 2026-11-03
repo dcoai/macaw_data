@@ -93,6 +93,15 @@ spec-links:
     - elixir ci/spec_links.exs --self-test
     - elixir ci/spec_links.exs
 
+# The family's vendored CI scripts are the copies they were vendored as (ci/vendored.exs
+# against ci/vendored_manifest.exs, #165, spec/00 §3): a copy edited here, or missing,
+# fails. CI can't reach the family's reference; `mix hex.publish` checks against it.
+vendored:
+  image: $ELIXIR_IMAGE
+  stage: check
+  script:
+    - elixir ci/vendored.exs
+
 # No locked package has a security advisory or is retired, outside the reasoned
 # allowlist ci/advisories_allowlist.exs (ci/advisories.exs, the family's copy,
 # dco-tek/macaw/macaw#214, #162, spec/00 §3). It needs the dependencies fetched.
