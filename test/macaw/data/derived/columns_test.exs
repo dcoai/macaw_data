@@ -117,7 +117,7 @@ defmodule Macaw.Data.Derived.ColumnsTest do
   # -- the row view's answers ----------------------------------------------------------------
 
   defp present(table, name),
-    do: table |> Table.rows() |> Enum.map(& &1[name]) |> Enum.reject(&is_nil/1)
+    do: table |> Table.rows!() |> Enum.map(& &1[name]) |> Enum.reject(&is_nil/1)
 
   # The first least or greatest by key, as the row view finds it.
   defp first_by(values, key, side) do
@@ -154,7 +154,7 @@ defmodule Macaw.Data.Derived.ColumnsTest do
   @tag verifies: "derived-columns-accessors"
   property "every accessor agrees with the row view, over every column form, gaps, chunks and views" do
     check all(table <- input(), max_runs: 300) do
-      rows = Table.rows(table)
+      rows = Table.rows!(table)
       names = ["t", "v", "s", "c"]
       got = accessors(table)
 

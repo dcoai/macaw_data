@@ -102,7 +102,7 @@ defmodule Macaw.Data.Derived.EngineAnswersTest do
       assert Table.equal?(outputs[["r"]].rows, outputs[["m"]].rows)
       assert Table.equal?(outputs[["r"]].rows, outputs[["t"]].rows)
 
-      assert Table.rows(outputs[["m"]].rows) ==
+      assert Table.rows!(outputs[["m"]].rows) ==
                Enum.map(rows, &Map.new(&1, fn {k, v} -> {to_string(k), v} end))
     end
   end
@@ -127,7 +127,7 @@ defmodule Macaw.Data.Derived.EngineAnswersTest do
     other = Table.new!([{:n, :number, [2]}, {:id, :category, ["b"]}])
     {:ok, table} = Derived.conform(source(:c, :f), other)
     assert Table.names(table) == ["id", "n", "s", "t", "txt"]
-    assert Table.rows(table) == [%{"id" => "b", "n" => 2, "s" => nil, "t" => nil, "txt" => nil}]
+    assert Table.rows!(table) == [%{"id" => "b", "n" => 2, "s" => nil, "t" => nil, "txt" => nil}]
   end
 
   @tag verifies: "derived-conform-columns"
@@ -151,7 +151,7 @@ defmodule Macaw.Data.Derived.EngineAnswersTest do
     assert Engine.faults(engine) == %{}
     outputs = Engine.outputs(engine)
     assert Table.equal?(outputs[["t"]].rows, outputs[["r"]].rows)
-    assert Enum.map(Table.rows(outputs[["t"]].rows), & &1["n"]) == [3, 2]
+    assert Enum.map(Table.rows!(outputs[["t"]].rows), & &1["n"]) == [3, 2]
   end
 
   # -- the faults ----------------------------------------------------------------------------

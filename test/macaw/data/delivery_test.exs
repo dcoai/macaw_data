@@ -11,24 +11,24 @@ defmodule Macaw.Data.DeliveryTest do
 
   @tag verifies: "delivery-table"
   test "a delivery reads every source shape as rows, and packs a table on demand" do
-    assert Delivery.rows(Delivery.new!(@rows)) == @rows
-    assert Delivery.rows(Delivery.new!(%{t: [1, 2], v: [10, 20]})) == @rows
-    assert Delivery.rows(Delivery.new!(t: [1, 2], v: [10, 20])) == @rows
-    assert Delivery.rows(Delivery.new!([])) == []
+    assert Delivery.rows!(Delivery.new!(@rows)) == @rows
+    assert Delivery.rows!(Delivery.new!(%{t: [1, 2], v: [10, 20]})) == @rows
+    assert Delivery.rows!(Delivery.new!(t: [1, 2], v: [10, 20])) == @rows
+    assert Delivery.rows!(Delivery.new!([])) == []
     assert Delivery.empty?(Delivery.new!([]))
     refute Delivery.empty?(Delivery.new!(@rows))
 
     table = Table.new!([{:v, :number, [1, 2]}])
     assert Delivery.new!(table).rows == table
     assert Delivery.new!(table) |> Delivery.table!() == table
-    assert Delivery.rows(Delivery.new!(table)) == [%{v: 1}, %{v: 2}]
+    assert Delivery.rows!(Delivery.new!(table)) == [%{v: 1}, %{v: 2}]
 
     typed = Delivery.new!([%{c: Macaw.Layers.Color.parse!("#fff")}], types: %{c: :color})
     assert Table.column_type(typed |> Delivery.table!(), :c) == :color
 
     # A value its declared type doesn't hold is the packing's fault, not the delivery's.
     late = Delivery.new!([%{t: "later"}], types: %{t: :time})
-    assert Delivery.rows(late) == [%{t: "later"}]
+    assert Delivery.rows!(late) == [%{t: "later"}]
     assert {:error, _faults} = Delivery.table(late)
     assert_raise Macaw.Data.Error, ~r/do not pack/, fn -> Delivery.table!(late) end
 
@@ -52,26 +52,45 @@ defmodule Macaw.Data.DeliveryTest do
     at = ~U[2026-10-29 00:00:00Z]
     rows = for i <- 1..50_000, do: {DateTime.add(at, i), i * 0.5, "s#{rem(i, 7)}"}
     big = Delivery.new!(rows, names: [:t, :v, :s])
-    assert Delivery.rows(big) === rows
-    assert Table.rows(big) === rows
+    assert Delivery.rows!(big) === rows
+    assert Table.rows!(big) === rows
 
     given = [
       %{n: 1, x: 1.5, t: ~N[2026-10-29 01:00:00], s: "2026-10-29T01:00:00Z"},
       %{n: 2}
     ]
 
-    assert Delivery.rows(Delivery.new!(given)) === given
+    assert Delivery.rows!(Delivery.new!(given)) === given
 
     # Packing normalizes, there and only there.
     packed = Delivery.table!(Delivery.new!([%{v: 1}, %{v: 2.5}]))
     assert Table.column(packed, :v) == [1.0, 2.5]
   end
 
+  @tag verifies: "delivery-rows-values"
+  test "rows/1 answers {:ok, rows}, and a hand-built delivery's malformed rows are faults under [:rows]" do
+    assert Delivery.rows(Delivery.new!(@rows)) == {:ok, @rows}
+
+    ragged = %{Delivery.new!([]) | rows: %{t: [1, 2], v: [10]}}
+    assert {:error, [{[:rows, _name], {:length, _n}}]} = Delivery.rows(ragged)
+    assert Delivery.named_rows(ragged) == Delivery.rows(ragged)
+    refute Delivery.empty?(ragged)
+
+    error = assert_raise Macaw.Data.Error, fn -> Delivery.rows!(ragged) end
+    assert {:error, error.reason} == Delivery.rows(ragged)
+
+    assert Exception.message(error) =~
+             ~r/^the rows cannot be read: rows\.[tv]: a column of another length/
+
+    rank3 = %{Delivery.new!([]) | rows: Nx.tensor([[[1]]])}
+    assert Delivery.rows(rank3) == {:error, [{[:rows], {:rank, 3}}]}
+  end
+
   @tag verifies: "delivery-tuple-rows"
   test "tuple rows and a tensor pass as they are; they are named for whoever reads them by name" do
     tuples = [{1, 4.0}, {2, 5.0}]
     d = Delivery.new!(tuples, names: ["x", "y"])
-    assert Delivery.rows(d) == tuples
+    assert Delivery.rows!(d) == tuples
     assert Delivery.named_rows(d) == {:ok, [%{"x" => 1, "y" => 4.0}, %{"x" => 2, "y" => 5.0}]}
     assert Delivery.named_rows!(d) == [%{"x" => 1, "y" => 4.0}, %{"x" => 2, "y" => 5.0}]
     assert d |> Delivery.table!() |> Table.column("y") == [4.0, 5.0]
@@ -92,7 +111,7 @@ defmodule Macaw.Data.DeliveryTest do
 
     tensor = Nx.tensor([[1, 2], [3, 4]])
     td = Delivery.new!(tensor, names: [:a, :b])
-    assert Delivery.rows(td) == [{1, 2}, {3, 4}]
+    assert Delivery.rows!(td) == [{1, 2}, {3, 4}]
     assert Delivery.named_rows!(td) == [%{a: 1, b: 2}, %{a: 3, b: 4}]
   end
 
@@ -100,7 +119,7 @@ defmodule Macaw.Data.DeliveryTest do
   property "absence is never zero: a gap is nil through the delivery's table" do
     check all(values <- list_of(one_of([integer(), float(), constant(nil)]), max_length: 30)) do
       rows = Enum.map(values, &%{v: &1})
-      read = Delivery.rows(Delivery.new!(rows, types: %{v: :number}))
+      read = Delivery.rows!(Delivery.new!(rows, types: %{v: :number}))
       assert Enum.map(read, & &1.v) |> Enum.map(&is_nil/1) == Enum.map(values, &is_nil/1)
     end
   end

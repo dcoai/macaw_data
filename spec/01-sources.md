@@ -105,7 +105,7 @@ slice/3 is the rows from start, count of them, for generated tables, chunkings a
 - each column's type is the one `types:` gives, else the one `column_types/1` infers, else `:term`;
 - a time column's values become `DateTime`s at the edge: a `Date` at midnight UTC, a `NaiveDateTime` as UTC, an ISO 8601 string parsed; a `DateTime` keeps its zone, and every value its precision. `new/1` takes `NaiveDateTime`s and `Date`s as themselves.
 
-**A source of no shape `from/2` reads is a fault, never a raise** (00 §5). `Table.source/1` answers `:ok` or every fault: a list of row maps, of tuple rows, or a keyword list of columns, else `{[], {:type, :rows}}`; a map of columns each a list (or rank-1 tensor) of the first's length, else `{[name], {:length, n}}` or `{[name], {:type, :column}}`; a tensor of rank 1 or 2, else `{[], {:rank, rank}}`; and a table, a delivery or a `Table.Reader` source, any other term `{[], {:type, :source}}`. `from/2` answers its faults before it reads a row, and `rows/1` reads a source it accepts. `Delivery.new/2` checks a column map's lengths and a tensor's rank the same way, under `[:rows]` (§3).
+**A source of no shape `from/2` reads is a fault, never a raise** (00 §5). `Table.source/1` answers `:ok` or every fault: a list of row maps, of tuple rows, or a keyword list of columns, else `{[], {:type, :rows}}`; a map of columns each a list (or rank-1 tensor) of the first's length, else `{[name], {:length, n}}` or `{[name], {:type, :column}}`; a tensor of rank 1 or 2, else `{[], {:rank, rank}}`; and a table, a delivery or a `Table.Reader` source, any other term `{[], {:type, :source}}`. `from/2` answers its faults before it reads a row, and so does `rows/1` (macaw_data#130): `{:ok, rows}`, or these faults, and `rows!/1` raises them. `Delivery.new/2` checks a column map's lengths and a tensor's rank the same way, under `[:rows]` (§3).
 
 ```test:table-edge-source
 source/1 accepts every shape from/2 reads and answers every fault of another, a list neither of row maps nor of tuple rows, a column map of unequal or non-list columns, a tensor of rank 3 and any other term; from/2 answers those faults instead of raising
@@ -122,14 +122,14 @@ from/2 reads rows, columns and a Table.Reader source, infers or takes the types,
 ```
 
 **The row helpers read any source,** as visualize's `Visualize.Data.Table` does (this is its port):
-- `rows/1` of a list of rows is the list itself, uncopied; of a map or keyword list of equal-length columns, one map per row; of a rank-2 tensor, one tuple per row, of a rank-1 tensor its values; of a `Table.Reader` source, its rows keyed as the reader names its columns. A map whose values are not equal-length lists, a tensor of another rank, and a struct with no reader are the caller's errors;
+- `rows/1` of a list of rows is the list itself, uncopied; of a map or keyword list of equal-length columns, one map per row; of a rank-2 tensor, one tuple per row, of a rank-1 tensor its values; of a `Table.Reader` source, its rows keyed as the reader names its columns. Each is `{:ok, rows}`. A map whose values are not equal-length lists, a tensor of another rank, and a struct with no reader are `Table.source/1`'s faults, `{:error, faults}`, never a raise (macaw_data#130, #158). `rows!/1` answers the rows alone or raises `Macaw.Data.Error` with the faults;
 - `named/2` names a tensor's columns, or tuple rows' elements, in order, or says why it can't (`{:width, n, size}`, `{:rank, rank}`), and passes any other source through;
 - `unnamed?/1` is whether a source's rows have no names to read by: a tensor, or tuple rows (never a keyword list of columns);
 - `get/2` reads a column from a row by either spelling of its name, and `key/2` is the key that spells it; no atom is made. `accessor/1` is the function of a name, a function passed through;
 - `column_types/1` suggests each column's type from its whole: all temporal is `:time`, all numbers `:number`, all strings `:text`, all color terms (literal or typed, §1.7) `:color`, all atoms or booleans `:category`, a mixed or empty column left out; a string is never a color, so a column of CSS text is `:text`; `time_columns/1` names the temporal ones; `temporal?/1` is whether a value is a `DateTime`, `Date`, `NaiveDateTime` or an ISO 8601 string one of those parses. These are suggestions for a tool; a table's declared types are `column_type/2`'s.
 
 ```test:table-sources
-rows/1 passes a list of rows through uncopied and tuple rows unchanged, reads column maps, keyword columns, tensors and rank-1 tensor columns, refuses unequal columns, other ranks and a struct with no reader; named/2 names tensor columns and tuple rows or says why not; unnamed?/1 is true for a tensor and tuple rows, never columns
+rows/1 passes a list of rows through uncopied and tuple rows unchanged, reads column maps, keyword columns, tensors and rank-1 tensor columns, each {:ok, rows}; answers unequal columns, other ranks and a struct with no reader as source/1's faults, and rows!/1 raises them; named/2 names tensor columns and tuple rows or says why not; unnamed?/1 is true for a tensor and tuple rows, never columns
 ```
 
 ```test:table-row-helpers
@@ -793,7 +793,7 @@ held/1's rows are a chunked table of the source's origin, its columns the schema
 - **`rows`, the rows as the source gave them** (macaw#185): a list of row maps or tuples, a map or keyword list of columns, an `Nx.Tensor`, a `Table.Reader` source, or a `Macaw.Data.Table`, which passes as it is. **Nothing is packed or rewritten when a delivery is made:** a delivery is on the hottest path a live chart has, every tick of every chart reading it, and packing at the edge cost a reader of rows half a second for 50,000 rows (visualize#970), dropped tuple rows, and rewrote values a reader gave (an integer beside floats, a naive time, a sparse row). `new/2` checks only the shape, and answers rows of no shape a source has with a fault.
 - **`names`**: the column names of tuple rows or a tensor, in order, or `nil`; **`types`**: column types for packing, `%{}` to infer them.
 - **Reading:**
-  - `rows/1` (and `Table.rows/1` of a delivery) is the row view, as `Table.rows/1` reads the source: a row list itself, uncopied, its tuple rows unchanged; a table, a column map or a tensor one row at a time. Nothing is rewritten.
+  - `rows/1` (and `Table.rows/1` of a delivery) is the row view, as `Table.rows/1` reads the source: `{:ok, rows}`, a row list itself, uncopied, its tuple rows unchanged; a table, a column map or a tensor one row at a time. Nothing is rewritten. `new/2` checks the rows' shape, so a delivery it built always answers them. Rows of a delivery built another way that `Table.source/1` refuses are its faults under `[:rows]` (macaw_data#130, #158), and `rows!/1` raises them.
   - `named_rows/1` is the rows as maps, for a reader that reads them by name (finishing, push, a reducer): `{:ok, rows}`, tuple rows and a tensor named by `names` (`Table.named/2`). **Tuple rows without names are `{:error, [{[:names], :required}]}`:** they cannot be read by name, and are never dropped for it. Rows that do not fit their names are `{[:names], reason}`, `Table.named/2`'s `{:width, names, width}` or `{:rank, rank}`. `named_rows!/1` raises.
   - `table/2` packs the rows into a `Macaw.Data.Table` (§1.1) for a reader that wants columns, `{:ok, table}` or `{:error, faults}`, with the delivery's `types` and `names` and any `opts` gives; `table!/2` raises. **Packing normalizes, there and only there:** the delivery's rows never change. A source that already holds a table delivers it, and a reader of columns pays nothing.
   - `empty?/1` is whether there are no rows.
@@ -833,6 +833,10 @@ visualize's `Visualize.Data.Delivery` holds these facts flat, with `reduced_by: 
 
 ```test:delivery-table
 a delivery reads rows, columns, keyword columns and a table as rows, empty?/1 answering; a table passes as it is; table/2 packs with the delivery's types, and a value its type doesn't hold is table/2's fault, not new/2's; a value of no source shape and a delivery of a delivery are refused
+```
+
+```test:delivery-rows-values
+rows/1 of a delivery new/2 built is {:ok, rows}; rows a hand-built delivery holds that Table.source/1 refuses are its faults under [:rows], from rows/1 and named_rows/1, and rows!/1 raises them as Macaw.Data.Error; empty?/1 of such a delivery is false
 ```
 
 ```test:delivery-rows-as-given

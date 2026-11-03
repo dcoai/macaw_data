@@ -51,7 +51,7 @@ defmodule Macaw.Data.FinishColumnsCostTest do
   @tag verifies: "finish-columns-cost"
   test "finishing a 50k-row table by window or latest costs less than one transpose" do
     table = readings()
-    {transpose, _rows} = Work.reductions(fn -> Table.rows(table) end)
+    {transpose, _rows} = Work.reductions(fn -> Table.rows!(table) end)
 
     {window, {:ok, half}} = Work.reductions(fn -> finish(table, window: @half) end)
     assert Table.size(half.rows) == 25_000
@@ -76,7 +76,7 @@ defmodule Macaw.Data.FinishColumnsCostTest do
   @tag verifies: "finish-columns-cost"
   test "a window of another kind of time than its column scans the buffer as its own kind does" do
     table = readings()
-    {transpose, _rows} = Work.reductions(fn -> Table.rows(table) end)
+    {transpose, _rows} = Work.reductions(fn -> Table.rows!(table) end)
     naive = Enum.map(@half, &(&1 && DateTime.to_naive(&1)))
 
     {window, {:ok, half}} = Work.reductions(fn -> finish(table, window: naive) end)
@@ -124,7 +124,7 @@ defmodule Macaw.Data.FinishColumnsCostTest do
   @tag verifies: "finish-columns-cost"
   test "finishing a 50k-row table by region, order and budget stays under its bounds" do
     table = readings()
-    {transpose, _rows} = Work.reductions(fn -> Table.rows(table) end)
+    {transpose, _rows} = Work.reductions(fn -> Table.rows!(table) end)
 
     {region, {:ok, kept}} = Work.reductions(fn -> finish(table, region: %{cpu: [50, 100]}) end)
     assert Table.size(kept.rows) == 25_000
@@ -182,7 +182,7 @@ defmodule Macaw.Data.FinishColumnsCostTest do
   @tag verifies: "finish-columns-cost"
   test "Derived.window/3 finishes a request window on a 50k-row table for less than a transpose" do
     table = readings()
-    {transpose, _rows} = Work.reductions(fn -> Table.rows(table) end)
+    {transpose, _rows} = Work.reductions(fn -> Table.rows!(table) end)
 
     {reductions, windowed} =
       Work.reductions(fn -> Derived.window(table, %{window: @half}, @schema) end)
@@ -210,7 +210,7 @@ defmodule Macaw.Data.FinishColumnsCostTest do
   test "rows in another order across chunks are gathered by their slots, a full order too" do
     n = 50_000
     table = readings()
-    {transpose, _rows} = Work.reductions(fn -> Table.rows(table) end)
+    {transpose, _rows} = Work.reductions(fn -> Table.rows!(table) end)
 
     fixed =
       Table.new!([

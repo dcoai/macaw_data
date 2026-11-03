@@ -55,7 +55,7 @@ defmodule Macaw.Data.Derived.EngineTablesTest do
   defp answer(engine, rows) do
     engine = engine |> pushed(rows, 0) |> Engine.run(0)
     assert Engine.faults(engine) == %{}
-    Delivery.rows(Engine.outputs(engine)[["a"]])
+    Delivery.rows!(Engine.outputs(engine)[["a"]])
   end
 
   @last Derived.new!(
@@ -69,7 +69,7 @@ defmodule Macaw.Data.Derived.EngineTablesTest do
   @tag verifies: "derived-engine-tables"
   test "a table input answers what its rows answer, windowed and read as rows at the call" do
     table = readings(40, 4)
-    rows = Table.rows(table)
+    rows = Table.rows!(table)
 
     assert answer(engine(@last), table) == answer(engine(@last), rows)
     assert length(answer(engine(@last), table)) == 8
@@ -120,7 +120,7 @@ defmodule Macaw.Data.Derived.EngineTablesTest do
     engine = engine(count) |> pushed(first, 0) |> Engine.run(0) |> pushed(second, 1)
 
     {reductions, faults} = Work.reductions(fn -> engine |> Engine.run(1) |> Engine.faults() end)
-    {transpose, _rows} = Work.reductions(fn -> Table.rows(second) end)
+    {transpose, _rows} = Work.reductions(fn -> Table.rows!(second) end)
 
     assert faults == %{}
     assert reductions < 1_100_000

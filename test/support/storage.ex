@@ -19,7 +19,7 @@ defmodule Macaw.Data.Test.Storage do
   """
   def chunked(table, size) do
     header = for name <- Table.names(table), do: {name, Table.column_type(table, name)}
-    rows = Table.rows(table)
+    rows = Table.rows!(table)
     groups = if size == :one, do: [rows], else: Enum.chunk_every(rows, size)
 
     chunks =

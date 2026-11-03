@@ -13,7 +13,7 @@ defmodule Macaw.Data.OperationsTest do
 
   defp registry, do: Operations.registry!([Ops])
 
-  defp rows(table), do: Table.rows(table)
+  defp rows(table), do: Table.rows!(table)
 
   describe "the behaviors (spec/04 §1.1, §1.2)" do
     @tag verifies: "operations-transform-callbacks"
@@ -368,7 +368,7 @@ defmodule Macaw.Data.OperationsTest do
              ]
 
       assert Operations.columns(table) == [{:v, :number}, {:d, :number}, {"double", :number}]
-      assert Table.rows(Operations.table([%{"v" => 1, "w" => 2}], [{:v, :number}])) == [%{v: 1}]
+      assert Table.rows!(Operations.table([%{"v" => 1, "w" => 2}], [{:v, :number}])) == [%{v: 1}]
 
       assert Operations.outputs(r, nodes, [{:v, :number}]) ==
                {:ok, [{:v, :number}, {:d, :number}, {"double", :number}]}

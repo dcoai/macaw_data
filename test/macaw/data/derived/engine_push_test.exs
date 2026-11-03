@@ -139,7 +139,7 @@ defmodule Macaw.Data.Derived.EnginePushTest do
 
     refute marked?(Delivery.new!(table), Delivery.new!(recut(table, 4)))
     refute marked?(Delivery.new!([%{n: 1}]), Delivery.new!([%{n: 1}]))
-    assert marked?(Delivery.new!(table), Delivery.new!(Table.rows(table)))
+    assert marked?(Delivery.new!(table), Delivery.new!(Table.rows!(table)))
   end
 
   @tag verifies: "derived-engine-push"

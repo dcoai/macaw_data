@@ -257,7 +257,7 @@ defmodule Macaw.Data.Source.Finish do
       iex> alias Macaw.Data.{Delivery, Schema, Source.Finish}
       iex> schema = Schema.new!(%{t: %{type: :number, window: true}, v: %{type: :number}})
       iex> {:ok, reduced} = Finish.reduce(Delivery.new!(for t <- 1..100, do: %{t: t, v: rem(t * 7, 5)}), schema, 10)
-      iex> {length(Delivery.rows(reduced)), reduced.served.reduced_by}
+      iex> {length(Delivery.rows!(reduced)), reduced.served.reduced_by}
       {10, :runtime}
   """
   @spec reduce(Delivery.t(), Schema.t(), pos_integer() | nil, String.t() | atom(), Registry.t()) ::

@@ -40,7 +40,7 @@ defmodule Macaw.Data.Test.Ops do
 
     @impl true
     def run(%{"field" => field, "as" => as} = node, table, _context) do
-      rows = for row <- Table.rows(table), do: Map.put(row, as, 2 * Table.get(row, field))
+      rows = for row <- Table.rows!(table), do: Map.put(row, as, 2 * Table.get(row, field))
       Operations.table(rows, outputs(node, Operations.columns(table)))
     end
   end
@@ -69,7 +69,7 @@ defmodule Macaw.Data.Test.Ops do
       n = max(Table.size(table), 1)
 
       rows =
-        for {row, i} <- Enum.with_index(Table.rows(table)), do: Map.put(row, "x", i * width / n)
+        for {row, i} <- Enum.with_index(Table.rows!(table)), do: Map.put(row, "x", i * width / n)
 
       Operations.table(rows, outputs(node, Operations.columns(table)))
     end
@@ -105,7 +105,7 @@ defmodule Macaw.Data.Test.Ops do
 
     @impl true
     def run(%{"n" => n}, table, _context) do
-      rows = Table.rows(table)
+      rows = Table.rows!(table)
       size = length(rows)
 
       kept =
@@ -138,7 +138,7 @@ defmodule Macaw.Data.Test.Ops do
       fields = map_size(context.schema.fields)
 
       rows =
-        for row <- Table.rows(table),
+        for row <- Table.rows!(table),
             do: Map.merge(row, %{"now" => context.now, "fields" => fields})
 
       Operations.table(rows, outputs(node, Operations.columns(table)))

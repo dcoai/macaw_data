@@ -133,8 +133,10 @@ defmodule Macaw.Data.Stack do
   - `:points` - One point per datum with `:data`, `:value`, `:y0`, `:y1`, `:index`
   """
   @spec generate(t(), Macaw.Data.Table.source()) :: [series()]
+  # The data read through `Table.rows!/1`, so a source `Table.source/1` refuses raises its
+  # faults: its answering a value instead is macaw_data#161.
   def generate(%__MODULE__{} = stack, data),
-    do: generate_rows(stack, Macaw.Data.Table.rows(data))
+    do: generate_rows(stack, Macaw.Data.Table.rows!(data))
 
   @doc """
   As `generate/2`, over a list of data each given to the value function as it is: no

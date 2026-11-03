@@ -214,12 +214,12 @@ defmodule Macaw.Data.Derived.EngineColumnsTest do
       engine |> Engine.push(%{in: Delivery.new!(sourced)}, %{in: @schema}, 0) |> Engine.run(0)
 
     assert Engine.faults(engine) == %{}
-    assert Delivery.rows(Engine.outputs(engine)[["h"]]) == [%{"origin" => "kept"}]
-    assert Delivery.rows(Engine.outputs(engine)[["s"]]) == [%{"n" => 1}]
+    assert Delivery.rows!(Engine.outputs(engine)[["h"]]) == [%{"origin" => "kept"}]
+    assert Delivery.rows!(Engine.outputs(engine)[["s"]]) == [%{"n" => 1}]
 
     # A list delivery is packed under the input's schema, so the host reads a table.
     engine = engine |> Engine.push(%{in: Delivery.new!(rows)}, %{in: @schema}, 1) |> Engine.run(1)
-    assert Delivery.rows(Engine.outputs(engine)[["h"]]) == [%{"origin" => "none"}]
+    assert Delivery.rows!(Engine.outputs(engine)[["h"]]) == [%{"origin" => "none"}]
   end
 
   @tag verifies: "derived-engine-columns"
@@ -234,7 +234,7 @@ defmodule Macaw.Data.Derived.EngineColumnsTest do
       )
 
     detached = Table.detached(Table.slice(table, 1, 1))
-    assert Table.rows(detached) == Table.rows(Table.slice(table, 1, 1))
+    assert Table.rows!(detached) == Table.rows!(Table.slice(table, 1, 1))
     assert Table.origin(detached) == nil
     refute holds?(detached, &is_function/1)
     refute holds?(detached, &(&1 == {:secret, "token"}))
@@ -355,7 +355,7 @@ defmodule Macaw.Data.Derived.EngineColumnsTest do
     columns =
       Derived.new!(id: :s, from: [in: nil], schema: out, function: :columns_sum, input: :columns)
 
-    {rows_work, _} = recompute(rows, &Host.Wide.rows_sum/1, &Table.rows/1)
+    {rows_work, _} = recompute(rows, &Host.Wide.rows_sum/1, &Table.rows!/1)
     {with_kernels, elixir} = recompute(columns, &Host.Wide.columns_sum/1, & &1)
 
     assert elixir * 10 <= rows_work

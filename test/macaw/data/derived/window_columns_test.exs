@@ -140,11 +140,11 @@ defmodule Macaw.Data.Derived.WindowColumnsTest do
       table = chunked(header, groups, skip, sorted)
 
       columns = Derived.window(table, %{last: n}, schema)
-      rows = Derived.window(Table.rows(table), %{last: n}, schema)
+      rows = Derived.window(Table.rows!(table), %{last: n}, schema)
 
       assert Table.equal?(columns, packed(header, rows)),
              "#{inspect(kind)} #{inspect(identity)} last #{n}: " <>
-               "#{inspect(Table.rows(columns))} != #{inspect(rows)}"
+               "#{inspect(Table.rows!(columns))} != #{inspect(rows)}"
     end
   end
 

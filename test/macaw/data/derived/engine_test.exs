@@ -91,7 +91,7 @@ defmodule Macaw.Data.Derived.EngineTest do
       assert Engine.resolve(engine, [:cell], :nothing) == :error
 
       engine = engine |> push(rows(3)) |> Engine.run(0)
-      assert Delivery.rows(Engine.outputs(engine)[["cell", "total"]]) == [%{"n" => 0}]
+      assert Delivery.rows!(Engine.outputs(engine)[["cell", "total"]]) == [%{"n" => 0}]
     end
   end
 
@@ -126,8 +126,8 @@ defmodule Macaw.Data.Derived.EngineTest do
       engine = Engine.run(engine, 100)
       assert Engine.due(engine) == nil
       assert Engine.runs(engine) == %{["a"] => 1, ["b"] => 1, ["c"] => 1, ["d"] => 1}
-      assert Delivery.rows(Engine.outputs(engine)[["c"]]) == [%{"n" => 2 + 30}]
-      assert Delivery.rows(Engine.outputs(engine)[["d"]]) == [%{"n" => 64}]
+      assert Delivery.rows!(Engine.outputs(engine)[["c"]]) == [%{"n" => 2 + 30}]
+      assert Delivery.rows!(Engine.outputs(engine)[["d"]]) == [%{"n" => 64}]
       assert Engine.status(engine) |> Map.values() |> Enum.uniq() == [:live]
     end
 
@@ -139,7 +139,7 @@ defmodule Macaw.Data.Derived.EngineTest do
       assert Engine.due(engine) == 100
       engine = Engine.run(engine, 100)
       assert Engine.runs(engine)[["c"]] == 1
-      assert Delivery.rows(Engine.outputs(engine)[["a"]]) == [%{"n" => 4}]
+      assert Delivery.rows!(Engine.outputs(engine)[["a"]]) == [%{"n" => 4}]
 
       same = push(engine, rows(4), 200)
       assert Engine.due(same) == nil
@@ -193,7 +193,7 @@ defmodule Macaw.Data.Derived.EngineTest do
         |> Engine.push(%{checks: Delivery.new!(rows)}, %{checks: checks}, 0)
         |> Engine.run(0)
 
-      assert Delivery.rows(Engine.outputs(engine)[["a"]]) == [%{"n" => 2}]
+      assert Delivery.rows!(Engine.outputs(engine)[["a"]]) == [%{"n" => 2}]
     end
   end
 
@@ -236,19 +236,19 @@ defmodule Macaw.Data.Derived.EngineTest do
       # names its kind and detail, not a nil output (macaw_data#57: under load a first compile
       # was once judged `{:compile, {:hung, 50}}`, fixed by #67 and #69).
       assert Engine.faults(engine) == %{}
-      assert Delivery.rows(Engine.outputs(engine)[["a"]]) == [%{"n" => -10.0}]
-      assert Delivery.rows(Engine.outputs(engine)[["d"]]) == [%{"n" => -9.0}]
+      assert Delivery.rows!(Engine.outputs(engine)[["a"]]) == [%{"n" => -10.0}]
+      assert Delivery.rows!(Engine.outputs(engine)[["d"]]) == [%{"n" => -9.0}]
 
       engine = engine |> push(rows(3)) |> Engine.run(0)
       assert Engine.faults(engine) == %{["a"] => %{kind: :raised, detail: ArithmeticError}}
       assert Engine.status(engine)[["a"]] == {:down, {:derived, "a", :raised}}
-      assert Delivery.rows(Engine.outputs(engine)[["a"]]) == [%{"n" => -10.0}]
+      assert Delivery.rows!(Engine.outputs(engine)[["a"]]) == [%{"n" => -10.0}]
       assert Engine.runs(engine) == %{["a"] => 2, ["d"] => 1}
 
       # A good answer clears it.
       engine = engine |> push(rows(4)) |> Engine.run(0)
       assert Engine.faults(engine) == %{}
-      assert Delivery.rows(Engine.outputs(engine)[["d"]]) == [%{"n" => 11.0}]
+      assert Delivery.rows!(Engine.outputs(engine)[["d"]]) == [%{"n" => 11.0}]
     end
 
     @tag verifies: "derived-engine-fault-kept"
@@ -307,7 +307,7 @@ defmodule Macaw.Data.Derived.EngineTest do
         |> push(rows(5))
         |> Engine.run(0)
 
-      assert Delivery.rows(Engine.outputs(engine)[["health"]]) == [
+      assert Delivery.rows!(Engine.outputs(engine)[["health"]]) == [
                %{"host" => "h1", "n" => 3, "state" => "error"},
                %{"host" => "h0", "n" => 2, "state" => "ok"}
              ]
@@ -321,7 +321,7 @@ defmodule Macaw.Data.Derived.EngineTest do
         |> Engine.run(0)
 
       # h1: cpu 10, 30, 50 → the newest two, 30 + 50; h0: 20 + 40. In the window h0 comes first.
-      assert Delivery.rows(Engine.outputs(engine)[["health"]]) == [
+      assert Delivery.rows!(Engine.outputs(engine)[["health"]]) == [
                %{"host" => "h0", "n" => 60, "state" => nil},
                %{"host" => "h1", "n" => 80, "state" => nil}
              ]
@@ -344,7 +344,7 @@ defmodule Macaw.Data.Derived.EngineTest do
         |> push(rows(5))
         |> Engine.run(0)
 
-      assert Delivery.rows(Engine.outputs(engine)[["health"]]) == [
+      assert Delivery.rows!(Engine.outputs(engine)[["health"]]) == [
                %{"host" => "h0", "n" => 1, "state" => nil},
                %{"host" => "h1", "n" => 1, "state" => nil}
              ]

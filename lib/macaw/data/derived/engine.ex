@@ -21,7 +21,7 @@ defmodule Macaw.Data.Derived.Engine do
       iex> hosts = Schema.new!(%{host: %{type: :category}})
       iex> engine = Engine.push(engine, %{hosts: Delivery.new!([%{host: "a"}, %{host: "b"}])}, %{hosts: hosts}, 0)
       iex> engine = Engine.run(engine, 0)
-      iex> Delivery.rows(Engine.outputs(engine)[["count"]])
+      iex> Delivery.rows!(Engine.outputs(engine)[["count"]])
       [%{"n" => 2}]
       iex> Engine.status(engine)
       %{["count"] => :live}
@@ -432,7 +432,8 @@ defmodule Macaw.Data.Derived.Engine do
   # or a tensor is read as rows, as a source's rows of those shapes always were.
   defp subject(%Delivery{rows: %Table{} = table}), do: table
   defp subject(%Delivery{rows: rows}) when is_list(rows), do: rows
-  defp subject(%Delivery{} = delivery), do: Delivery.rows(delivery)
+  # A delivery `Delivery.new/2` built: its rows' shape is checked, so they read.
+  defp subject(%Delivery{} = delivery), do: Delivery.rows!(delivery)
 
   defp input(engine, {:source, name}), do: {engine.seen[name], engine.source_schemas[name]}
 
@@ -546,7 +547,8 @@ defmodule Macaw.Data.Derived.Engine do
 
   defp rows(inputs), do: Enum.map(inputs, &%{&1 | rows: input_rows(&1.rows)})
 
-  defp input_rows(%Table{} = table), do: Table.rows(table)
+  # A table always answers its rows.
+  defp input_rows(%Table{} = table), do: Table.rows!(table)
   defp input_rows(rows) when is_list(rows), do: rows
 
   # -- answers and faults (spec/02 §8.3) ---------------------------------------------------

@@ -169,7 +169,7 @@ defmodule Macaw.Data.FinishColumnsTest do
         end
 
       columnar = finished(table, schema, fields)
-      by_rows = finished(Table.rows(table), schema, fields)
+      by_rows = finished(Table.rows!(table), schema, fields)
 
       assert %Table{} = columnar.rows
       assert Table.equal?(columnar.rows, packed(table, by_rows.rows))
@@ -178,7 +178,7 @@ defmodule Macaw.Data.FinishColumnsTest do
       if ask != :latest do
         assert Table.equal?(
                  Derived.window(table, %{window: window}, schema),
-                 packed(table, Derived.window(Table.rows(table), %{window: window}, schema))
+                 packed(table, Derived.window(Table.rows!(table), %{window: window}, schema))
                )
       end
     end
@@ -249,7 +249,7 @@ defmodule Macaw.Data.FinishColumnsTest do
         Finish.finish!(Delivery.new!(table, served: served), description, request, reduce: reduce)
 
       by_rows =
-        Finish.finish!(Delivery.new!(Table.rows(table), served: served), description, request,
+        Finish.finish!(Delivery.new!(Table.rows!(table), served: served), description, request,
           reduce: reduce
         )
 
@@ -277,7 +277,7 @@ defmodule Macaw.Data.FinishColumnsTest do
       box = %{west: west, south: south, east: east, north: north}
 
       columnar = finished(table, schema, box: box)
-      by_rows = finished(Table.rows(table), schema, box: box)
+      by_rows = finished(Table.rows!(table), schema, box: box)
 
       assert Table.equal?(columnar.rows, packed(table, by_rows.rows))
       assert columnar.served == by_rows.served
@@ -398,7 +398,7 @@ defmodule Macaw.Data.FinishColumnsTest do
       table = table_of([{:f, type}, {:i, :number}], rows, cuts, nil)
       order = [{field, direction}]
 
-      {:ok, sorted} = Order.sort(Table.rows(table), order, schema)
+      {:ok, sorted} = Order.sort(Table.rows!(table), order, schema)
       assert Columns.ordered(table, order, schema) == {:ok, Enum.map(sorted, &Table.get(&1, :i))}
     end
   end

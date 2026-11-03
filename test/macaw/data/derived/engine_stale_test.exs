@@ -99,7 +99,7 @@ defmodule Macaw.Data.Derived.EngineStaleTest do
       assert Engine.faults(engine) == %{}
 
       for path <- [["stored"], ["stored_columns"], ["host"], ["host_columns"]] do
-        assert Delivery.rows(Engine.outputs(engine)[path]) == [%{"n" => 5}]
+        assert Delivery.rows!(Engine.outputs(engine)[path]) == [%{"n" => 5}]
         assert stale(engine, path) == (a? or b?), "#{inspect(path)} for #{inspect({a?, b?})}"
       end
 
@@ -111,7 +111,7 @@ defmodule Macaw.Data.Derived.EngineStaleTest do
   @tag verifies: "derived-context-facts"
   test "the context gives each input's stale, a derived input its output's" do
     engine = pulse(engine(), at(rows(1), true), at(rows(1), false), 0)
-    assert Delivery.rows(Engine.outputs(engine)[["sees"]]) == [%{"a" => "true", "b" => "false"}]
+    assert Delivery.rows!(Engine.outputs(engine)[["sees"]]) == [%{"a" => "true", "b" => "false"}]
 
     assert Derived.Context.new([
              %{
@@ -147,7 +147,7 @@ defmodule Macaw.Data.Derived.EngineStaleTest do
     # b repeats its stale answer, so it is idle by now; a moves on. The output is still
     # drawn from b's stale rows, so it is still stale (unlike the watermark, §8.6).
     engine = pulse(engine, at(rows(4), false), at(rows(3), true), 2_000)
-    assert Delivery.rows(Engine.outputs(engine)[["stored"]]) == [%{"n" => 7}]
+    assert Delivery.rows!(Engine.outputs(engine)[["stored"]]) == [%{"n" => 7}]
     assert stale(engine, ["stored"])
   end
 end

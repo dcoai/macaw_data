@@ -11,7 +11,7 @@ defmodule Macaw.Data.Operations.SeriesTest do
   @rows for i <- 0..5, do: %{t: i, v: rem(i * 7, 5), a: i, b: 5 - i, c: 1, k: "k#{rem(i, 2)}"}
 
   defp run(node, rows, context \\ %{}),
-    do: @registry |> Operations.apply!([node], rows, context) |> Table.rows()
+    do: @registry |> Operations.apply!([node], rows, context) |> Table.rows!()
 
   defp agrees(node, rows) do
     table = Operations.apply!(@registry, [node], rows)

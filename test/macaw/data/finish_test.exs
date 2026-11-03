@@ -110,8 +110,8 @@ defmodule Macaw.Data.FinishTest do
         request(region: %{"t" => [1, 20], "v" => [3, 4]})
       )
 
-    assert Enum.all?(Delivery.rows(d), &(&1["t"] <= 20 and &1["v"] in [3, 4]))
-    assert length(Delivery.rows(d)) == 8
+    assert Enum.all?(Delivery.rows!(d), &(&1["t"] <= 20 and &1["v"] in [3, 4]))
+    assert length(Delivery.rows!(d)) == 8
 
     assert Finish.finish!(
              hundred(),
@@ -151,7 +151,7 @@ defmodule Macaw.Data.FinishTest do
 
     d = Finish.finish!(Delivery.new!(rows), described(schema), request(latest: true))
 
-    assert Delivery.rows(d) == [
+    assert Delivery.rows!(d) == [
              %{"t" => 2, "host" => "b", "v" => 2},
              %{"t" => 3, "host" => "a", "v" => 3}
            ]
@@ -203,7 +203,7 @@ defmodule Macaw.Data.FinishTest do
 
     rows = for t <- 1..100, s <- ["a", "b"], do: %{"t" => t, "s" => s, "v" => :math.sin(t / 5)}
     d = Finish.finish!(Delivery.new!(rows), described(by_host), request(budget: 20))
-    counts = d |> Delivery.rows() |> Enum.frequencies_by(& &1["s"])
+    counts = d |> Delivery.rows!() |> Enum.frequencies_by(& &1["s"])
     assert counts["a"] > 0 and counts["b"] > 0 and Table.size(d |> Delivery.table!()) <= 20
 
     m4 = Finish.reduce!(hundred(), @numbers, 12, :m4)
@@ -214,7 +214,7 @@ defmodule Macaw.Data.FinishTest do
   test "an order the source did not honor is sorted; with a budget, its first rows are kept" do
     # "Slowest first": the true top rows, where LTTB would keep a shape of the series.
     d = Finish.finish!(hundred(), described(@numbers), request(order: [{"v", :desc}], budget: 10))
-    rows = Delivery.rows(d)
+    rows = Delivery.rows!(d)
 
     assert length(rows) == 10
     assert Enum.all?(rows, &(&1["v"] == 4))
@@ -227,7 +227,7 @@ defmodule Macaw.Data.FinishTest do
     assert {all.served.ordered, all.served.reduced_by} == {:runtime, nil}
 
     # An order the source honored is not redone; it said so itself.
-    honored = Delivery.new!(Delivery.rows(hundred()), served: [ordered: :source])
+    honored = Delivery.new!(Delivery.rows!(hundred()), served: [ordered: :source])
 
     assert Finish.finish!(honored, described(@numbers, [:order]), request(order: [{"t", :desc}])) ==
              honored
@@ -235,7 +235,7 @@ defmodule Macaw.Data.FinishTest do
     # A source that cut the rows to its own budget, or short of the window, gives a sample:
     # sorted here, the reader is told they need not be the first rows in the order.
     cut =
-      Delivery.new!(Enum.take_every(Delivery.rows(hundred()), 10), served: [reduced_by: :source])
+      Delivery.new!(Enum.take_every(Delivery.rows!(hundred()), 10), served: [reduced_by: :source])
 
     sample =
       Finish.finish!(
@@ -246,10 +246,10 @@ defmodule Macaw.Data.FinishTest do
 
     assert sample.served.ordered == :sample
 
-    assert Enum.map(Delivery.rows(sample), & &1["v"]) |> Enum.sort(:desc) ==
-             Enum.map(Delivery.rows(sample), & &1["v"])
+    assert Enum.map(Delivery.rows!(sample), & &1["v"]) |> Enum.sort(:desc) ==
+             Enum.map(Delivery.rows!(sample), & &1["v"])
 
-    capped = Delivery.new!(Delivery.rows(hundred()), served: [capped: true])
+    capped = Delivery.new!(Delivery.rows!(hundred()), served: [capped: true])
 
     assert Finish.finish!(capped, described(@numbers), request(order: [{"v", :asc}])).served.ordered ==
              :sample
@@ -304,7 +304,7 @@ defmodule Macaw.Data.FinishTest do
       finished = Finish.finish!(d, described(@numbers), request(order: order, budget: budget))
       expected = rows |> Macaw.Data.Source.Order.sort!(order, @numbers) |> Enum.take(budget)
 
-      assert Delivery.rows(finished) == expected
+      assert Delivery.rows!(finished) == expected
       assert finished.served.ordered == :runtime
     end
   end
@@ -325,7 +325,7 @@ defmodule Macaw.Data.FinishTest do
       finished =
         Finish.finish!(d, described(@numbers), request(window: [from, to], budget: budget))
 
-      kept = Delivery.rows(finished)
+      kept = Delivery.rows!(finished)
 
       assert Enum.all?(kept, &(&1 in rows))
       assert Enum.all?(kept, &Window.within?(&1["t"], [from, to]))

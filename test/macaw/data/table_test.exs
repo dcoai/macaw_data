@@ -25,32 +25,32 @@ defmodule Macaw.Data.TableTest do
     @tag verifies: "table-sources"
     property "a list of rows is itself, zero-copy" do
       check all(rows <- list_of(row_gen())) do
-        assert Table.rows(rows) === rows
+        assert Table.rows!(rows) === rows
       end
     end
 
     @tag verifies: "table-sources"
     property "rows(columns(rows)) == rows for a column map and a keyword list" do
       check all(rows <- list_of(row_gen(), min_length: 1)) do
-        assert Table.rows(columns(rows)) == rows
-        assert Table.rows(Map.to_list(columns(rows))) == rows
+        assert Table.rows!(columns(rows)) == rows
+        assert Table.rows!(Map.to_list(columns(rows))) == rows
       end
     end
 
     @tag verifies: "table-sources"
     test "tuple rows pass through" do
-      assert Table.rows([{1, 2}, {3, 4}]) === [{1, 2}, {3, 4}]
+      assert Table.rows!([{1, 2}, {3, 4}]) === [{1, 2}, {3, 4}]
     end
 
     @tag verifies: "table-sources"
     test "the empty list, map and keyword list are []" do
-      assert Table.rows([]) == []
-      assert Table.rows(%{}) == []
+      assert Table.rows!([]) == []
+      assert Table.rows!(%{}) == []
     end
 
     @tag verifies: "table-sources"
     test "string column names stay strings" do
-      assert Table.rows(%{"t" => [1, 2], "v" => [3, 4]}) == [
+      assert Table.rows!(%{"t" => [1, 2], "v" => [3, 4]}) == [
                %{"t" => 1, "v" => 3},
                %{"t" => 2, "v" => 4}
              ]
@@ -58,51 +58,49 @@ defmodule Macaw.Data.TableTest do
 
     @tag verifies: "table-sources"
     test "a keyword list of columns is columns, not rows, as table reads it" do
-      assert Table.rows(t: [1, 2], v: [3, 4]) == [%{t: 1, v: 3}, %{t: 2, v: 4}]
+      assert Table.rows!(t: [1, 2], v: [3, 4]) == [%{t: 1, v: 3}, %{t: 2, v: 4}]
     end
 
     @tag verifies: "table-sources"
     test "a keyword list of unequal columns is rows" do
-      assert Table.rows([{:a, [1]}, {:b, [1, 2]}]) == [{:a, [1]}, {:b, [1, 2]}]
+      assert Table.rows!([{:a, [1]}, {:b, [1, 2]}]) == [{:a, [1]}, {:b, [1, 2]}]
     end
 
     @tag verifies: "table-sources"
-    test "a map whose values are not equal-length lists is a caller error" do
-      assert_raise ArgumentError, ~r/expected every column/, fn ->
-        Table.rows(%{t: [1, 2], v: [3]})
-      end
+    test "a map whose values are not equal-length lists is a fault, and rows!/1 raises it" do
+      assert {:error, [{[_name], {:length, _n}}]} = Table.rows(%{t: [1, 2], v: [3]})
+      assert {:error, faults} = Table.rows(%{t: 1})
+      assert {[:t], {:type, :column}} in faults
 
-      assert_raise ArgumentError, fn -> Table.rows(%{t: 1}) end
+      error = assert_raise Macaw.Data.Error, fn -> Table.rows!(%{t: [1, 2], v: [3]}) end
+      assert {:error, error.reason} == Table.rows(%{t: [1, 2], v: [3]})
+      assert Exception.message(error) =~ ~r/^not a source of rows: [tv]: must hold [12] values/
     end
   end
 
   describe "rows/1 over Nx and Table.Reader" do
     @tag verifies: "table-sources"
     test "a rank-2 tensor yields one tuple per row" do
-      assert Table.rows(Nx.tensor([[1, 10], [2, 20], [3, 30]])) == [{1, 10}, {2, 20}, {3, 30}]
+      assert Table.rows!(Nx.tensor([[1, 10], [2, 20], [3, 30]])) == [{1, 10}, {2, 20}, {3, 30}]
     end
 
     @tag verifies: "table-sources"
     test "a rank-1 tensor yields its values" do
-      assert Table.rows(Nx.tensor([1.5, 2.5])) == [1.5, 2.5]
+      assert Table.rows!(Nx.tensor([1.5, 2.5])) == [1.5, 2.5]
     end
 
     @tag verifies: "table-sources"
     test "a map or keyword list of rank-1 tensors is columns, as one of lists is" do
-      rows = Table.rows(%{t: [1, 2], v: [3.0, 4.0]})
-      assert Table.rows(%{t: Nx.tensor([1, 2]), v: Nx.tensor([3.0, 4.0])}) == rows
-      assert Table.rows(t: Nx.tensor([1, 2]), v: [3.0, 4.0]) == rows
+      rows = Table.rows!(%{t: [1, 2], v: [3.0, 4.0]})
+      assert Table.rows!(%{t: Nx.tensor([1, 2]), v: Nx.tensor([3.0, 4.0])}) == rows
+      assert Table.rows!(t: Nx.tensor([1, 2]), v: [3.0, 4.0]) == rows
     end
 
     @tag verifies: "table-sources"
-    test "a column tensor of another rank, or of another length, is a caller error" do
-      assert_raise ArgumentError, ~r/expected every column/, fn ->
-        Table.rows(%{t: Nx.tensor([[1, 2]]), v: [3, 4]})
-      end
-
-      assert_raise ArgumentError, ~r/expected every column/, fn ->
-        Table.rows(%{t: Nx.tensor([1, 2]), v: [3]})
-      end
+    test "a column tensor of another rank, or of another length, is a fault" do
+      assert {:error, faults} = Table.rows(%{t: Nx.tensor([[1, 2]]), v: [3, 4]})
+      assert {[:t], {:type, :column}} in faults
+      assert {:error, [{[_name], {:length, _n}}]} = Table.rows(%{t: Nx.tensor([1, 2]), v: [3]})
     end
 
     @tag verifies: "table-sources"
@@ -127,13 +125,19 @@ defmodule Macaw.Data.TableTest do
     end
 
     @tag verifies: "table-sources"
-    test "a struct with no Table.Reader impl is the protocol's error" do
-      assert_raise Protocol.UndefinedError, fn -> Table.rows(~D[2024-01-01]) end
+    test "a struct with no Table.Reader impl is a fault, never the protocol's error" do
+      assert Table.rows(~D[2024-01-01]) == {:error, [{[], {:type, :source}}]}
     end
 
     @tag verifies: "table-sources"
-    test "any other rank is a caller error" do
-      assert_raise ArgumentError, ~r/rank 1 or 2/, fn -> Table.rows(Nx.tensor([[[1]]])) end
+    test "any other rank is a fault" do
+      assert Table.rows(Nx.tensor([[[1]]])) == {:error, [{[], {:rank, 3}}]}
+
+      assert_raise Macaw.Data.Error,
+                   ~r/^not a source of rows: source: is a tensor of rank 3/,
+                   fn ->
+                     Table.rows!(Nx.tensor([[[1]]]))
+                   end
     end
   end
 
@@ -491,7 +495,7 @@ defmodule Macaw.Data.TableTest do
     @tag verifies: "table-edge"
     test "a Table.Reader source yields its rows, keyed as the reader names its columns" do
       reader = %Macaw.Data.Test.Reader{columns: ["t", "v"], rows: [[1, 10.0], [2, 20.0]]}
-      assert Table.rows(reader) == [%{"t" => 1, "v" => 10.0}, %{"t" => 2, "v" => 20.0}]
+      assert Table.rows!(reader) == [%{"t" => 1, "v" => 10.0}, %{"t" => 2, "v" => 20.0}]
     end
 
     @tag verifies: "table-round-trip"
@@ -516,7 +520,7 @@ defmodule Macaw.Data.TableTest do
                 )
             ) do
         {:ok, table} = Table.from(rows, types: %{n: :number, f: :number, s: :text, t: :time})
-        assert Table.rows(table) == rows
+        assert Table.rows!(table) == rows
 
         for name <- Table.names(table),
             do: assert(length(Table.column(table, name)) == Table.size(table))
@@ -545,7 +549,7 @@ defmodule Macaw.Data.TableTest do
           |> Enum.reduce(fn piece, acc -> elem(Table.append(acc, piece), 1) end)
 
         sliced = Table.slice(table, start, count)
-        assert Table.rows(sliced) == Enum.slice(Table.rows(table), start, count)
+        assert Table.rows!(sliced) == Enum.slice(Table.rows!(table), start, count)
         assert Table.size(sliced) == length(Enum.slice(values, start, count))
       end
     end

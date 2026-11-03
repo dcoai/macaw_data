@@ -96,7 +96,7 @@ defmodule Macaw.Data.WindowPositionTest do
   defp reduced(rows, budget, method) do
     schema = Schema.new!(%{t: %{type: :time, window: true}, v: %{type: :number}})
     {:ok, delivery} = Finish.reduce(Delivery.new!(rows), schema, budget, method)
-    Enum.map(Delivery.rows(delivery), &Order.instant(&1.t))
+    Enum.map(Delivery.rows!(delivery), &Order.instant(&1.t))
   end
 
   # The rows the transform keeps over the time column on its own time scale; a series

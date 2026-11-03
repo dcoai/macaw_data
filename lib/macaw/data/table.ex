@@ -334,12 +334,13 @@ defmodule Macaw.Data.Table do
   def from(%__MODULE__{} = table, _opts), do: {:ok, table}
 
   def from(source, opts) do
-    with :ok <- source(source), do: from_rows(source, opts)
+    with {:ok, rows} <- rows(source), do: from_rows(rows, opts)
   end
 
   @doc """
   Whether `source` is of a shape `from/2` and `rows/1` read (spec/01 §1.1, spec/00 §5):
-  `:ok`, or every fault, `{path, reason}`. `rows/1` reads a source this accepts.
+  `:ok`, or every fault, `{path, reason}`. `rows/1` and `from/2` answer these faults for a
+  source this refuses.
 
   - a list of row maps, of tuple rows, or a keyword list of columns; else
     `{[], {:type, :rows}}`;
@@ -358,8 +359,7 @@ defmodule Macaw.Data.Table do
   @spec source(term()) :: :ok | {:error, [{list(), term()}, ...]}
   def source(source), do: Edge.source(source)
 
-  defp from_rows(source, opts) do
-    rows = rows(source)
+  defp from_rows(rows, opts) do
     given = Keyword.get(opts, :types, %{})
 
     rows
@@ -416,11 +416,37 @@ defmodule Macaw.Data.Table do
 
   def column(%__MODULE__{}, _name), do: nil
 
-  @doc "The rows, one map per row keyed by every column name, `nil` where missing."
-  @spec rows(source() | t()) :: [row()]
-  def rows(%__MODULE__{size: nil} = table), do: table |> warm() |> rows()
+  @doc """
+  The rows of a table or of any source: `{:ok, rows}`, or `source/1`'s `{:error, faults}`
+  for a source of no shape it reads (spec/01 §1.1, spec/00 §5). A table's rows are one map
+  per row keyed by every column name, `nil` where missing, and a table always answers
+  them. A list of rows is itself, uncopied, its tuple rows unchanged; a column map, a
+  tensor or a `Table.Reader` source is read one row at a time.
 
-  def rows(%__MODULE__{names: names} = table) do
+      iex> Macaw.Data.Table.rows(%{t: [1, 2], v: [3, 4]})
+      {:ok, [%{t: 1, v: 3}, %{t: 2, v: 4}]}
+      iex> Macaw.Data.Table.rows([%{t: 1}, 2])
+      {:error, [{[], {:type, :rows}}]}
+  """
+  @spec rows(source() | t()) :: {:ok, [row()]} | {:error, [{list(), term()}, ...]}
+  def rows(%__MODULE__{} = table), do: {:ok, table_rows(table)}
+  def rows(source), do: Edge.rows(source)
+
+  @doc "As `rows/1`, the rows alone, raising `Macaw.Data.Error` with the source's faults."
+  @spec rows!(source() | t()) :: [row()]
+  def rows!(source) do
+    case rows(source) do
+      {:ok, rows} ->
+        rows
+
+      {:error, faults} ->
+        raise Macaw.Data.Error, reason: faults, what: "not a source of rows", root: "source"
+    end
+  end
+
+  defp table_rows(%__MODULE__{size: nil} = table), do: table |> warm() |> table_rows()
+
+  defp table_rows(%__MODULE__{names: names} = table) do
     case names do
       [] ->
         List.duplicate(%{}, table.size)
@@ -429,8 +455,6 @@ defmodule Macaw.Data.Table do
         transpose(names, Enum.map(names, &column(table, &1)), [])
     end
   end
-
-  def rows(source), do: Edge.rows(source)
 
   # One row a step: the heads of every column under the names, then the tails.
   defp transpose(_names, [[] | _], acc), do: :lists.reverse(acc)
@@ -535,7 +559,7 @@ defmodule Macaw.Data.Table do
   defp aligned(%__MODULE__{} = table, other) do
     with :ok <- in_order(table, other) do
       inserted = %{
-        insert: rows(other),
+        insert: table_rows(other),
         retract: [],
         replace: [],
         schema: nil,
@@ -601,7 +625,7 @@ defmodule Macaw.Data.Table do
       if first == 0 and count in [nil, Chunk.size(chunk)] do
         chunk
       else
-        rows = rows(%__MODULE__{table | chunks: [{chunk, first, count}], size: count})
+        rows = table_rows(%__MODULE__{table | chunks: [{chunk, first, count}], size: count})
         id = if table.origin, do: Chunk.id(chunk)
         {:ok, chunk} = Chunk.of_rows(header(table), rows, id)
         chunk

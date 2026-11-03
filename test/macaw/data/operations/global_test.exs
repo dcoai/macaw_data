@@ -213,7 +213,7 @@ defmodule Macaw.Data.Operations.GlobalTest do
     property "every chunking gives the rows' answer" do
       check all(rows <- rows_gen(), node <- node_gen(), max_runs: 40) do
         table = table_of(rows)
-        read = Table.rows(table)
+        read = Table.rows!(table)
         expected = expected(table, oracle(read, node), node)
 
         for size <- [1, 7, :one] do
@@ -352,7 +352,7 @@ defmodule Macaw.Data.Operations.GlobalTest do
               max_runs: 60
             ) do
         table = table_of(rows, @typed)
-        expected = Enum.map(typed_oracle(Table.rows(table), field, order), & &1["i"])
+        expected = Enum.map(typed_oracle(Table.rows!(table), field, order), & &1["i"])
         node = %{op: "sort", field: field, order: order}
 
         for size <- [1, 7, :one] do

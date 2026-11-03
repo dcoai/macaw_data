@@ -618,7 +618,7 @@ defmodule Macaw.Data.Derived do
       iex> source = Macaw.Data.Derived.new!(id: :c, from: [in: nil], input: :columns,
       ...>   schema: %{n: %{type: :number}, s: %{type: :category, values: [:ok]}}, function: :f)
       iex> {:ok, table} = Macaw.Data.Derived.conform(source, %{n: [1, 2], s: [:ok, nil]})
-      iex> Macaw.Data.Table.rows(table)
+      iex> Macaw.Data.Table.rows!(table)
       [%{"n" => 1, "s" => "ok"}, %{"n" => 2, "s" => nil}]
       iex> Macaw.Data.Derived.conform(source, %{n: [1, "two"]})
       {:error, {1, "n", {:type, :number}}}
@@ -1001,7 +1001,7 @@ defmodule Macaw.Data.Derived do
 
   # Under `input: :columns` an entity may answer a table, read as its rows: they are
   # stamped with the entity's identity and joined as any entity's rows are (spec/02 §1.3).
-  defp entity_rows(%Table{} = table, :columns), do: {:ok, Table.rows(table)}
+  defp entity_rows(%Table{} = table, :columns), do: Table.rows(table)
   defp entity_rows(row, _input) when is_map(row) and not is_struct(row), do: {:ok, [row]}
   defp entity_rows(rows, _input) when is_list(rows), do: {:ok, rows}
   defp entity_rows(_other, _input), do: :error

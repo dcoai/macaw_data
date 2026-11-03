@@ -83,7 +83,7 @@ defmodule Macaw.Data.Derived.EngineContextTest do
     test "a function of one argument is called with its inputs alone" do
       engine = engine(%{["a"] => host(:a, :rows_only)}) |> push() |> Engine.run(0)
       assert_received {:rows_only, %{"hosts" => @rows}}
-      assert Delivery.rows(Engine.outputs(engine)[["a"]]) == [%{"n" => 1}]
+      assert Delivery.rows!(Engine.outputs(engine)[["a"]]) == [%{"n" => 1}]
     end
 
     @tag verifies: "derived-engine-run"
@@ -148,7 +148,7 @@ defmodule Macaw.Data.Derived.EngineContextTest do
       engine = engine(%{["a"] => stored(:a, elixir)}) |> push() |> Engine.run(0)
 
       assert Engine.faults(engine) == %{}
-      assert Delivery.rows(Engine.outputs(engine)[["a"]]) == [%{"n" => 7}]
+      assert Delivery.rows!(Engine.outputs(engine)[["a"]]) == [%{"n" => 7}]
     end
 
     # Typed colors and literal colors in the rows and in the context's schema reach the
@@ -200,7 +200,7 @@ defmodule Macaw.Data.Derived.EngineContextTest do
 
       assert Engine.faults(engine) == %{}
 
-      assert Delivery.rows(Engine.outputs(engine)[["a"]]) == [
+      assert Delivery.rows!(Engine.outputs(engine)[["a"]]) == [
                %{
                  "n" => 1,
                  "typed" => {:color, "good"},
@@ -256,7 +256,7 @@ defmodule Macaw.Data.Derived.EngineContextTest do
 
       engine = engine(%{["per"] => source}) |> push() |> Engine.run(0)
 
-      assert Delivery.rows(Engine.outputs(engine)[["per"]]) == [
+      assert Delivery.rows!(Engine.outputs(engine)[["per"]]) == [
                %{"host" => "a", "n" => 6},
                %{"host" => "b", "n" => 6}
              ]
@@ -319,7 +319,7 @@ defmodule Macaw.Data.Derived.EngineContextTest do
       source = Engine.source!(engine, [:a], viewer_independent: true)
       assert %Output{viewer_independent: true} = source
       assert {:ok, delivery} = Source.fetch(source, description, request)
-      assert Delivery.rows(delivery) == [%{"n" => 2}]
+      assert Delivery.rows!(delivery) == [%{"n" => 2}]
     end
 
     @tag verifies: "derived-output-kit"

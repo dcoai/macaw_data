@@ -124,7 +124,7 @@ defmodule Macaw.Data.TableChunksTest do
 
       assert Table.column(table, "v") === [1, 2, 1.5, nil]
       assert Table.column(table, "c") == ["a", "b", "b", "a"]
-      assert Table.rows(table) |> length() == 4
+      assert Table.rows!(table) |> length() == 4
       assert Table.row(table, 2) == %{"v" => 1.5, "c" => "b"}
     end
   end

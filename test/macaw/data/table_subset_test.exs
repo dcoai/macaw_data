@@ -106,7 +106,7 @@ defmodule Macaw.Data.TableSubsetTest do
 
   # The same rows packed afresh, column by column.
   defp packed(table, indexes) do
-    rows = Table.rows(table) |> List.to_tuple()
+    rows = Table.rows!(table) |> List.to_tuple()
 
     Table.new!(
       for name <- Table.names(table) do

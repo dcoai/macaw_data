@@ -175,7 +175,7 @@ defmodule Macaw.Data.SourceTest do
         Request.new!(now: @now, window: [3, 5], params: %{"scale" => 10})
       )
 
-    assert Enum.map(Delivery.rows(delivery), & &1["v"]) == [30, 40, 50]
+    assert Enum.map(Delivery.rows!(delivery), & &1["v"]) == [30, 40, 50]
 
     assert Source.fetch(%Pusher{answer: :bad}, d, Request.new!(now: @now, params: %{"y" => "a"})) ==
              {:error, {:bad_fetch, {:rows, []}}}

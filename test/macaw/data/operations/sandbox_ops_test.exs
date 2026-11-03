@@ -56,7 +56,7 @@ defmodule Macaw.Data.Operations.SandboxOpsTest do
           Enum.take(@rows, 3)
         )
 
-      assert Macaw.Data.Table.rows(direct) |> Enum.map(& &1.host) == ["b", "a", "a"]
+      assert Macaw.Data.Table.rows!(direct) |> Enum.map(& &1.host) == ["b", "a", "a"]
 
       assert Ops.transform!(Enum.take(@rows, 3), "sort", %{field: :cpu, order: "descending"})
              |> Enum.map(& &1.host) == ["b", "a", "a"]
@@ -227,7 +227,7 @@ defmodule Macaw.Data.Operations.SandboxOpsTest do
         )
 
       assert Engine.faults(open) == %{}
-      assert Delivery.rows(Engine.outputs(run(open))[["d"]]) == [%{"n" => 200}]
+      assert Delivery.rows!(Engine.outputs(run(open))[["d"]]) == [%{"n" => 200}]
     end
 
     @tag verifies: "operations-sandbox-calls"

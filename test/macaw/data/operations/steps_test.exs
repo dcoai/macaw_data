@@ -217,7 +217,7 @@ defmodule Macaw.Data.Operations.StepsTest do
     @tag verifies: "operations-step-chunking"
     property "filter, take and window answer the rows' answer under every chunking" do
       check all(table <- table_gen(), node <- node_gen(), max_runs: 40) do
-        expected = table |> Table.rows() |> oracle(node) |> of_rows()
+        expected = table |> Table.rows!() |> oracle(node) |> of_rows()
         step = Map.delete(node, :now)
 
         for size <- [1, 7, :one] do
@@ -385,7 +385,7 @@ defmodule Macaw.Data.Operations.StepsTest do
             ) do
         :rand.seed(:exsss, {seed, seed, seed})
         context = %{schema: @schema}
-        rows = table |> Table.rows() |> Enum.map(&Map.update!(&1, "k", fn k -> k end))
+        rows = table |> Table.rows!() |> Enum.map(&Map.update!(&1, "k", fn k -> k end))
         {_, expected} = expected(table, combined(rows, node), node)
 
         for size <- [1, 7, :one] do

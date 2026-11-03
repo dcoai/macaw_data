@@ -55,7 +55,7 @@ defmodule Macaw.Data.Delivery do
       iex> alias Macaw.Data.Delivery
       iex> rows = [%{t: 1, v: 3}, %{t: 2, v: nil}]
       iex> {:ok, d} = Delivery.new(rows, served: [window: [0, 10]], schema: "ab12")
-      iex> Delivery.rows(d) === rows
+      iex> Delivery.rows(d) === {:ok, rows}
       true
       iex> {d.served.window, d.served.capped, d.served.reduced_by}
       {[0, 10], false, nil}
@@ -213,12 +213,33 @@ defmodule Macaw.Data.Delivery do
   end
 
   @doc """
-  The rows a delivery carries, as `Macaw.Data.Table.rows/1` reads its source: a row list
-  itself, uncopied, its tuple rows unchanged; a table, a column map or a tensor one row
-  at a time. Nothing is rewritten.
+  The rows a delivery carries, as `Macaw.Data.Table.rows/1` reads its source:
+  `{:ok, rows}`, a row list itself, uncopied, its tuple rows unchanged; a table, a column
+  map or a tensor one row at a time. Nothing is rewritten. `new/2` checks the rows' shape,
+  so a delivery it built always answers them; rows of a delivery built another way that
+  `Macaw.Data.Table.source/1` refuses are its faults under `[:rows]`.
   """
-  @spec rows(t()) :: [Table.row()]
-  def rows(%__MODULE__{rows: rows}), do: Table.rows(rows)
+  @spec rows(t()) :: {:ok, [Table.row()]} | {:error, [fault(), ...]}
+  def rows(%__MODULE__{rows: rows}) do
+    case Table.rows(rows) do
+      {:ok, _rows} = ok -> ok
+      {:error, faults} -> {:error, Enum.map(faults, fn {path, why} -> {[:rows | path], why} end)}
+    end
+  end
+
+  @doc "As `rows/1`, the rows alone, raising `Macaw.Data.Error` in `format_error/1`'s words."
+  @spec rows!(t()) :: [Table.row()]
+  def rows!(%__MODULE__{} = delivery) do
+    case rows(delivery) do
+      {:ok, rows} ->
+        rows
+
+      {:error, faults} ->
+        raise Macaw.Data.Error,
+          reason: faults,
+          message: "the rows cannot be read: " <> words(faults)
+    end
+  end
 
   @doc """
   The rows as maps, for a reader that reads them by name (finishing, push, a reducer):
@@ -229,17 +250,17 @@ defmodule Macaw.Data.Delivery do
   (`{:width, names, width}`, `{:rank, rank}`).
   """
   @spec named_rows(t()) :: {:ok, [map()]} | {:error, [fault(), ...]}
-  def named_rows(%__MODULE__{rows: rows, names: names}) do
+  def named_rows(%__MODULE__{rows: rows, names: names} = delivery) do
     case {Table.unnamed?(rows), names} do
       {false, _names} ->
-        {:ok, Table.rows(rows)}
+        rows(delivery)
 
       {true, nil} ->
         {:error, [{[:names], :required}]}
 
       {true, names} ->
         case Table.named(rows, names) do
-          {:ok, named} -> {:ok, Table.rows(named)}
+          {:ok, named} -> rows(%{delivery | rows: named})
           {:error, why} -> {:error, [{[:names], why}]}
         end
     end
@@ -293,7 +314,7 @@ defmodule Macaw.Data.Delivery do
   @spec empty?(t()) :: boolean()
   def empty?(%__MODULE__{rows: %Table{} = table}), do: Table.size(table) == 0
   def empty?(%__MODULE__{rows: rows}) when is_list(rows), do: rows == []
-  def empty?(%__MODULE__{} = delivery), do: rows(delivery) == []
+  def empty?(%__MODULE__{} = delivery), do: rows(delivery) == {:ok, []}
 
   defp named(source, nil), do: {:ok, source}
   defp named(source, names), do: Table.named(source, names)

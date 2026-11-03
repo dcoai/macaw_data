@@ -584,7 +584,8 @@ defmodule Macaw.Data.Source.Push do
     if Enum.map(Table.names(table), &{&1, Table.column_type(table, &1)}) == header(schema) do
       held
     else
-      {:ok, again} = holding(push, %{held | rows: Table.rows(table)}, schema)
+      # A held table always answers its rows.
+      {:ok, again} = holding(push, %{held | rows: Table.rows!(table)}, schema)
       again
     end
   end

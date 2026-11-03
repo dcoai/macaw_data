@@ -142,7 +142,7 @@ defmodule Macaw.Data.TablePackingTest do
       table = Table.new!([{:t, :time, values}])
       assert {:zoned, _, _, 0, {@cet, @utc, @mst, @mdt}, _} = storage(table, :t)
       assert Table.column(table, :t) == values
-      assert Enum.map(Table.rows(table), & &1.t) == values
+      assert Enum.map(Table.rows!(table), & &1.t) == values
     end
 
     @tag verifies: "table-times"
@@ -214,7 +214,7 @@ defmodule Macaw.Data.TablePackingTest do
       assert for(<<o::little-32 <- offsets>>, do: o) == [0, 2, 6]
 
       assert Table.column(table, :k) == ["ok", "ok", nil, "down", "down", "ok"]
-      assert Enum.map(Table.rows(table), &Table.get(&1, "k")) == Table.column(table, :k)
+      assert Enum.map(Table.rows!(table), &Table.get(&1, "k")) == Table.column(table, :k)
       assert Table.row(table, 0) == %{k: "ok"}
     end
 
@@ -263,7 +263,7 @@ defmodule Macaw.Data.TablePackingTest do
       assert Table.column(packed, :k) == expected
       assert Table.column(kept, :k) == expected ++ [1]
       assert Table.column(binary, :k) == expected ++ [<<0xFF>>]
-      assert Enum.map(Table.rows(kept), & &1.k) == expected ++ [1]
+      assert Enum.map(Table.rows!(kept), & &1.k) == expected ++ [1]
     end
 
     @tag verifies: "table-text"
@@ -464,7 +464,7 @@ defmodule Macaw.Data.TablePackingTest do
                    Enum.slice(values, start, count)
         end
 
-        rows = Table.rows(table)
+        rows = Table.rows!(table)
         assert length(rows) == n
 
         for {name, values} <- expected,

@@ -154,7 +154,7 @@ defmodule Macaw.Data.Derived.EngineChangeTest do
              :number
            ]
 
-    assert Table.rows(table) == [%{"c" => "ok", "t" => nil, "v" => 1}]
+    assert Table.rows!(table) == [%{"c" => "ok", "t" => nil, "v" => 1}]
   end
 
   # The row comparison this replaced used `!=`, under which 1 and 1.0 were one value, and

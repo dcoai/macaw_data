@@ -56,19 +56,25 @@ defmodule Macaw.Data.Table.Edge do
 
   def source(_other), do: {:error, [{[], {:type, :source}}]}
 
-  # The rows of a source that is not a table, as `Macaw.Data.Table.rows/1` documents.
-  def rows([]), do: []
-  # A delivery's rows as they are (macaw#185). A map pattern, so this module needs no
-  # delivery at compile time.
+  # The rows of a source that is not a table, as `Macaw.Data.Table.rows/1` documents:
+  # `{:ok, rows}`, or `source/1`'s faults. A delivery's rows as they are (macaw#185), read
+  # by `Table.rows/1`; a map pattern, so this module needs no delivery at compile time.
   def rows(%{__struct__: Macaw.Data.Delivery, rows: rows}), do: Macaw.Data.Table.rows(rows)
+
+  def rows(source) do
+    with :ok <- source(source), do: {:ok, read(source)}
+  end
+
+  # A source `source/1` accepts, read: a column's length and a tensor's rank are checked.
+  defp read([]), do: []
   # A map pattern, not `%Nx.Tensor{}`: a struct pattern needs the struct defined at
   # compile time, and a consumer without Nx has none.
-  def rows(%{__struct__: Nx.Tensor} = tensor), do: tensor_rows(tensor, Nx.rank(tensor))
-  def rows(%_{} = struct), do: struct |> Table.to_rows() |> Enum.to_list()
-  def rows(map) when map_size(map) == 0, do: []
-  def rows(map) when is_map(map), do: column_rows(Map.to_list(map))
+  defp read(%{__struct__: Nx.Tensor} = tensor), do: tensor_rows(tensor, Nx.rank(tensor))
+  defp read(%_{} = struct), do: struct |> Table.to_rows() |> Enum.to_list()
+  defp read(map) when map_size(map) == 0, do: []
+  defp read(map) when is_map(map), do: column_rows(Map.to_list(map))
 
-  def rows([first | _] = list) do
+  defp read([first | _] = list) do
     if columns?(list, first), do: column_rows(list), else: list
   end
 
@@ -178,15 +184,17 @@ defmodule Macaw.Data.Table.Edge do
 
   # -- types suggested ------------------------------------------------------------------------
 
+  # Both read a source through `Table.rows!/1`, so a source `source/1` refuses raises its
+  # faults: their answering a value instead is macaw_data#161.
   def time_columns(source) do
-    rows = rows(source)
+    rows = Macaw.Data.Table.rows!(source)
 
     rows
     |> column_names()
     |> Enum.filter(fn name -> temporal_column?(Enum.map(rows, &Map.get(&1, name))) end)
   end
 
-  def column_types(source), do: source |> rows() |> infer()
+  def column_types(source), do: source |> Macaw.Data.Table.rows!() |> infer()
 
   defp infer(rows) do
     for name <- column_names(rows),
@@ -257,30 +265,16 @@ defmodule Macaw.Data.Table.Edge do
 
   defp column_values(values), do: values
 
+  # Columns `source/1` (or `columns?/2`) found to be lists, or rank-1 tensors, of one length.
   defp column_rows(pairs) do
-    columns = Enum.map(pairs, fn {name, values} -> {name, column_values(values)} end)
-    [{_, first} | _] = columns
-    n = if is_list(first), do: length(first), else: 0
+    names = Enum.map(pairs, &elem(&1, 0))
 
-    Enum.each(columns, fn {name, values} ->
-      unless is_list(values) and length(values) == n do
-        raise ArgumentError,
-              "expected every column to be a list of #{n} values, got #{inspect(name)}: " <>
-                inspect(values)
-      end
-    end)
-
-    names = Enum.map(columns, &elem(&1, 0))
-
-    columns
-    |> Enum.map(&elem(&1, 1))
+    pairs
+    |> Enum.map(fn {_name, values} -> column_values(values) end)
     |> Enum.zip_with(fn values -> names |> Enum.zip(values) |> Map.new() end)
   end
 
+  # A tensor `source/1` found of rank 1 or 2.
   defp tensor_rows(tensor, 1), do: Nx.to_list(tensor)
   defp tensor_rows(tensor, 2), do: tensor |> Nx.to_list() |> Enum.map(&List.to_tuple/1)
-
-  defp tensor_rows(tensor, rank) do
-    raise ArgumentError, "expected a tensor of rank 1 or 2, got rank #{rank}: #{inspect(tensor)}"
-  end
 end

@@ -18,7 +18,7 @@ defmodule Macaw.Data.Operations do
       iex> alias Macaw.Data.Operations
       iex> {:ok, registry} = Operations.registry([Macaw.Data.Test.Ops])
       iex> {:ok, table} = Operations.apply(registry, [%{op: "double", field: "v"}], [%{v: 2}], %{})
-      iex> Macaw.Data.Table.rows(table)
+      iex> Macaw.Data.Table.rows!(table)
       [%{:v => 2, "double" => 4}]
       iex> Operations.validate(registry, [%{op: "doubel"}], %{})
       {:error, [{[0, "op"], {:unknown, :transform, "doubel"}}]}

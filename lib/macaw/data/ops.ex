@@ -137,7 +137,7 @@ defmodule Macaw.Data.Ops do
     else
       with {:ok, table} <-
              Operations.apply(registry, [Map.put(options, "op", name)], rows, %{}),
-           do: {:ok, Table.rows(table)}
+           do: Table.rows(table)
     end
   end
 

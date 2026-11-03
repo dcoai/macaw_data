@@ -282,7 +282,7 @@ defmodule Macaw.Data.Derived.Columns do
 
   @doc "The rows, one map a row keyed by every column name (`Macaw.Data.Table.rows/1`)."
   @spec rows(Table.t()) :: result([map()])
-  def rows(%Table{} = table), do: {:ok, Table.rows(table)}
+  def rows(%Table{} = table), do: Table.rows(table)
   def rows(_other), do: {:error, {:type, :table}}
 
   # -- the ! variants ----------------------------------------------------------------------

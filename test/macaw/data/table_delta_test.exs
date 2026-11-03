@@ -97,7 +97,7 @@ defmodule Macaw.Data.TableDeltaTest do
       assert Chunk.delta?(settled) and settled.columns == old.columns
       refute Chunk.delta?(chunk(applied, slot(10)))
 
-      assert Table.rows(applied) ==
+      assert Table.rows!(applied) ==
                sorted(
                  [row("a", 1, 1)] ++ rest ++ [row("c", 3, 5), row("c", 11, 6), row("a", 15, 4)]
                )
@@ -181,7 +181,7 @@ defmodule Macaw.Data.TableDeltaTest do
 
       # One copy per unit of weight.
       one = apply!(table, settled: 10, retract: [row("a", 1, 1)])
-      assert Enum.count(Table.rows(one), &(&1 == row("a", 1, 1))) == 1
+      assert Enum.count(Table.rows!(one), &(&1 == row("a", 1, 1))) == 1
     end
   end
 
@@ -234,13 +234,13 @@ defmodule Macaw.Data.TableDeltaTest do
         applied = apply!(table, Map.put(changes, :settled, 30))
         expected = directly(held, changes)
 
-        assert Table.rows(applied) == expected
+        assert Table.rows!(applied) == expected
         ts = Table.column(applied, "t")
         assert ts == Enum.sort_by(ts, &{&1 == nil, &1})
 
         # Compacted, each chunk keeps its id, digest and version, and the contents.
         compacted = Table.compact(applied)
-        assert Table.rows(compacted) == expected
+        assert Table.rows!(compacted) == expected
 
         for {{before, _, _}, {after_, _, _}} <-
               Enum.zip(Table.chunks(applied), Table.chunks(compacted)) do
@@ -277,7 +277,7 @@ defmodule Macaw.Data.TableDeltaTest do
       settled = chunk(applied, slot(0))
       assert Chunk.delta?(settled) and settled.columns == old.columns
 
-      assert Table.rows(applied) ==
+      assert Table.rows!(applied) ==
                sorted([
                  row("a", 1, 1),
                  row("b", 2, 2),
@@ -304,7 +304,7 @@ defmodule Macaw.Data.TableDeltaTest do
       replaced = apply!(table, settled: 10, replace: replace)
 
       assert Chunk.delta?(chunk(replaced, slot(0)))
-      assert Table.rows(replaced) == sorted(base ++ [row("a", 6, 2)])
+      assert Table.rows!(replaced) == sorted(base ++ [row("a", 6, 2)])
     end
   end
 
@@ -333,7 +333,7 @@ defmodule Macaw.Data.TableDeltaTest do
       applied = apply!(cold(four()), settled: 10, replace: replace)
       refute_received :fetched
 
-      assert Table.rows(applied) == [
+      assert Table.rows!(applied) == [
                row("a", 1, 1),
                row("b", 2, 2),
                row("b", 8, 4),
@@ -417,7 +417,7 @@ defmodule Macaw.Data.TableDeltaTest do
       refute Chunk.delta?(compacted)
       assert Chunk.id(compacted) == slot(0)
       assert Chunk.digest(compacted) == Chunk.digest(chunk(table(Enum.drop(eight, 2)), slot(0)))
-      assert Table.rows(twice) == Enum.drop(eight, 2)
+      assert Table.rows!(twice) == Enum.drop(eight, 2)
 
       # Compacting keeps what was read: the same digest and version before and after.
       [{delta, _, _}] = Table.chunks(once)

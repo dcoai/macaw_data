@@ -182,12 +182,12 @@ defmodule Macaw.Data.WindowKindsTest do
       assert {:ok, %Delivery{rows: by_rows}} = finish(rows, fields)
       assert by_rows == expected
       assert {:ok, %Delivery{rows: %Table{} = columnar}} = finish(table, fields)
-      assert Enum.map(Table.rows(columnar), & &1.v) == Enum.map(expected, & &1.v)
+      assert Enum.map(Table.rows!(columnar), & &1.v) == Enum.map(expected, & &1.v)
 
       unless region? do
         assert Derived.window(rows, %{window: ordered}, @schema) == expected
         derived = Derived.window(table, %{window: ordered}, @schema)
-        assert Enum.map(Table.rows(derived), & &1.v) == Enum.map(expected, & &1.v)
+        assert Enum.map(Table.rows!(derived), & &1.v) == Enum.map(expected, & &1.v)
       end
     end
   end
