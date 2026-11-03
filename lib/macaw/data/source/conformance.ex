@@ -607,6 +607,8 @@ defmodule Macaw.Data.Source.Conformance do
           [window: [~U[2000-01-01 00:00:00Z], ~U[2000-01-02 00:00:00Z]]],
           [window: [0, 1]],
           [window: [0, ~U[2000-01-01 00:00:00Z]]],
+          [window: [1, 0]],
+          [window: [~U[2000-01-02 00:00:00Z], ~N[2000-01-01 00:00:00]]],
           [box: %{west: 0, south: 0, east: 1, north: 1}],
           [region: %{"no such field" => [0, 1]}, latest: true]
         ],

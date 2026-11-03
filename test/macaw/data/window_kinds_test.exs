@@ -167,15 +167,17 @@ defmodule Macaw.Data.WindowKindsTest do
 
       assert Window.trim(rows, :t, window) == expected
 
-      fields =
-        if region? do
-          inverted = from && to && Window.compare(from, to) == :gt
-          [region: %{t: if(inverted, do: [to, from], else: window)}]
-        else
-          [window: window]
-        end
+      # An inverted window or range is the caller's fault (macaw_data#122); its ends
+      # swapped are the range asked.
+      inverted = from && to && Window.compare(from, to) == :gt
+      ordered = if inverted, do: [to, from], else: window
 
-      expected = if region?, do: kept(rows, Keyword.fetch!(fields, :region).t), else: expected
+      if inverted do
+        assert finish(rows, window: window) == {:error, [{[:window], {:window, :inverted}}]}
+      end
+
+      fields = if region?, do: [region: %{t: ordered}], else: [window: ordered]
+      expected = kept(rows, ordered)
 
       assert {:ok, %Delivery{rows: by_rows}} = finish(rows, fields)
       assert by_rows == expected
@@ -183,8 +185,8 @@ defmodule Macaw.Data.WindowKindsTest do
       assert Enum.map(Table.rows(columnar), & &1.v) == Enum.map(expected, & &1.v)
 
       unless region? do
-        assert Derived.window(rows, %{window: window}, @schema) == expected
-        derived = Derived.window(table, %{window: window}, @schema)
+        assert Derived.window(rows, %{window: ordered}, @schema) == expected
+        derived = Derived.window(table, %{window: ordered}, @schema)
         assert Enum.map(Table.rows(derived), & &1.v) == Enum.map(expected, & &1.v)
       end
     end

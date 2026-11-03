@@ -330,7 +330,8 @@ defmodule Macaw.Data.Window do
   @doc """
   Whether a schema can answer a request's window, box, region, latest and order: `:ok`, or
   `{:error, faults}`, every fault `{path, reason}` by path. A window must apply to a
-  `:time` or `:number` window field; a box needs a `:point` window field; each region
+  `:time` or `:number` window field, two ends of its type, not inverted (`from` after `to`
+  by `compare/2` is `{[:window], {:window, :inverted}}`), as a region's range is; a box needs a `:point` window field; each region
   field is described, `:time` or `:number`, its range two ends of its type, not inverted;
   `latest` needs a `:time` or `:number` window field and a declared identity; each field
   of an `order` is described and of a type with an order (`Macaw.Data.Source.Order.faults/2`).
@@ -345,8 +346,12 @@ defmodule Macaw.Data.Window do
       iex> schema = Schema.new!(%{t: %{type: :number, window: true}, v: %{type: :number}})
       iex> Macaw.Data.Window.check(%{region: %{t: [0, 5]}}, schema)
       :ok
-      iex> Macaw.Data.Window.check(%{window: [9, 1], at: 3}, schema)
+      iex> Macaw.Data.Window.check(%{window: [1, 9], at: 3}, schema)
       {:error, [{[:at], :unknown_key}]}
+      iex> Macaw.Data.Window.check(%{window: [9, 1]}, schema)
+      {:error, [{[:window], {:window, :inverted}}]}
+      iex> Macaw.Data.Window.check(%{window: [5, 5]}, schema)
+      :ok
 
       iex> alias Macaw.Data.{Schema, Source.Request}
       iex> schema = Schema.new!(%{t: %{type: :number, window: true}, s: %{type: :category}})
@@ -399,8 +404,18 @@ defmodule Macaw.Data.Window do
   defp window_faults(nil, _type), do: []
   defp window_faults(_window, nil), do: [{[:window], {:window, :no_window_field}}]
 
-  defp window_faults(window, type) when type in [:time, :number],
-    do: if(applies?(window, type), do: [], else: [{[:window], {:type, type}}])
+  # A window of the field's type is ordered as a region's range is (macaw_data#122): `from`
+  # after `to` is inverted; an equal pair (an instant) and an open end are not.
+  defp window_faults(window, type) when type in [:time, :number] do
+    case applies?(window, type) do
+      true ->
+        [from, to] = window
+        order_faults([:window], from, to)
+
+      false ->
+        [{[:window], {:type, type}}]
+    end
+  end
 
   defp window_faults(_window, type), do: [{[:window], {:invalid_for, type}}]
 

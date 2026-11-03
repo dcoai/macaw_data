@@ -24,7 +24,7 @@ defmodule Macaw.Data.Source do
 
   """
 
-  alias Macaw.Data.{Delivery, Parameter, Schema}
+  alias Macaw.Data.{Delivery, Parameter, Schema, Window}
   alias Macaw.Data.Source.{Description, Request}
 
   @typedoc "A source: a struct whose module implements `Macaw.Data.Source`."
@@ -63,14 +63,18 @@ defmodule Macaw.Data.Source do
   `{:error, {:params, faults}}` without calling the source when a parameter is unknown,
   missing or not legal (`Macaw.Data.Parameter.validate/2`), and `{:error, {:order,
   faults}}` when the request's `order` names a field the schema does not describe, or one
-  of a type with no order (`Macaw.Data.Source.Order.faults/2`). Otherwise the source is
-  called with every parameter, defaults filled in. An answer that is neither `{:ok,
-  delivery}` nor `{:error, reason}` is `{:error, {:bad_fetch, answer}}`.
+  of a type with no order (`Macaw.Data.Source.Order.faults/2`), and `{:error, {:window,
+  faults}}` when the request's window or a region field's range is inverted, its `from`
+  after its `to` (`Macaw.Data.Window.check/2`'s `{path, {:window, :inverted}}`,
+  macaw_data#122). Otherwise the source is called with every parameter, defaults filled
+  in. An answer that is neither `{:ok, delivery}` nor `{:error, reason}` is `{:error,
+  {:bad_fetch, answer}}`.
   """
   @spec fetch(t(), Description.t(), Request.t()) :: {:ok, Delivery.t()} | {:error, term()}
   def fetch(%module{} = source, %Description{} = description, %Request{} = request) do
     with {:ok, filled} <- params(description, request),
-         :ok <- order(description, request) do
+         :ok <- order(description, request),
+         :ok <- ranges(description, request) do
       case module.fetch(source, %{request | params: filled}) do
         {:ok, %Delivery{}} = ok -> ok
         {:error, _reason} = error -> error
@@ -83,6 +87,22 @@ defmodule Macaw.Data.Source do
     case Parameter.validate(params, request.params) do
       {:ok, filled} -> {:ok, filled}
       {:error, faults} -> {:error, {:params, faults}}
+    end
+  end
+
+  # A range asked backward, the window's or a region field's (macaw_data#122), is the
+  # caller's mistake and no source sees it; every other fault `Window.check/2` finds is a
+  # request the source answers as its own (spec/01 §9's unreadable requests).
+  defp ranges(%Description{schema: schema}, request) do
+    case Window.check(request, schema) do
+      :ok ->
+        :ok
+
+      {:error, faults} ->
+        case for({_path, {:window, :inverted}} = fault <- faults, do: fault) do
+          [] -> :ok
+          inverted -> {:error, {:window, inverted}}
+        end
     end
   end
 

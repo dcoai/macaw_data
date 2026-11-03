@@ -157,6 +157,8 @@ defmodule Macaw.Data.FinishColumnsTest do
       table = table(kind, rows, cuts, sorted)
       schema = schema(kind, identity)
 
+      # An inverted window is the caller's fault (macaw_data#122): ask the ends in order.
+      {from, to} = if from && to && from > to, do: {to, from}, else: {from, to}
       window = [from && bound(kind, from), to && bound(kind, to)]
 
       fields =

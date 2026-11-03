@@ -319,6 +319,8 @@ defmodule Macaw.Data.FinishTest do
           ) do
       rows = for t <- 1..n//1, do: %{"t" => t, "v" => rem(t * 13, 7)}
       d = Delivery.new!(rows, types: %{"t" => :number, "v" => :number})
+      # An inverted window is the caller's fault (macaw_data#122): ask the ends in order.
+      [from, to] = if from && to && from > to, do: [to, from], else: [from, to]
 
       finished =
         Finish.finish!(d, described(@numbers), request(window: [from, to], budget: budget))
