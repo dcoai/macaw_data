@@ -397,8 +397,12 @@ defmodule Macaw.Data.Derived.Engine do
       engine = %{engine | runs: Map.update(engine.runs, path, 1, &(&1 + 1))}
 
       case call(source, fun, inputs, context(engine, path, source, inputs), engine.run_opts) do
-        {:ok, rows} -> answered(engine, path, source, rows, watermark(engine, path, now), now)
-        {:error, kind, detail} -> fault(engine, path, kind, detail)
+        {:ok, rows} ->
+          served = %{complete_until: watermark(engine, path, now), stale: stale?(engine, path)}
+          answered(engine, path, source, rows, served, now)
+
+        {:error, kind, detail} ->
+          fault(engine, path, kind, detail)
       end
     else
       :waiting -> engine
@@ -547,23 +551,24 @@ defmodule Macaw.Data.Derived.Engine do
 
   # -- answers and faults (spec/02 §8.3) ---------------------------------------------------
 
-  defp answered(engine, path, source, rows, watermark, now) do
+  defp answered(engine, path, source, rows, served, now) do
     case Derived.conform(source, rows) do
       {:ok, conformed} ->
         table = output(source.schema, conformed)
         previous = engine.outputs[path]
 
         # The answer's identity is its table's (spec/01 §1.1.2): two canonical tables
-        # compare their chunks' digests. A change of the watermark alone is a changed
-        # answer (spec/02 §8.6).
+        # compare their chunks' digests. A change of the watermark or of `stale` alone is
+        # a changed answer (spec/02 §8.6, §8.7).
         changed? =
           previous == nil or not Table.equal?(previous.rows, table) or
-            previous.served.complete_until !== watermark
+            previous.served.complete_until !== served.complete_until or
+            previous.served.stale !== served.stale
 
         delivery =
           Delivery.new!(table,
             schema: Schema.version(source.schema),
-            served: [complete_until: watermark]
+            served: [complete_until: served.complete_until, stale: served.stale]
           )
 
         engine = %{
@@ -591,6 +596,19 @@ defmodule Macaw.Data.Derived.Engine do
 
     {:ok, table} = Table.new(columns)
     table
+  end
+
+  # -- stale (spec/02 §8.7) ----------------------------------------------------------------
+
+  # Stale when any input's delivery is (macaw_data#148): its rows are in the answer. An
+  # idle input counts, unlike in the watermark: a source that keeps serving its last good
+  # answer delivers nothing new, so it goes idle, and leaving it out would draw stale rows
+  # as live.
+  defp stale?(engine, path) do
+    Enum.any?(engine.inputs[path], fn {_key, _name, ref, _window} ->
+      {delivery, _schema} = input(engine, ref)
+      delivery.served.stale
+    end)
   end
 
   # -- watermarks (spec/02 §8.6) -----------------------------------------------------------

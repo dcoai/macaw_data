@@ -304,14 +304,15 @@ A function of **two arguments** is called with the inputs and its **context**, t
     "schema" => %{field => description},  # the input's schema, every name a string
     "window" => [from, to] | box | nil,    # the delivery's served facts (01 §3)
     "resolution" => term() | nil,
-    "capped" => boolean()
+    "capped" => boolean(),
+    "stale" => boolean()
   }}
 }
 ```
 
 - **`"inputs"`** is keyed as the first argument keys its inputs (a stored function's by its literals' rule, a host's by the key's string), so `for {key, rows} <- inputs` finds each input's facts under the same `key`.
 - **`"schema"` is the input's schema as data, not a `%Schema{}`**: a struct is restricted in a stored function (§6.1), and reading a struct's fields would bind a stored function to the library's internals. It is a map from each field's name to its description, each description's keys their strings (`"type"`, `"unit"`, `"bounds"`, `"continuity"`, `"order"`, `"status"`, …), a field's `"values"` its declared values in order, an entry a map of its keys' strings (`%{"value" => v, "name" => "OK", "color" => c}`), a bare value itself. It is a term, not JSON: a value is the term the schema holds, a stored function's names and words by its literals' rule, and a value entry's color, literal or typed, whole, as a row's is (§2.2). An input that is a derived source gives its output's schema.
-- **`"window"`, `"resolution"` and `"capped"` are the delivery's** `served` facts, as the source answered them: the window actually served, the rows' spacing, whether the answer stopped short. They are not the input's own window (`last:` or a request), which says how much of the delivery the function is handed. A derived source's output is a delivery with `nil`, `nil` and `false`.
+- **`"window"`, `"resolution"`, `"capped"` and `"stale"` are the delivery's** `served` facts, as the source answered them: the window actually served, the rows' spacing, whether the answer stopped short, whether the source answered from a store it could not refresh ([01 §3](01-sources.md#sources-delivery), macaw_data#148). They are not the input's own window (`last:` or a request), which says how much of the delivery the function is handed. A derived source's output is a delivery with `nil`, `nil` and `false`, and stale when any of its inputs is (§8.7).
 - **No clock.** The context carries no "now". A source runs only when it is marked (§8.2), and a function that read the time would answer differently on every pulse with nothing marking it. A window that moves with the clock is its input's (`"window"`).
 - **No variables.** visualize's context also carries its scope's variables (visualize D-228). Here a variable, a selection, or anything else a function depends on is **an input like any other**: on a Macaw page, a state source. It is read as rows, its change marks the source as any input's does, and its fields are checked as any input's are.
 - **Values never leave it.** A context's values are the data as much as the rows are, so no fault's detail carries one (§6.4).
@@ -319,7 +320,7 @@ A function of **two arguments** is called with the inputs and its **context**, t
 A stored function reads its context with `[]`: `context["inputs"]["hosts"]["schema"]["cpu"]["bounds"]`.
 
 ```test:derived-context-facts
-the context holds each input's schema as string-keyed data and its delivery's window, resolution and capped, keyed as the inputs are; it has no clock and no variables; a derived input gives its output's schema and nil, nil, false
+the context holds each input's schema as string-keyed data and its delivery's window, resolution, capped and stale, keyed as the inputs are; it has no clock and no variables; a derived input gives its output's schema and nil, nil, false, and its output's stale
 ```
 
 ## 3. Scoping {#derived-scoping}
@@ -735,4 +736,16 @@ a derived source's output passes the source conformance kit, describes its outpu
 
 ```test:derived-watermarks
 a derived source's complete_until is the minimum of its inputs', capped by a request window's upper bound; an input with no claim leaves none; a watermark-only change marks the readers; an idle input is left out after idle_after and rejoins on its next delivery; every input idle leaves none out; no clock is read; a description's idle_after is a positive integer
+```
+
+### 8.7 Stale {#derived-engine-stale}
+
+**A derived source's output is `stale` when any input's delivery is** ([01 §3](01-sources.md#sources-delivery), macaw_data#148), and its output delivery states it in `served.stale`. Its rows are drawn from that input's, so a cell drawn from it is drawn stale, never live:
+- **Any input, stale or not, counts:** a stored or a host function, read as rows or as columns (§2.2), each input whatever its window. **An input that is a derived source** contributes its output's `stale`, so staleness passes down a chain as `complete_until` does (§8.6).
+- **An idle input still counts,** unlike in the watermark. Idleness (§8.6) says a source has delivered nothing new, so it shouldn't hold a watermark back; a source that keeps serving its last good answer delivers nothing new, so it goes idle, and leaving it out would draw its stale rows as live, which is what the fact exists to prevent.
+- **A change of `stale` alone is a changed answer,** marking the source's readers (§8.2), as a change of the watermark is; the next pulse whose inputs are all fresh clears it.
+- **The function sees it too:** a function of two arguments reads each input's `"stale"` in its context (§2.3).
+
+```test:derived-stale
+a derived source over two inputs is stale exactly when one or both are, for stored and host functions and for rows and columns inputs; a derived input over a stale one is stale; a pulse changing only stale marks the readers and the next fresh pulse clears it; an idle input that keeps serving its stale answer keeps the output stale
 ```

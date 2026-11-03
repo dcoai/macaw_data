@@ -114,7 +114,8 @@ defmodule Macaw.Data.Derived.EngineContextTest do
                    },
                    "window" => [0, 10],
                    "resolution" => 5,
-                   "capped" => true
+                   "capped" => true,
+                   "stale" => false
                  }
                }
              }
@@ -232,7 +233,8 @@ defmodule Macaw.Data.Derived.EngineContextTest do
                    "schema" => %{"n" => %{"type" => :number}},
                    "window" => nil,
                    "resolution" => nil,
-                   "capped" => false
+                   "capped" => false,
+                   "stale" => false
                  }
                }
              }

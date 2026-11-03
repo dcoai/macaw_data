@@ -912,7 +912,8 @@ defmodule Macaw.Data.DerivedTest do
                  "schema" => %{"host" => %{"identity" => true, "type" => :category}},
                  "window" => [0, 10],
                  "resolution" => :minute,
-                 "capped" => true
+                 "capped" => true,
+                 "stale" => false
                }
              }
            } = context
@@ -929,8 +930,18 @@ defmodule Macaw.Data.DerivedTest do
              "schema" => %{"n" => %{"type" => :number}},
              "window" => nil,
              "resolution" => nil,
-             "capped" => false
+             "capped" => false,
+             "stale" => false
            }
+
+    # A stale input says so; a derived input over one gives its output's stale.
+    for stale <- [true, false] do
+      d = Delivery.new!([%{cpu: 1}], served: [stale: stale])
+
+      assert Context.new([%{key: :hosts, delivery: d, schema: @hosts}])["inputs"]["hosts"][
+               "stale"
+             ] == stale
+    end
   end
 
   describe "scoping" do

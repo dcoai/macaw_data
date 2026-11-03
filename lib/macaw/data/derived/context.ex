@@ -13,7 +13,7 @@ defmodule Macaw.Data.Derived.Context do
       iex> delivery = Delivery.new!([%{cpu: 3}], served: [window: [0, 10], capped: true])
       iex> Macaw.Data.Derived.Context.new([%{key: "hosts", delivery: delivery, schema: schema}])
       %{"inputs" => %{"hosts" => %{"schema" => %{"cpu" => %{"bounds" => [0, 100], "type" => :number}},
-        "window" => [0, 10], "resolution" => nil, "capped" => true}}}
+        "window" => [0, 10], "resolution" => nil, "capped" => true, "stale" => false}}}
 
   Ported from visualize's `Visualize.VirtualSource.Context`, its `"vars"` left out
   (spec/02 §2.3).
@@ -38,7 +38,8 @@ defmodule Macaw.Data.Derived.Context do
       "schema" => schema(schema, value),
       "window" => term(served.window, value),
       "resolution" => term(served.resolution, value),
-      "capped" => served.capped
+      "capped" => served.capped,
+      "stale" => served.stale
     }
   end
 
