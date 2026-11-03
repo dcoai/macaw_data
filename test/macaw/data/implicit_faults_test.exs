@@ -43,9 +43,9 @@ defmodule Macaw.Data.ImplicitFaultsTest do
     assert Finish.ceiling(5, host: 10, floor: 1) == {:error, [{[:floor], :unknown_key}]}
     assert Finish.ceiling(5, :host) == {:error, [{[], {:type, :keyword}}]}
 
-    assert_raise ArgumentError, fn -> Push.new!(:feed, ref, size: 3) end
-    assert_raise ArgumentError, fn -> Finish.ceiling!(5, page: 2) end
-    assert_raise ArgumentError, fn -> Engine.source!(engine, [:nope]) end
+    assert_raise Macaw.Data.Error, fn -> Push.new!(:feed, ref, size: 3) end
+    assert_raise Macaw.Data.Error, fn -> Finish.ceiling!(5, page: 2) end
+    assert_raise Macaw.Data.Error, fn -> Engine.source!(engine, [:nope]) end
   end
 
   @tag verifies: "data-errors-implicit"
@@ -70,9 +70,9 @@ defmodule Macaw.Data.ImplicitFaultsTest do
     assert {:ok, :cyclic} = Quantity.kind(:angle)
     assert {:ok, %{across: true}} = Quantity.additivity(nil)
 
-    assert_raise ArgumentError, ~r/:vibes is not a quantity/, fn -> Quantity.kind!(:vibes) end
+    assert_raise Macaw.Data.Error, ~r/:vibes is not a quantity/, fn -> Quantity.kind!(:vibes) end
 
-    assert_raise ArgumentError, ~r/:imperial is not a unit system/, fn ->
+    assert_raise Macaw.Data.Error, ~r/:imperial is not a unit system/, fn ->
       Quantity.family!(:mass, "kg", :imperial)
     end
   end

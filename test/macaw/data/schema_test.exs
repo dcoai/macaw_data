@@ -424,7 +424,7 @@ defmodule Macaw.Data.SchemaTest do
 
     @tag verifies: "schema-faults"
     test "new!/1 raises with every fault formatted" do
-      error = assert_raise ArgumentError, fn -> Schema.new!(%{a: %{}, b: %{type: :x}}) end
+      error = assert_raise Macaw.Data.Error, fn -> Schema.new!(%{a: %{}, b: %{type: :x}}) end
       assert error.message =~ "a.type: is required"
       assert error.message =~ "b.type: must be one of :time"
     end

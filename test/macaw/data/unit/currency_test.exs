@@ -21,7 +21,7 @@ defmodule Macaw.Data.Unit.CurrencyTest do
 
       assert Unit.minor_units("ZZZ") == {:error, {:unknown_currency, "ZZZ"}}
       assert Unit.minor_units("JPY") == {:ok, 0}
-      assert_raise ArgumentError, ~r/"ZZZ"/, fn -> Unit.minor_units!("ZZZ") end
+      assert_raise Macaw.Data.Error, ~r/"ZZZ"/, fn -> Unit.minor_units!("ZZZ") end
     end
   end
 

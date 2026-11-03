@@ -205,7 +205,7 @@ defmodule Macaw.Data.Schema do
 
   def new(_other), do: {:error, [{[], {:type, :schema}}]}
 
-  @doc "The schema of a map of field descriptions, or `ArgumentError` naming every fault."
+  @doc "The schema of a map of field descriptions, or `Macaw.Data.Error` naming every fault."
   @spec new!(term()) :: t()
   def new!(fields) do
     case new(fields) do
@@ -213,8 +213,9 @@ defmodule Macaw.Data.Schema do
         schema
 
       {:error, errors} ->
-        raise ArgumentError,
-              "not a schema:\n" <> Enum.map_join(errors, "\n", &("  " <> format_error(&1)))
+        raise Macaw.Data.Error,
+          reason: errors,
+          message: "not a schema:\n" <> Enum.map_join(errors, "\n", &("  " <> format_error(&1)))
     end
   end
 

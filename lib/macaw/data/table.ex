@@ -256,12 +256,12 @@ defmodule Macaw.Data.Table do
     }
   end
 
-  @doc "As `new/2`, raising `ArgumentError` naming every fault."
+  @doc "As `new/2`, raising `Macaw.Data.Error` naming every fault."
   @spec new!([{name(), type(), [term()]}], keyword()) :: t()
   def new!(columns, opts \\ []) do
     case new(columns, opts) do
       {:ok, table} -> table
-      {:error, faults} -> raise ArgumentError, "not a table: #{inspect(faults)}"
+      {:error, faults} -> raise Macaw.Data.Error, reason: faults, what: "not a table"
     end
   end
 

@@ -223,7 +223,7 @@ defmodule Macaw.Data.StackFFTTest do
 
       assert FFT.fft([1, 2, 3]) == {:error, {:samples, 3}}
       assert FFT.fft([1, :a]) == {:error, {:values, :number}}
-      assert_raise ArgumentError, ~r/power of two/, fn -> FFT.fft!([1, 2, 3]) end
+      assert_raise Macaw.Data.Error, ~r/power of two/, fn -> FFT.fft!([1, 2, 3]) end
 
       # The tapers: hann and hamming over five ones, and a sequence under four untapered.
       assert Enum.map(FFT.window([1, 1, 1, 1, 1], :hann), &Float.round(&1, 3)) == [
@@ -274,11 +274,11 @@ defmodule Macaw.Data.StackFFTTest do
       assert FFT.spectrum([1, :a], every) == {:error, {:values, :number}}
       assert FFT.spectrum(values, 0) == {:error, {:every, 0}}
 
-      assert_raise ArgumentError, ~r/samples/, fn ->
+      assert_raise Macaw.Data.Error, ~r/samples/, fn ->
         FFT.spectrum!(values, every, samples: 100)
       end
 
-      assert_raise ArgumentError, ~r/window/, fn ->
+      assert_raise Macaw.Data.Error, ~r/window/, fn ->
         FFT.spectrum!(values, every, window: :flat)
       end
     end

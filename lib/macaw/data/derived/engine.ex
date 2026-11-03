@@ -753,7 +753,7 @@ defmodule Macaw.Data.Derived.Engine do
     end
   end
 
-  @doc "As `source/3`, the output alone, raising `ArgumentError` naming the faults."
+  @doc "As `source/3`, the output alone, raising `Macaw.Data.Error` naming the faults."
   @spec source!(t(), list(), keyword()) :: Output.t()
   def source!(%__MODULE__{} = engine, path, opts \\ []) do
     case source(engine, path, opts) do
@@ -761,7 +761,7 @@ defmodule Macaw.Data.Derived.Engine do
         output
 
       {:error, faults} ->
-        raise ArgumentError, "not a derived source of the engine: #{inspect(faults)}"
+        raise Macaw.Data.Error, reason: faults, what: "not a derived source of the engine"
     end
   end
 end

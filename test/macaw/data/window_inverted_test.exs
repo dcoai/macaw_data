@@ -113,7 +113,7 @@ defmodule Macaw.Data.WindowInvertedTest do
 
     assert Finish.finish(d, described, request) == @inverted
 
-    assert_raise ArgumentError, ~r/\{:window, :inverted\}/, fn ->
+    assert_raise Macaw.Data.Error, ~r/\{:window, :inverted\}/, fn ->
       Finish.finish!(d, described, request)
     end
 

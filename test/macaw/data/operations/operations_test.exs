@@ -248,11 +248,11 @@ defmodule Macaw.Data.OperationsTest do
       # Every fault at once, and registry!/1 raises them in format_error/1's words.
       assert {:error, [_, _]} = Operations.registry([Enum, Ops.Stray])
 
-      assert_raise ArgumentError,
+      assert_raise Macaw.Data.Error,
                    ~s(transform "double": is named twice: by Macaw.Data.Test.Ops.Double and Macaw.Data.Test.Ops.Twin.Double),
                    fn -> Operations.registry!([Ops, Ops.Twin]) end
 
-      assert_raise ArgumentError, "Enum: is not a package: it has no __members__/0", fn ->
+      assert_raise Macaw.Data.Error, "Enum: is not a package: it has no __members__/0", fn ->
         Operations.registry!([Enum])
       end
 
@@ -309,7 +309,7 @@ defmodule Macaw.Data.OperationsTest do
       assert {:ok, digest} = Operations.step_digest(registry, a)
       assert digest == Operations.step_digest!(registry, a)
 
-      assert_raise ArgumentError, ~s(op: transform "nope" is not available), fn ->
+      assert_raise Macaw.Data.Error, ~s(op: transform "nope" is not available), fn ->
         Operations.step_digest!(registry, %{"op" => "nope"})
       end
     end
@@ -376,7 +376,7 @@ defmodule Macaw.Data.OperationsTest do
       assert Operations.apply(r, [%{op: "double"}], [%{v: 1}]) ==
                {:error, [{[0, "field"], :required}]}
 
-      assert_raise ArgumentError, "step 1, field: is required", fn ->
+      assert_raise Macaw.Data.Error, "step 1, field: is required", fn ->
         Operations.apply!(r, [%{op: "double"}], [%{v: 1}])
       end
     end

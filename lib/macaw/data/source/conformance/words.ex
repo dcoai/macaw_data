@@ -3,7 +3,7 @@ defmodule Macaw.Data.Source.Conformance.Words do
   # The findings of spec/01 §9 in words, for `Macaw.Data.Source.Conformance.format/1`.
   # Ported from visualize's `Visualize.Feed.Conformance.Words`.
 
-  alias Macaw.Data.Schema
+  alias Macaw.Data.{Fault, Schema}
   alias Macaw.Data.Source.{Description, Request}
 
   @doc false
@@ -23,7 +23,9 @@ defmodule Macaw.Data.Source.Conformance.Words do
     do: "describe/2 answered #{inspect(answer)}, not {:ok, %Description{}} with a schema"
 
   def words({:description_invalid, faults}),
-    do: "the description is not one Description.new/1 accepts as it stands: #{inspect(faults)}"
+    do:
+      "the description is not one Description.new/1 accepts as it stands: " <>
+        Fault.sentence(faults, root: "description")
 
   def words({:schema_invalid, errors}),
     do:
@@ -50,7 +52,7 @@ defmodule Macaw.Data.Source.Conformance.Words do
   def words({:probe, ask, faults}),
     do:
       "the probe #{inspect(ask)} is not a request the source's schema can answer " <>
-        "(#{inspect(faults)}); the kit's requests: are the run's to fix"
+        "(#{Fault.sentence(faults, root: "request")}); the kit's requests: are the run's to fix"
 
   def words({:fetch_error, probe, reason}),
     do: "#{probe(probe)} answered {:error, #{inspect(reason)}}"

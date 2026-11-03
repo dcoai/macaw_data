@@ -313,7 +313,7 @@ defmodule Macaw.Data.Operations.TransformsTest do
         assert Native.elixir(run) == run.()
       end
 
-      assert_raise ArgumentError, "step 1, value: is no value of the field's type, time", fn ->
+      assert_raise Macaw.Data.Error, "step 1, value: is no value of the field's type, time", fn ->
         ordered(:time, [~U[2026-01-01 00:00:00Z]], :eq, "yesterday")
       end
 
@@ -351,11 +351,11 @@ defmodule Macaw.Data.Operations.TransformsTest do
       assert run(%{op: "take", n: 99}, minutes()) == minutes()
       assert run(%{op: "take", n: 0}, minutes()) == []
 
-      assert_raise ArgumentError, "step 1, n: is an integer of at least 0", fn ->
+      assert_raise Macaw.Data.Error, "step 1, n: is an integer of at least 0", fn ->
         run(%{op: "take", n: -1}, minutes())
       end
 
-      assert_raise ArgumentError, "step 1, n: is required", fn ->
+      assert_raise Macaw.Data.Error, "step 1, n: is required", fn ->
         run(%{op: "take"}, minutes())
       end
 
@@ -467,21 +467,21 @@ defmodule Macaw.Data.Operations.TransformsTest do
       assert Operations.apply(@registry, [step], [%{v: 1}], %{now: "soon"}) ==
                {:error, [{[0, "op"], {:context, :now, :time}}]}
 
-      assert_raise ArgumentError,
+      assert_raise Macaw.Data.Error,
                    "step 1, field: reads a value that is not a time or a number",
                    fn ->
                      run(step, [%{v: "later"}])
                    end
 
-      assert_raise ArgumentError, ~r/^step 1, from: is a duration \[n, unit\]/, fn ->
+      assert_raise Macaw.Data.Error, ~r/^step 1, from: is a duration \[n, unit\]/, fn ->
         run(%{op: "window", field: :t, from: [1, :fortnight]}, minutes())
       end
 
-      assert_raise ArgumentError, ~r/^step 1, from: is a duration/, fn ->
+      assert_raise Macaw.Data.Error, ~r/^step 1, from: is a duration/, fn ->
         run(%{op: "window", field: :t, from: 60}, minutes())
       end
 
-      assert_raise ArgumentError, "step 1, field: is required", fn ->
+      assert_raise Macaw.Data.Error, "step 1, field: is required", fn ->
         run(%{op: "window", from: [1, :minute]}, minutes())
       end
     end
@@ -542,7 +542,7 @@ defmodule Macaw.Data.Operations.TransformsTest do
       assert Operations.apply(@registry, [step], cars(1..3), %{schema: @anonymous}) ==
                {:error, [{[0, "latest"], {:needs, :identity}}]}
 
-      assert_raise ArgumentError,
+      assert_raise Macaw.Data.Error,
                    "step 1, latest: needs a schema, which the caller does not give",
                    fn ->
                      run(step, cars(1..3))
@@ -638,7 +638,7 @@ defmodule Macaw.Data.Operations.TransformsTest do
             {%{op: "lttb", fields: [:t, :v], n: "plot"},
              "step 1, n: needs a frame, which the caller does not give"}
           ] do
-        assert_raise ArgumentError, words, fn -> run(node, rows) end
+        assert_raise Macaw.Data.Error, words, fn -> run(node, rows) end
       end
 
       bad_y = [%{t: 0, v: 1}, %{t: 1, v: "x"}, %{t: 2, v: 1}, %{t: 3, v: 0}]
@@ -662,7 +662,7 @@ defmodule Macaw.Data.Operations.TransformsTest do
                scale: :radial
              }) == {:error, [{[0, "op"], {:unknown, :scale, :radial}}]}
 
-      assert_raise ArgumentError, "step 1, fields: reads a value that is not a number", fn ->
+      assert_raise Macaw.Data.Error, "step 1, fields: reads a value that is not a number", fn ->
         run(%{op: "lttb", fields: [:t, :v], n: 3}, bad_y)
       end
     end
@@ -711,7 +711,7 @@ defmodule Macaw.Data.Operations.TransformsTest do
                %{hour: 0, series: "cpu", v: 1}
              ]
 
-      assert_raise ArgumentError, "step 1, as: is a pair, each a column name", fn ->
+      assert_raise Macaw.Data.Error, "step 1, as: is a pair, each a column name", fn ->
         run(%{op: "fold", fields: [:cpu], as: :key}, wide)
       end
 
@@ -775,11 +775,11 @@ defmodule Macaw.Data.Operations.TransformsTest do
 
       assert run(%{op: "aggregate", field: :ms, fn: "count"}, rows) == [%{"count" => 4}]
 
-      assert_raise ArgumentError, "step 1, p: is required", fn ->
+      assert_raise Macaw.Data.Error, "step 1, p: is required", fn ->
         run(%{op: "aggregate", field: :ms, fn: "quantile"}, rows)
       end
 
-      assert_raise ArgumentError, "step 1, p: is not read by sum", fn ->
+      assert_raise Macaw.Data.Error, "step 1, p: is not read by sum", fn ->
         run(%{op: "sum", field: :ms, p: 0.5}, rows)
       end
 

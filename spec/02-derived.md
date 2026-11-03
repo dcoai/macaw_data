@@ -37,7 +37,7 @@ A derived source is **data**: a struct with no function in it, its function a na
 | `per` | `nil`, `:identity` or `{:identity, input}` (§1.3) | `nil` |
 | `input` | how the function reads its inputs (§2.2): `:rows`, each input a list of rows, or `:columns`, each input a `Macaw.Data.Table` read through `Macaw.Data.Derived.Columns`; `nil` is `:rows` | `:rows` |
 
-`Macaw.Data.Derived.new/1` takes the **value**, a keyword list or a map of the fields above as terms (atom keys; names atoms or strings, held as strings), and answers `{:ok, derived}` or `{:error, faults}` with **every** fault, each `{path, reason}`, the path from the source to the value, ordered by path. `new!/1` answers the source or raises `ArgumentError` naming every fault.
+`Macaw.Data.Derived.new/1` takes the **value**, a keyword list or a map of the fields above as terms (atom keys; names atoms or strings, held as strings), and answers `{:ok, derived}` or `{:error, faults}` with **every** fault, each `{path, reason}`, the path from the source to the value, ordered by path. `new!/1` answers the source or raises `Macaw.Data.Error` naming every fault.
 
 **Alone and in context.** `new/1` checks what the source says of itself: its keys and their types, its schema through `Schema.new/1`, its inputs' shapes, `per` against the inputs' count, and the function's text through `Sandbox.check/2` with `fields: nil`, since what its inputs hold is not known alone. `Macaw.Data.Derived.validate(derived, opts)` checks it **given what it reads**:
 
@@ -242,7 +242,7 @@ last n over a table is Table.equal? to the row window over its rows, over genera
 | `{:type, :integer}` | `take/2`'s count is not an integer |
 | `{:type, :non_neg_integer}` | `slice/3`'s start or count is not a non-negative integer |
 
-Each accessor has a **`!` variant** (`sum!/2`, `names!/1`, …) that answers the value alone, or raises `ArgumentError` worded by `Columns.format_error/1`, a convenience over the accessor, which is the contract. The table below gives each accessor's value.
+Each accessor has a **`!` variant** (`sum!/2`, `names!/1`, …) that answers the value alone, or raises `Macaw.Data.Error` worded by `Columns.format_error/1`, a convenience over the accessor, which is the contract. The table below gives each accessor's value.
 
 | Accessor | Answers |
 |---|---|
@@ -270,7 +270,7 @@ every accessor agrees with the row view over the same table: names, types, value
 ```
 
 ```test:derived-columns-errors
-every accessor answers its reason rather than raising: an unknown column, a name that is no atom or string and an input that is no table, from each accessor that takes one; a typed read of another type with the types it expected and the type it found; take and slice given bad counts; the values of no readings are the aggregates'; each ! variant raises ArgumentError in format_error's words
+every accessor answers its reason rather than raising: an unknown column, a name that is no atom or string and an input that is no table, from each accessor that takes one; a typed read of another type with the types it expected and the type it found; take and slice given bad counts; the values of no readings are the aggregates'; each ! variant raises Macaw.Data.Error in format_error's words
 ```
 
 ```test:derived-columns-time-kind
@@ -444,7 +444,7 @@ a variable read before it is bound, a call in a guard that is not guard-safe and
 - **Control:** `case`, `cond`, `if`, `unless`, `with`, `for`, `fn`, pattern matching (`=`), guards (`when`), the pin `^`, blocks, and `&` captures, of an allowed function (`&Enum.sum/1`, `&max/2`) or of an expression over `&1`, `&2`, ….
 - **Math and comparison:** `+`, `-`, `*`, `/` and unary `-` and `+`; `==`, `!=`, `===`, `!==`, `<`, `>`, `<=`, `>=`; `and`, `or`, `not`, `&&`, `||`, `!`; `in` and `not in`; `div/2`, `rem/2`, `abs/1`, `round/1`, `trunc/1`, `min/2`, `max/2` and `**/2`; and every `is_*` guard of `Kernel`.
 - **Data:** literals, ranges (`..`, `..//`), tuples, lists (`|`, `++`, `--`), maps (`%{}`, `%{m | k: v}`), binaries (`<<>>` with the segment types `binary`, `bits`, `bitstring`, `bytes`, `integer`, `float`, `utf8`, `utf16`, `utf32`, `signed`, `unsigned`, `big`, `little`, `native`, `size/1` and `unit/1`; `<>`), `|>`, `[]` access (`row[:key]`, `Access.get/2`) and `row.field`; `to_string/1`, and with it **string interpolation**: `"#{x}"` is a binary whose segment calls `Kernel.to_string/1`, so a label is `"#{row.host}: #{row.load}"`. An atom written with interpolation (`:"a#{x}"`) stays refused, as `{:restricted, {:erlang, :binary_to_existing_atom, 2}}`; a sigil with interpolation is refused as every sigil is.
-- **Modules:** `Enum`, `Map`, `Keyword`, `String`, `Integer`, `Float`, `:math`, `Macaw.Data.Ops` and `Macaw.Data.Derived.Columns`, each an explicit list of `{function, arity}`. Every export of these modules on the Elixir and OTP the library is built with is on its module's allowed list or its excluded list, and the test suite holds each module's exports to the union of the two, exactly: a new Elixir that adds a function fails that test, and the function is reviewed before it is allowed. `Macaw.Data.Ops` is the library's own: `aggregate/2,3` and `transform/2,3` reach the registered operations by literal name ([04 §6](04-operations.md#operations-sandbox)), and which operations is the registry's, never this list. `Integer.is_even/1` and `Integer.is_odd/1` are macros and allowed. `Macaw.Data.Derived.Columns` is the library's own too (macaw_data#107): every accessor of §2.2 and its `!` variant, written by its full name, and `format_error/1` read only what they are given and make nothing else, so those thirty-one are allowed. `time_kind/2` and `time_kind!/2` are excluded (`:atoms`, macaw_data#149): they answer a module, and only host code has asked for them. A stored function that matches `{:ok, v} =` on a bad call raises `MatchError`, and a `!` variant raises `ArgumentError`: either is the runner's `{:error, :raised, module}` (§6.4), its detail the exception's module, never the rows'.
+- **Modules:** `Enum`, `Map`, `Keyword`, `String`, `Integer`, `Float`, `:math`, `Macaw.Data.Ops` and `Macaw.Data.Derived.Columns`, each an explicit list of `{function, arity}`. Every export of these modules on the Elixir and OTP the library is built with is on its module's allowed list or its excluded list, and the test suite holds each module's exports to the union of the two, exactly: a new Elixir that adds a function fails that test, and the function is reviewed before it is allowed. `Macaw.Data.Ops` is the library's own: `aggregate/2,3` and `transform/2,3` reach the registered operations by literal name ([04 §6](04-operations.md#operations-sandbox)), and which operations is the registry's, never this list. `Integer.is_even/1` and `Integer.is_odd/1` are macros and allowed. `Macaw.Data.Derived.Columns` is the library's own too (macaw_data#107): every accessor of §2.2 and its `!` variant, written by its full name, and `format_error/1` read only what they are given and make nothing else, so those thirty-one are allowed. `time_kind/2` and `time_kind!/2` are excluded (`:atoms`, macaw_data#149): they answer a module, and only host code has asked for them. A stored function that matches `{:ok, v} =` on a bad call raises `MatchError`, and a `!` variant raises `Macaw.Data.Error`: either is the runner's `{:error, :raised, module}` (§6.4), its detail the exception's module, never the rows'.
 
 | Module | Excluded | Why |
 |---|---|---|
@@ -472,7 +472,7 @@ for each allowed module, the allowed and excluded lists are disjoint and togethe
 ```
 
 ```test:derived-allowlist-columns
-a stored function calls every Columns accessor and its ! variant, piped into and captured, and each answers what a host's call answers; names, types, category values, rows and reasons come back spelled as its rows are, so it matches a reason with its own words and format_error words it; a {:ok, v} match on a bad call is :raised MatchError and a ! variant :raised ArgumentError; a literal column name is held to fields:, a computed one to the table; a map read of a table raises, so its internals are read through the accessors alone
+a stored function calls every Columns accessor and its ! variant, piped into and captured, and each answers what a host's call answers; names, types, category values, rows and reasons come back spelled as its rows are, so it matches a reason with its own words and format_error words it; a {:ok, v} match on a bad call is :raised MatchError and a ! variant :raised Macaw.Data.Error; a literal column name is held to fields:, a computed one to the table; a map read of a table raises, so its internals are read through the accessors alone
 ```
 
 ```test:derived-allowlist-calls

@@ -100,7 +100,7 @@ defmodule Macaw.Data.SourceTest do
              Description.new(schema: schema, supports: [:teleport])
 
     assert caps == Description.capabilities()
-    assert_raise ArgumentError, ~r/not a description/, fn -> Description.new!(schema: :x) end
+    assert_raise Macaw.Data.Error, ~r/not a description/, fn -> Description.new!(schema: :x) end
   end
 
   @tag verifies: "contract-request"
@@ -146,7 +146,7 @@ defmodule Macaw.Data.SourceTest do
               ]}
 
     assert Request.new(region: %{}, now: @now) == {:error, [{[:region], {:type, :region}}]}
-    assert_raise ArgumentError, ~r/not a request/, fn -> Request.new!([]) end
+    assert_raise Macaw.Data.Error, ~r/not a request/, fn -> Request.new!([]) end
   end
 
   @tag verifies: "contract-fetch"

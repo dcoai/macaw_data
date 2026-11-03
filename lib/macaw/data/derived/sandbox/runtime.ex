@@ -117,7 +117,9 @@ defmodule Macaw.Data.Derived.Sandbox.Runtime do
   defp answer({:error, reason}, _spell), do: {:error, spelled(reason)}
 
   defp value!({:ok, value}), do: value
-  defp value!({:error, reason}), do: raise(ArgumentError, format_error(reason))
+
+  defp value!({:error, reason}),
+    do: raise(Macaw.Data.Error, reason: reason, message: format_error(reason))
 
   defp each(values), do: Enum.map(values, &Names.spelling/1)
   defp row(row), do: Map.new(row, fn {k, v} -> {Names.spelling(k), Names.spelling(v)} end)

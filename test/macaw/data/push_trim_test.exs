@@ -121,7 +121,9 @@ defmodule Macaw.Data.PushTrimTest do
     assert Push.trim(held, ~U[2026-11-03 00:00:00Z]) == {:error, [{[:from], {:type, :number}}]}
     assert Push.trim(held, "15") == {:error, [{[:from], {:type, :number}}]}
 
-    assert_raise ArgumentError, ~r/cannot be trimmed.*:from/, fn -> Push.trim!(held, "15") end
+    assert_raise Macaw.Data.Error, ~r/cannot be trimmed: from: must be a number/, fn ->
+      Push.trim!(held, "15")
+    end
 
     unwindowed = Schema.new!(%{"t" => %{type: :number}, "v" => %{type: :number}})
     loose = holding(0..19, [], unwindowed)

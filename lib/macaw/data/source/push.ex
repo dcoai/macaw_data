@@ -132,12 +132,15 @@ defmodule Macaw.Data.Source.Push do
     end
   end
 
-  @doc "As `new/3`, the subscription alone, raising `ArgumentError` naming the faults."
+  @doc "As `new/3`, the subscription alone, raising `Macaw.Data.Error` naming the faults."
   @spec new!(term(), reference(), keyword()) :: t()
   def new!(name, ref, opts \\ []) do
     case new(name, ref, opts) do
-      {:ok, push} -> push
-      {:error, faults} -> raise ArgumentError, "not a subscription's options: #{inspect(faults)}"
+      {:ok, push} ->
+        push
+
+      {:error, faults} ->
+        raise Macaw.Data.Error, reason: faults, what: "not a subscription's options"
     end
   end
 
@@ -283,12 +286,15 @@ defmodule Macaw.Data.Source.Push do
     end
   end
 
-  @doc "As `trim/2`, the push alone, raising `ArgumentError` naming the fault."
+  @doc "As `trim/2`, the push alone, raising `Macaw.Data.Error` naming the fault."
   @spec trim!(t(), term()) :: t()
   def trim!(%__MODULE__{} = push, from) do
     case trim(push, from) do
-      {:ok, push} -> push
-      {:error, faults} -> raise ArgumentError, "the holding cannot be trimmed: #{inspect(faults)}"
+      {:ok, push} ->
+        push
+
+      {:error, faults} ->
+        raise Macaw.Data.Error, reason: faults, what: "the holding cannot be trimmed"
     end
   end
 

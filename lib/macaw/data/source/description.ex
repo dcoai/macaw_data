@@ -89,12 +89,12 @@ defmodule Macaw.Data.Source.Description do
     end
   end
 
-  @doc "As `new/1`, raising `ArgumentError` naming every fault."
+  @doc "As `new/1`, raising `Macaw.Data.Error` naming every fault."
   @spec new!(keyword() | map()) :: t()
   def new!(fields) do
     case new(fields) do
       {:ok, description} -> description
-      {:error, faults} -> raise ArgumentError, "not a description: #{inspect(faults)}"
+      {:error, faults} -> raise Macaw.Data.Error, reason: faults, what: "not a description"
     end
   end
 

@@ -97,7 +97,7 @@ defmodule Macaw.Data.Source.Finish do
   def finish(%Delivery{}, %Description{}, %Request{}, _opts),
     do: {:error, [{[:opts], {:type, :keyword}}]}
 
-  @doc "As `finish/4`, the delivery alone, raising `ArgumentError` naming the faults."
+  @doc "As `finish/4`, the delivery alone, raising `Macaw.Data.Error` naming the faults."
   @spec finish!(Delivery.t(), Description.t(), Request.t(), keyword()) :: Delivery.t()
   def finish!(delivery, description, request, opts \\ []) do
     case finish(delivery, description, request, opts) do
@@ -105,7 +105,7 @@ defmodule Macaw.Data.Source.Finish do
         finished
 
       {:error, faults} ->
-        raise ArgumentError, "the delivery cannot be finished: #{inspect(faults)}"
+        raise Macaw.Data.Error, reason: faults, what: "the delivery cannot be finished"
     end
   end
 
@@ -269,7 +269,7 @@ defmodule Macaw.Data.Source.Finish do
          do: reduced(delivery, schema, budget, reducer, registry)
   end
 
-  @doc "As `reduce/5`, the delivery alone, raising `ArgumentError` naming the faults."
+  @doc "As `reduce/5`, the delivery alone, raising `Macaw.Data.Error` naming the faults."
   @spec reduce!(Delivery.t(), Schema.t(), pos_integer() | nil, String.t() | atom(), Registry.t()) ::
           Delivery.t()
   def reduce!(delivery, schema, budget, method \\ "lttb", registry \\ Operations.registry()) do
@@ -278,7 +278,7 @@ defmodule Macaw.Data.Source.Finish do
         reduced
 
       {:error, faults} ->
-        raise ArgumentError, "the delivery cannot be reduced: #{inspect(faults)}"
+        raise Macaw.Data.Error, reason: faults, what: "the delivery cannot be reduced"
     end
   end
 
@@ -512,12 +512,12 @@ defmodule Macaw.Data.Source.Finish do
     end
   end
 
-  @doc "As `ceiling/2`, the pair alone, raising `ArgumentError` naming the faults."
+  @doc "As `ceiling/2`, the pair alone, raising `Macaw.Data.Error` naming the faults."
   @spec ceiling!(pos_integer() | nil, keyword()) :: {pos_integer(), boolean()}
   def ceiling!(budget, opts) do
     case ceiling(budget, opts) do
       {:ok, pair} -> pair
-      {:error, faults} -> raise ArgumentError, "not a ceiling: #{inspect(faults)}"
+      {:error, faults} -> raise Macaw.Data.Error, reason: faults, what: "not a ceiling"
     end
   end
 

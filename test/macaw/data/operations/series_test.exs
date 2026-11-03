@@ -93,7 +93,7 @@ defmodule Macaw.Data.Operations.SeriesTest do
       assert Operations.apply(@registry, [%{op: "stack", fields: [:a, :b]}], [%{a: 1, b: "x"}]) ==
                {:error, [{[0, "fields"], {:reads, :number}}]}
 
-      assert_raise ArgumentError, ~r/^step 1, offset: is one of none, expand/, fn ->
+      assert_raise Macaw.Data.Error, ~r/^step 1, offset: is one of none, expand/, fn ->
         run(%{op: "stack", fields: [:a], offset: :zero}, @rows)
       end
     end
@@ -139,7 +139,7 @@ defmodule Macaw.Data.Operations.SeriesTest do
       assert Operations.apply(@registry, [%{op: "bin", field: :v}], [%{v: 1}, %{v: "x"}]) ==
                {:error, [{[0, "field"], {:reads, :number}}]}
 
-      assert_raise ArgumentError, "step 1, field: reads a value that is not a number", fn ->
+      assert_raise Macaw.Data.Error, "step 1, field: reads a value that is not a number", fn ->
         run(%{op: "bin", field: :v}, [%{v: 1}, %{v: "x"}])
       end
 
@@ -209,11 +209,11 @@ defmodule Macaw.Data.Operations.SeriesTest do
       assert Enum.at(flat, 1)["magnitude"] < 0.01
       assert_in_delta Enum.max_by(flat, & &1["magnitude"])["magnitude"], 2.0, 0.05
 
-      assert_raise ArgumentError, "step 1, samples: is a power of two", fn ->
+      assert_raise Macaw.Data.Error, "step 1, samples: is a power of two", fn ->
         run(%{op: "spectrum", field: :v, samples: 12}, tone())
       end
 
-      assert_raise ArgumentError, "step 1, window: is one of hann, hamming or none", fn ->
+      assert_raise Macaw.Data.Error, "step 1, window: is one of hann, hamming or none", fn ->
         run(%{op: "spectrum", field: :v, window: :flat}, tone())
       end
 

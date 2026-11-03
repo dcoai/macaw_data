@@ -200,12 +200,15 @@ defmodule Macaw.Data.Delivery do
 
   def new(_rows, _opts), do: {:error, [{[:opts], {:type, :keyword}}]}
 
-  @doc "As `new/2`, raising `ArgumentError` in `format_error/1`'s words."
+  @doc "As `new/2`, raising `Macaw.Data.Error` in `format_error/1`'s words."
   @spec new!(Table.source() | Table.t(), keyword()) :: t()
   def new!(rows, opts \\ []) do
     case new(rows, opts) do
-      {:ok, delivery} -> delivery
-      {:error, faults} -> raise ArgumentError, "not a delivery: " <> words(faults)
+      {:ok, delivery} ->
+        delivery
+
+      {:error, faults} ->
+        raise Macaw.Data.Error, reason: faults, message: "not a delivery: " <> words(faults)
     end
   end
 
@@ -242,7 +245,7 @@ defmodule Macaw.Data.Delivery do
     end
   end
 
-  @doc "As `named_rows/1`, raising `ArgumentError` in `format_error/1`'s words."
+  @doc "As `named_rows/1`, raising `Macaw.Data.Error` in `format_error/1`'s words."
   @spec named_rows!(t()) :: [map()]
   def named_rows!(%__MODULE__{} = delivery) do
     case named_rows(delivery) do
@@ -250,7 +253,9 @@ defmodule Macaw.Data.Delivery do
         rows
 
       {:error, faults} ->
-        raise ArgumentError, "the rows cannot be read by name: " <> words(faults)
+        raise Macaw.Data.Error,
+          reason: faults,
+          message: "the rows cannot be read by name: " <> words(faults)
     end
   end
 
@@ -272,7 +277,7 @@ defmodule Macaw.Data.Delivery do
          do: Table.from(source, types: Map.merge(delivery.types, opts[:types]))
   end
 
-  @doc "As `table/2`, raising `ArgumentError` naming the faults."
+  @doc "As `table/2`, raising `Macaw.Data.Error` naming the faults."
   @spec table!(t(), keyword()) :: Table.t()
   def table!(%__MODULE__{} = delivery, opts \\ []) do
     case table(delivery, opts) do
@@ -280,7 +285,7 @@ defmodule Macaw.Data.Delivery do
         table
 
       {:error, faults} ->
-        raise ArgumentError, "the rows do not pack into a table: #{inspect(faults)}"
+        raise Macaw.Data.Error, reason: faults, what: "the rows do not pack into a table"
     end
   end
 

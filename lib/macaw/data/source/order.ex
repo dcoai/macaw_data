@@ -165,7 +165,7 @@ defmodule Macaw.Data.Source.Order do
     end
   end
 
-  @doc "As `sort/3`, the rows alone, raising `ArgumentError` naming the faults."
+  @doc "As `sort/3`, the rows alone, raising `Macaw.Data.Error` naming the faults."
   @spec sort!([map()], t(), Schema.t()) :: [map()]
   def sort!(rows, order, %Schema{} = schema) do
     case sort(rows, order, schema) do
@@ -173,7 +173,7 @@ defmodule Macaw.Data.Source.Order do
         sorted
 
       {:error, faults} ->
-        raise ArgumentError, "an order the schema cannot sort by: #{inspect(faults)}"
+        raise Macaw.Data.Error, reason: faults, what: "an order the schema cannot sort by"
     end
   end
 

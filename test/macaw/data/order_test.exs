@@ -169,7 +169,7 @@ defmodule Macaw.Data.OrderTest do
 
     assert Order.sort(atoms, [], @schema) == {:ok, atoms}
 
-    assert_raise ArgumentError, ~r/cannot sort by/, fn ->
+    assert_raise Macaw.Data.Error, ~r/cannot sort by/, fn ->
       Order.sort!(atoms, [{"nope", :asc}], @schema)
     end
   end

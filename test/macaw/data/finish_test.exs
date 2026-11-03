@@ -55,7 +55,7 @@ defmodule Macaw.Data.FinishTest do
     assert Finish.finish(Delivery.new!(rows), described(schema), request(window: [0, 1])) ==
              {:error, [{[:window], {:type, :time}}]}
 
-    assert_raise ArgumentError, ~r/cannot be finished/, fn ->
+    assert_raise Macaw.Data.Error, ~r/cannot be finished/, fn ->
       Finish.finish!(Delivery.new!(rows), described(schema), request(window: [0, 1]))
     end
 
@@ -281,7 +281,7 @@ defmodule Macaw.Data.FinishTest do
     assert Finish.reduce(pooled, @numbers, 15, "nope") ==
              {:error, [{[:reduce], {:unknown, :reducer, "nope"}}]}
 
-    assert_raise ArgumentError, fn -> Finish.reduce!(pooled, @numbers, 15, "nope") end
+    assert_raise Macaw.Data.Error, fn -> Finish.reduce!(pooled, @numbers, 15, "nope") end
 
     # A table stays a table of the same columns.
     table = Delivery.new!(Delivery.table!(hundred()))

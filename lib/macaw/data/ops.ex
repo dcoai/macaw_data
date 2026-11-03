@@ -29,7 +29,7 @@ defmodule Macaw.Data.Ops do
 
   In a stored function a fault's atoms are spelled as its literals are (spec/02 §6.3), so it matches a
   reason with its own words. `aggregate!/2,3` and `transform!/2,3` answer the value alone,
-  or raise `ArgumentError` with the faults' words, which the runner reports as `:raised`.
+  or raise `Macaw.Data.Error` with the faults' words, which the runner reports as `:raised`.
 
       iex> Macaw.Data.Ops.aggregate([3, nil, 1, 2], "median")
       {:ok, 2}
@@ -61,11 +61,11 @@ defmodule Macaw.Data.Ops do
   def aggregate(values, name, options),
     do: run(:aggregate, Operations.registry(), name, values, options)
 
-  @doc "As `aggregate/2`, the value alone, raising `ArgumentError` naming every fault."
+  @doc "As `aggregate/2`, the value alone, raising `Macaw.Data.Error` naming every fault."
   @spec aggregate!(Enumerable.t(), String.t()) :: term()
   def aggregate!(values, name), do: aggregate!(values, name, %{})
 
-  @doc "As `aggregate/3`, the value alone, raising `ArgumentError` naming every fault."
+  @doc "As `aggregate/3`, the value alone, raising `Macaw.Data.Error` naming every fault."
   @spec aggregate!(Enumerable.t(), String.t(), map()) :: term()
   def aggregate!(values, name, options), do: value!(name, aggregate(values, name, options))
 
@@ -85,11 +85,11 @@ defmodule Macaw.Data.Ops do
   def transform(rows, name, options),
     do: run(:transform, Operations.registry(), name, rows, options)
 
-  @doc "As `transform/2`, the rows alone, raising `ArgumentError` naming every fault."
+  @doc "As `transform/2`, the rows alone, raising `Macaw.Data.Error` naming every fault."
   @spec transform!(Table.source() | Table.t(), String.t()) :: [map()]
   def transform!(rows, name), do: transform!(rows, name, %{})
 
-  @doc "As `transform/3`, the rows alone, raising `ArgumentError` naming every fault."
+  @doc "As `transform/3`, the rows alone, raising `Macaw.Data.Error` naming every fault."
   @spec transform!(Table.source() | Table.t(), String.t(), map()) :: [map()]
   def transform!(rows, name, options), do: value!(name, transform(rows, name, options))
 
@@ -144,7 +144,11 @@ defmodule Macaw.Data.Ops do
   defp value!(_name, {:ok, value}), do: value
 
   defp value!(name, {:error, faults}),
-    do: raise(ArgumentError, "#{name}: " <> Enum.map_join(faults, "; ", &format_error/1))
+    do:
+      raise(Macaw.Data.Error,
+        reason: faults,
+        message: "#{name}: " <> Enum.map_join(faults, "; ", &format_error/1)
+      )
 
   # The words of Operations' reasons (spec/04 §2, §3.1), by their spellings: read back
   # from the strings a stored function holds them in. A fixed table; no atom is made.

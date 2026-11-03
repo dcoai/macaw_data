@@ -320,7 +320,7 @@ defmodule Macaw.Data.Unit do
   @spec dimension(code()) :: {:ok, dimension()} | {:error, reason()}
   def dimension(code), do: with({:ok, components} <- parsed(code), do: {:ok, dims(components)})
 
-  @doc "As `dimension/1`, the dimension alone, raising `ArgumentError` in `format_error/1`'s words."
+  @doc "As `dimension/1`, the dimension alone, raising `Macaw.Data.Error` in `format_error/1`'s words."
   @spec dimension!(code()) :: dimension()
   def dimension!(code), do: value!(dimension(code))
 
@@ -350,7 +350,7 @@ defmodule Macaw.Data.Unit do
     end
   end
 
-  @doc "As `factor/1`, the factor alone, raising `ArgumentError` in `format_error/1`'s words."
+  @doc "As `factor/1`, the factor alone, raising `Macaw.Data.Error` in `format_error/1`'s words."
   @spec factor!(code()) :: exact() | nil
   def factor!(code), do: value!(factor(code))
 
@@ -396,7 +396,7 @@ defmodule Macaw.Data.Unit do
   @spec minor_units(String.t()) :: {:ok, non_neg_integer() | nil} | {:error, reason()}
   def minor_units(iso), do: Currency.minor_units(iso)
 
-  @doc "As `minor_units/1`, the units alone, raising `ArgumentError` in `format_error/1`'s words."
+  @doc "As `minor_units/1`, the units alone, raising `Macaw.Data.Error` in `format_error/1`'s words."
   @spec minor_units!(String.t()) :: non_neg_integer() | nil
   def minor_units!(iso), do: value!(minor_units(iso))
 
@@ -415,7 +415,7 @@ defmodule Macaw.Data.Unit do
   @spec kind(code()) :: {:ok, kind()} | {:error, reason()}
   def kind(code), do: with({:ok, components} <- parsed(code), do: {:ok, kind_of(components)})
 
-  @doc "As `kind/1`, the kind alone, raising `ArgumentError` in `format_error/1`'s words."
+  @doc "As `kind/1`, the kind alone, raising `Macaw.Data.Error` in `format_error/1`'s words."
   @spec kind!(code()) :: kind()
   def kind!(code), do: value!(kind(code))
 
@@ -488,7 +488,7 @@ defmodule Macaw.Data.Unit do
 
   def convert(_value, _from, _to), do: {:error, :not_a_number}
 
-  @doc "As `convert/3`, the float alone, raising `ArgumentError` in `format_error/1`'s words."
+  @doc "As `convert/3`, the float alone, raising `Macaw.Data.Error` in `format_error/1`'s words."
   @spec convert!(number(), code(), code()) :: float()
   def convert!(value, from, to), do: value!(convert(value, from, to))
 
@@ -596,7 +596,7 @@ defmodule Macaw.Data.Unit do
     with {:ok, components} <- parsed(code), do: {:ok, symbol_of(components, opts)}
   end
 
-  @doc "As `symbol/2`, the symbol alone, raising `ArgumentError` in `format_error/1`'s words."
+  @doc "As `symbol/2`, the symbol alone, raising `Macaw.Data.Error` in `format_error/1`'s words."
   @spec symbol!(code(), keyword()) :: String.t()
   def symbol!(code, opts \\ []), do: value!(symbol(code, opts))
 
@@ -792,7 +792,9 @@ defmodule Macaw.Data.Unit do
 
   # The bang twins' one raise: their twin's reason in `format_error/1`'s words.
   defp value!({:ok, value}), do: value
-  defp value!({:error, reason}), do: raise(ArgumentError, format_error(reason))
+
+  defp value!({:error, reason}),
+    do: raise(Macaw.Data.Error, reason: reason, message: format_error(reason))
 
   # -- factors ------------------------------------------------------------------------
 

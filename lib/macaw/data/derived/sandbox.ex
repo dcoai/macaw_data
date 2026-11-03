@@ -301,12 +301,17 @@ defmodule Macaw.Data.Derived.Sandbox do
   end
 
   @doc false
-  # As `tightened/1`, the options alone, raising `ArgumentError` in `format_error/1`'s words.
+  # As `tightened/1`, the options alone, raising `Macaw.Data.Error` in `format_error/1`'s words.
   @spec tightened!(keyword()) :: keyword()
   def tightened!(opts) do
     case tightened(opts) do
-      {:ok, opts} -> opts
-      {:error, faults} -> raise ArgumentError, Enum.map_join(faults, "; ", &format_error/1)
+      {:ok, opts} ->
+        opts
+
+      {:error, faults} ->
+        raise Macaw.Data.Error,
+          reason: faults,
+          message: Enum.map_join(faults, "; ", &format_error/1)
     end
   end
 

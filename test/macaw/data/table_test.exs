@@ -332,7 +332,10 @@ defmodule Macaw.Data.TableTest do
                   {["z"], {:enum, Table.types()}}
                 ]}
 
-      assert_raise ArgumentError, ~r/not a table/, fn -> Table.new!([{"v", :number, ["x"]}]) end
+      assert_raise Macaw.Data.Error, ~r/not a table/, fn ->
+        Table.new!([{"v", :number, ["x"]}])
+      end
+
       assert {:ok, %Table{size: 0, names: []}} = Table.new([])
     end
 

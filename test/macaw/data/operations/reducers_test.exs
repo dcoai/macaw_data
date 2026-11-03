@@ -66,7 +66,7 @@ defmodule Macaw.Data.Operations.ReducersTest do
     assert Finish.reduce(delivery(), @schema, nil, "sort") ==
              {:error, [{[:reduce], {:unknown, :reducer, "sort"}}]}
 
-    assert_raise ArgumentError, ~r/cannot be reduced/, fn ->
+    assert_raise Macaw.Data.Error, ~r/cannot be reduced/, fn ->
       Finish.reduce!(delivery(), @schema, nil, "sort")
     end
 

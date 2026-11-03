@@ -44,7 +44,7 @@ defmodule Macaw.Data.Operations.OpsFaultPathsTest do
     # The words: a step-less path reads as its key alone.
     assert Ops.format_error({["p"], :required}) == "p: is required"
 
-    assert_raise ArgumentError, ~r/^quantile: p: is required$/, fn ->
+    assert_raise Macaw.Data.Error, ~r/^quantile: p: is required$/, fn ->
       Ops.aggregate!([1], "quantile")
     end
   end
@@ -70,7 +70,7 @@ defmodule Macaw.Data.Operations.OpsFaultPathsTest do
     # The words: step 1, the transform's only step.
     assert Ops.format_error({[0, "n"], :required}) == "step 1, n: is required"
 
-    assert_raise ArgumentError, ~r/^take: step 1, n: is required$/, fn ->
+    assert_raise Macaw.Data.Error, ~r/^take: step 1, n: is required$/, fn ->
       Ops.transform!(@rows, "take")
     end
   end

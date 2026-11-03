@@ -69,12 +69,17 @@ defmodule Macaw.Data.Operations do
   def registry(packages) when is_list(packages),
     do: Registry.build([__MODULE__ | packages], @step_keys)
 
-  @doc "As `registry/1`, raising `ArgumentError` naming every fault."
+  @doc "As `registry/1`, raising `Macaw.Data.Error` naming every fault."
   @spec registry!([module()]) :: Registry.t()
   def registry!(packages) when is_list(packages) do
     case registry(packages) do
-      {:ok, registry} -> registry
-      {:error, faults} -> raise ArgumentError, Enum.map_join(faults, "; ", &format_error/1)
+      {:ok, registry} ->
+        registry
+
+      {:error, faults} ->
+        raise Macaw.Data.Error,
+          reason: faults,
+          message: Enum.map_join(faults, "; ", &format_error/1)
     end
   end
 
@@ -122,12 +127,12 @@ defmodule Macaw.Data.Operations do
 
   def step_digest(%Registry{}, node) when is_map(node), do: {:error, {["op"], :required}}
 
-  @doc "As `step_digest/2`, raising `ArgumentError` naming the fault."
+  @doc "As `step_digest/2`, raising `Macaw.Data.Error` naming the fault."
   @spec step_digest!(Registry.t(), map()) :: String.t()
   def step_digest!(%Registry{} = registry, node) do
     case step_digest(registry, node) do
       {:ok, digest} -> digest
-      {:error, fault} -> raise ArgumentError, format_error(fault)
+      {:error, fault} -> raise Macaw.Data.Error, reason: fault, message: format_error(fault)
     end
   end
 
@@ -266,12 +271,17 @@ defmodule Macaw.Data.Operations do
     end
   end
 
-  @doc "As `apply/4`, raising `ArgumentError` naming every fault."
+  @doc "As `apply/4`, raising `Macaw.Data.Error` naming every fault."
   @spec apply!(Registry.t(), [map()], Table.source() | Table.t(), map()) :: Table.t()
   def apply!(%Registry{} = registry, nodes, source, context \\ %{}) do
     case apply(registry, nodes, source, context) do
-      {:ok, table} -> table
-      {:error, faults} -> raise ArgumentError, Enum.map_join(faults, "; ", &format_error/1)
+      {:ok, table} ->
+        table
+
+      {:error, faults} ->
+        raise Macaw.Data.Error,
+          reason: faults,
+          message: Enum.map_join(faults, "; ", &format_error/1)
     end
   end
 

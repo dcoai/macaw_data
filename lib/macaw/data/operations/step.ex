@@ -79,12 +79,12 @@ defmodule Macaw.Data.Operations.Step do
     end
   end
 
-  @doc "As `run/4`, raising `ArgumentError` naming the fault."
+  @doc "As `run/4`, raising `Macaw.Data.Error` naming the fault."
   @spec run!(module(), map(), Table.t(), map()) :: Table.t()
   def run!(module, node, %Table{} = table, context) do
     case run(module, node, table, context) do
       {:ok, output} -> output
-      {:error, fault} -> raise ArgumentError, words(fault)
+      {:error, fault} -> raise Macaw.Data.Error, reason: fault, message: words(fault)
     end
   end
 
@@ -162,12 +162,12 @@ defmodule Macaw.Data.Operations.Step do
     end
   end
 
-  @doc "As `parts/4`, raising `ArgumentError` naming the fault."
+  @doc "As `parts/4`, raising `Macaw.Data.Error` naming the fault."
   @spec parts!(module(), map(), Table.t(), map()) :: [part()]
   def parts!(module, node, %Table{} = table, context) do
     case parts(module, node, table, context) do
       {:ok, parts} -> parts
-      {:error, fault} -> raise ArgumentError, words(fault)
+      {:error, fault} -> raise Macaw.Data.Error, reason: fault, message: words(fault)
     end
   end
 

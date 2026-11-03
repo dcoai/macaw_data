@@ -70,12 +70,12 @@ defmodule Macaw.Data.Operations.Cache do
          do: run(cache, module, node, table, context, parts)
   end
 
-  @doc "As `run/5`, `{table, cache}`, raising `ArgumentError` naming the fault."
+  @doc "As `run/5`, `{table, cache}`, raising `Macaw.Data.Error` naming the fault."
   @spec run!(t(), module(), map(), Table.t(), map()) :: {Table.t(), t()}
   def run!(%__MODULE__{} = cache, module, node, %Table{} = table, context) do
     case run(cache, module, node, table, context) do
       {:ok, output, cache} -> {output, cache}
-      {:error, fault} -> raise ArgumentError, Step.format_error(fault)
+      {:error, fault} -> raise Macaw.Data.Error, reason: fault, message: Step.format_error(fault)
     end
   end
 

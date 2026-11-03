@@ -30,7 +30,7 @@ defmodule Macaw.Data.DeliveryTest do
     late = Delivery.new!([%{t: "later"}], types: %{t: :time})
     assert Delivery.rows(late) == [%{t: "later"}]
     assert {:error, _faults} = Delivery.table(late)
-    assert_raise ArgumentError, ~r/do not pack/, fn -> Delivery.table!(late) end
+    assert_raise Macaw.Data.Error, ~r/do not pack/, fn -> Delivery.table!(late) end
 
     assert {:ok, %Delivery{rows: @rows}} = Delivery.new(@rows)
 
@@ -40,7 +40,7 @@ defmodule Macaw.Data.DeliveryTest do
 
     assert Delivery.new(Delivery.new!(@rows)) == {:error, [{[:rows], :delivery}]}
 
-    assert_raise ArgumentError,
+    assert_raise Macaw.Data.Error,
                  "not a delivery: rows: a delivery carries rows, not another delivery",
                  fn ->
                    Delivery.new!(Delivery.new!(@rows))
@@ -79,14 +79,14 @@ defmodule Macaw.Data.DeliveryTest do
 
     assert Delivery.named_rows(Delivery.new!(tuples)) == {:error, [{[:names], :required}]}
 
-    assert_raise ArgumentError, ~r/tuple rows have no names/, fn ->
+    assert_raise Macaw.Data.Error, ~r/tuple rows have no names/, fn ->
       Delivery.named_rows!(Delivery.new!(tuples))
     end
 
     assert Delivery.named_rows(Delivery.new!(tuples, names: ["x"])) ==
              {:error, [{[:names], {:width, 1, 2}}]}
 
-    assert_raise ArgumentError, ~r/do not fit their names/, fn ->
+    assert_raise Macaw.Data.Error, ~r/do not fit their names/, fn ->
       Delivery.named_rows!(Delivery.new!(tuples, names: ["x"]))
     end
 
@@ -185,7 +185,7 @@ defmodule Macaw.Data.DeliveryTest do
     assert Delivery.format_error({[:served, :stale], {:type, :boolean}}) ==
              "served.stale: not a boolean"
 
-    assert_raise ArgumentError, ~r/served\.stale: not a boolean/, fn ->
+    assert_raise Macaw.Data.Error, ~r/served\.stale: not a boolean/, fn ->
       Delivery.new!(@rows, served: [stale: "yes"])
     end
   end
@@ -200,7 +200,7 @@ defmodule Macaw.Data.DeliveryTest do
       assert Delivery.new(@rows, served: [position: bad]) ==
                {:error, [{[:served, :position], {:type, :non_neg_integer}}]}
 
-      assert_raise ArgumentError, ~r/served.position: not a non-negative integer/, fn ->
+      assert_raise Macaw.Data.Error, ~r/served.position: not a non-negative integer/, fn ->
         Delivery.new!(@rows, served: [position: bad])
       end
     end
@@ -249,7 +249,7 @@ defmodule Macaw.Data.DeliveryTest do
       assert Delivery.new(@rows, served: [complete_until: bad]) ==
                {:error, [{[:served, :complete_until], {:type, :instant}}]}
 
-      assert_raise ArgumentError, ~r/complete_until/, fn ->
+      assert_raise Macaw.Data.Error, ~r/complete_until/, fn ->
         Delivery.new!(@rows, served: [complete_until: bad])
       end
     end
@@ -334,7 +334,7 @@ defmodule Macaw.Data.DeliveryTest do
     assert Delivery.new(@rows, :served) == {:error, [{[:opts], {:type, :keyword}}]}
     assert Delivery.new(@rows, [:served]) == {:error, [{[:opts], {:type, :keyword}}]}
 
-    assert_raise ArgumentError,
+    assert_raise Macaw.Data.Error,
                  "not a delivery: names: not a list of atoms or strings; served.up: not a served fact (spec/01 §3)",
                  fn -> Delivery.new!(@rows, names: [1], served: [up: 2]) end
 
@@ -383,7 +383,7 @@ defmodule Macaw.Data.DeliveryTest do
           end
 
           message = "not a delivery: " <> Enum.map_join(faults, "; ", &Delivery.format_error/1)
-          assert_raise ArgumentError, message, fn -> Delivery.new!(rows, opts) end
+          assert_raise Macaw.Data.Error, message, fn -> Delivery.new!(rows, opts) end
       end
     end
   end

@@ -321,7 +321,7 @@ for generated columns of every packed form, with gaps and without, a column's va
 - `version` is the schema's version (§1.10);
 - `identity` is the declared identity fields of `identity/1` (§1.4), derived by `new/1` so a row's identity is read without walking the fields again; a struct assembled by hand may leave it `nil`, and `identity/1` derives it then.
 
-`Macaw.Data.Schema.new/1` is the only constructor. It takes the map of descriptions, checks it, and returns `{:ok, schema}` or `{:error, faults}` with every fault found, each `{path, reason}` from the schema to the value (`[:latency, :unit]`), ordered by path (§1.8). `new!/1` returns the schema or raises `ArgumentError` with every fault formatted by `format_error/1`. It is ported from visualize's `Visualize.Data.Schema` (its spec/08 §10.1).
+`Macaw.Data.Schema.new/1` is the only constructor. It takes the map of descriptions, checks it, and returns `{:ok, schema}` or `{:error, faults}` with every fault found, each `{path, reason}` from the schema to the value (`[:latency, :unit]`), ordered by path (§1.8). `new!/1` returns the schema or raises `Macaw.Data.Error` with every fault formatted by `format_error/1`. It is ported from visualize's `Visualize.Data.Schema` (its spec/08 §10.1).
 
 | Key | Value | For a field of type | Meaning |
 |---|---|---|---|
@@ -812,7 +812,7 @@ held/1's rows are a chunked table of the source's origin, its columns the schema
 - **`origin`**: `%{source: name, request: digest, as_of: time}`, the source, a digest of the request (`Macaw.Layers.Document.digest/1` of it), and the `DateTime` it is as of when used, else `nil`; or `nil`.
 - **`retracted`** and **`replace`**: the changes a pushed increment carries beside its inserted rows (§4.2), `[]` by default.
 
-**`new/2` answers `{:ok, delivery}` or every fault, `{path, reason}`** (macaw_data#114, [00 §5](00-overview.md#data-errors)), in the order of the fields; `new!/2` raises `ArgumentError` in `format_error/1`'s words:
+**`new/2` answers `{:ok, delivery}` or every fault, `{path, reason}`** (macaw_data#114, [00 §5](00-overview.md#data-errors)), in the order of the fields; `new!/2` raises `Macaw.Data.Error` in `format_error/1`'s words:
 
 | Fault | Meaning |
 |---|---|
@@ -864,7 +864,7 @@ a delivery names the schema's version, never the schema; its origin is the sourc
 ```
 
 ```test:delivery-faults
-for generated rows and options, good and bad, new/2 never raises: it answers {:ok, delivery} or every fault, a {path, reason} format_error/1 words; new!/2 raises ArgumentError in those words
+for generated rows and options, good and bad, new/2 never raises: it answers {:ok, delivery} or every fault, a {path, reason} format_error/1 words; new!/2 raises Macaw.Data.Error in those words
 ```
 
 ## 4. Push {#sources-push}
@@ -963,7 +963,7 @@ a request names the subscription it is a snapshot for, nil by default, and refus
 
 ### 4.2 Retractions and range replacements {#sources-push-changes}
 
-**A pushed increment carries its changes beside its inserted rows** (§3): `retracted`, a list of row maps withdrawn, and `replace`, a list of range replacements, each `%{from, to, identities, rows}`; both `[]` by default, and a snapshot carries neither. `Delivery.new/2` checks their shapes, raising `ArgumentError` for a retraction that is not a map, a replacement with another key, `identities` neither a list nor `nil`, or `rows` not a list of maps; a replacement's missing keys take `nil`, `nil`, `nil` and `[]`.
+**A pushed increment carries its changes beside its inserted rows** (§3): `retracted`, a list of row maps withdrawn, and `replace`, a list of range replacements, each `%{from, to, identities, rows}`; both `[]` by default, and a snapshot carries neither. `Delivery.new/2` checks their shapes and answers a fault (§3) for a retraction that is not a map, a replacement with another key, `identities` neither a list nor `nil`, or `rows` not a list of maps; a replacement's missing keys take `nil`, `nil`, `nil` and `[]`.
 
 **`retracted`: rows withdrawn from what is held.** Identity names an entity, not a row (§1.4): a series or a host. Several held rows can share an identity and an instant (tally taps, label sets collapsed into one entity, duplicate readings), so a retraction matches in steps:
 1. **By identity and the window-field value the row was held at:** its old value, when an edit moves the row. That locates the row, and in the chunked table its chunk (§2.6).

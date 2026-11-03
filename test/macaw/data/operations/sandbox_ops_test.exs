@@ -64,7 +64,7 @@ defmodule Macaw.Data.Operations.SandboxOpsTest do
       assert Ops.aggregate!([1, nil, 3], "sum") == 4
       assert Ops.aggregate!([1, 2, 3, 4], "quantile", %{p: 0.5}) == 2.5
 
-      assert_raise ArgumentError, "take: step 1, n: is required", fn ->
+      assert_raise Macaw.Data.Error, "take: step 1, n: is required", fn ->
         Ops.transform!(@rows, "take")
       end
     end
@@ -156,19 +156,19 @@ defmodule Macaw.Data.Operations.SandboxOpsTest do
 
     @tag verifies: ["operations-sandbox-calls", "operations-sandbox-ops"]
     test "a bad option raises when the call runs, and the runner reports it" do
-      assert {:error, :raised, ArgumentError} =
+      assert {:error, :raised, Macaw.Data.Error} =
                call(~S|fn rows -> Macaw.Data.Ops.aggregate!(rows, "quantile") end|, [[1, 2]])
 
-      assert {:error, :raised, ArgumentError} =
+      assert {:error, :raised, Macaw.Data.Error} =
                call(~S|fn rows -> Macaw.Data.Ops.transform!(rows, "take", %{n: -1}) end|, [@rows])
 
-      assert {:error, :raised, ArgumentError} =
+      assert {:error, :raised, Macaw.Data.Error} =
                call(
                  ~S|fn rows -> Macaw.Data.Ops.transform!(rows, "take", %{op: "sort", n: 1}) end|,
                  [@rows]
                )
 
-      assert_raise ArgumentError, "quantile: p: is required", fn ->
+      assert_raise Macaw.Data.Error, "quantile: p: is required", fn ->
         Ops.aggregate!([1], "quantile")
       end
     end

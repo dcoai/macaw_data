@@ -249,21 +249,24 @@ defmodule Macaw.Data.Derived.ColumnsTest do
     assert Columns.min(table, "v") == {:ok, nil}
     assert Columns.count(table, "v") == {:ok, 0}
 
-    assert_raise ArgumentError, ~s|the input has no column "w"|, fn ->
+    assert_raise Macaw.Data.Error, ~s|the input has no column "w"|, fn ->
       Columns.column!(table, "w")
     end
 
-    assert_raise ArgumentError, ~s|column "s" is :text, not :number|, fn ->
+    assert_raise Macaw.Data.Error, ~s|column "s" is :text, not :number|, fn ->
       Columns.sum!(table, :s)
     end
 
-    assert_raise ArgumentError, ~s|column "v" is :number, not :time|, fn ->
+    assert_raise Macaw.Data.Error, ~s|column "v" is :number, not :time|, fn ->
       Columns.instants!(table, "v")
     end
 
-    assert_raise ArgumentError, ~r/an atom or a string/, fn -> Columns.count!(table, 1) end
-    assert_raise ArgumentError, ~r/not a Macaw.Data.Table/, fn -> Columns.size!(nil) end
-    assert_raise ArgumentError, ~r/integer count/, fn -> Columns.take!(table, :x) end
-    assert_raise ArgumentError, ~r/non-negative integers/, fn -> Columns.slice!(table, 0, -1) end
+    assert_raise Macaw.Data.Error, ~r/an atom or a string/, fn -> Columns.count!(table, 1) end
+    assert_raise Macaw.Data.Error, ~r/not a Macaw.Data.Table/, fn -> Columns.size!(nil) end
+    assert_raise Macaw.Data.Error, ~r/integer count/, fn -> Columns.take!(table, :x) end
+
+    assert_raise Macaw.Data.Error, ~r/non-negative integers/, fn ->
+      Columns.slice!(table, 0, -1)
+    end
   end
 end

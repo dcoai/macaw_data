@@ -173,7 +173,7 @@ defmodule Macaw.Data.Derived.Functions do
 
   def registry(_modules), do: {:error, [{[], {:type, :modules}}]}
 
-  @doc "As `registry/1`, the registry alone, raising `ArgumentError` naming the faults."
+  @doc "As `registry/1`, the registry alone, raising `Macaw.Data.Error` naming the faults."
   @spec registry!([module()]) :: registry()
   def registry!(modules) do
     case registry(modules) do
@@ -181,7 +181,7 @@ defmodule Macaw.Data.Derived.Functions do
         registry
 
       {:error, faults} ->
-        raise ArgumentError, "not a registry of derived-source functions: #{inspect(faults)}"
+        raise Macaw.Data.Error, reason: faults, what: "not a registry of derived-source functions"
     end
   end
 

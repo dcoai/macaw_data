@@ -101,8 +101,8 @@ defmodule Macaw.Data.UnitTest do
       assert Unit.kind(:s) == {:error, {:syntax, ":s"}}
       assert Unit.symbol("sec") == {:error, {:unknown_atom, "sec"}}
       assert {:ok, %{time: 1}} = Unit.dimension("s")
-      assert_raise ArgumentError, ~r/"sec"/, fn -> Unit.dimension!("sec") end
-      assert_raise ArgumentError, fn -> Unit.factor!("") end
+      assert_raise Macaw.Data.Error, ~r/"sec"/, fn -> Unit.dimension!("sec") end
+      assert_raise Macaw.Data.Error, fn -> Unit.factor!("") end
     end
   end
 
@@ -124,11 +124,11 @@ defmodule Macaw.Data.UnitTest do
       assert Unit.convert(:one, "s", "s") == {:error, :not_a_number}
       assert Unit.convert(1500, "ms", "s") == {:ok, 1.5}
 
-      assert_raise ArgumentError, ~r/"s" and "By" measure different dimensions/, fn ->
+      assert_raise Macaw.Data.Error, ~r/"s" and "By" measure different dimensions/, fn ->
         Unit.convert!(1, "s", "By")
       end
 
-      assert_raise ArgumentError, ~r/inside a term/, fn -> Unit.convert!(1, "Cel/h", "K/h") end
+      assert_raise Macaw.Data.Error, ~r/inside a term/, fn -> Unit.convert!(1, "Cel/h", "K/h") end
     end
   end
 

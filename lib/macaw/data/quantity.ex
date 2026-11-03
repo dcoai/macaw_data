@@ -121,7 +121,7 @@ defmodule Macaw.Data.Quantity do
   @spec base_unit(t()) :: {:ok, Unit.code() | nil} | {:error, reason()}
   def base_unit(quantity), do: with({:ok, facts} <- facts(quantity), do: {:ok, facts.base})
 
-  @doc "As `base_unit/1`, the unit alone, raising `ArgumentError` naming the quantity."
+  @doc "As `base_unit/1`, the unit alone, raising `Macaw.Data.Error` naming the quantity."
   @spec base_unit!(t()) :: Unit.code() | nil
   def base_unit!(quantity), do: value!(base_unit(quantity))
 
@@ -143,7 +143,7 @@ defmodule Macaw.Data.Quantity do
   @spec kind(t()) :: {:ok, kind()} | {:error, reason()}
   def kind(quantity), do: with({:ok, facts} <- facts(quantity), do: {:ok, facts.kind})
 
-  @doc "As `kind/1`, the kind alone, raising `ArgumentError` naming the quantity."
+  @doc "As `kind/1`, the kind alone, raising `Macaw.Data.Error` naming the quantity."
   @spec kind!(t()) :: kind()
   def kind!(quantity), do: value!(kind(quantity))
 
@@ -163,7 +163,7 @@ defmodule Macaw.Data.Quantity do
   @spec bounds(t()) :: {:ok, {number() | nil, number() | nil}} | {:error, reason()}
   def bounds(quantity), do: with({:ok, facts} <- facts(quantity), do: {:ok, facts.bounds})
 
-  @doc "As `bounds/1`, the bounds alone, raising `ArgumentError` naming the quantity."
+  @doc "As `bounds/1`, the bounds alone, raising `Macaw.Data.Error` naming the quantity."
   @spec bounds!(t()) :: {number() | nil, number() | nil}
   def bounds!(quantity), do: value!(bounds(quantity))
 
@@ -196,7 +196,7 @@ defmodule Macaw.Data.Quantity do
     end
   end
 
-  @doc "As `bounds/2`, the bounds alone, raising `ArgumentError` in `Macaw.Data.Unit.format_error/1`'s words."
+  @doc "As `bounds/2`, the bounds alone, raising `Macaw.Data.Error` in `Macaw.Data.Unit.format_error/1`'s words."
   @spec bounds!(t(), Unit.code()) :: {number() | nil, number() | nil}
   def bounds!(quantity, unit), do: value!(bounds(quantity, unit))
 
@@ -246,7 +246,7 @@ defmodule Macaw.Data.Quantity do
 
   def additivity(_quantity, metric_kind), do: {:error, {:unknown_metric_kind, metric_kind}}
 
-  @doc "As `additivity/2`, the map alone, raising `ArgumentError` naming the reason."
+  @doc "As `additivity/2`, the map alone, raising `Macaw.Data.Error` naming the reason."
   @spec additivity!(t() | nil, metric_kind() | nil) :: %{across: boolean(), over_time: boolean()}
   def additivity!(quantity, metric_kind \\ nil), do: value!(additivity(quantity, metric_kind))
 
@@ -272,7 +272,7 @@ defmodule Macaw.Data.Quantity do
   @spec family(t(), Unit.code() | nil) :: {:ok, [Unit.code()]} | {:error, term()}
   def family(quantity, unit), do: family(quantity, unit, :as_posted)
 
-  @doc "As `family/2`, the family alone, raising `ArgumentError` naming the reason."
+  @doc "As `family/2`, the family alone, raising `Macaw.Data.Error` naming the reason."
   @spec family!(t(), Unit.code() | nil) :: [Unit.code()]
   def family!(quantity, unit), do: value!(family(quantity, unit))
 
@@ -330,7 +330,7 @@ defmodule Macaw.Data.Quantity do
     end
   end
 
-  @doc "As `family/3`, the family alone, raising `ArgumentError` naming the reason."
+  @doc "As `family/3`, the family alone, raising `Macaw.Data.Error` naming the reason."
   @spec family!(t(), Unit.code() | nil, system()) :: [Unit.code()]
   def family!(quantity, unit, system), do: value!(family(quantity, unit, system))
 
@@ -340,7 +340,9 @@ defmodule Macaw.Data.Quantity do
 
   # The bang twins' one raise: their twin's reason, worded.
   defp value!({:ok, value}), do: value
-  defp value!({:error, reason}), do: raise(ArgumentError, words(reason))
+
+  defp value!({:error, reason}),
+    do: raise(Macaw.Data.Error, reason: reason, message: words(reason))
 
   defp words({:unknown_quantity, quantity}),
     do: "#{inspect(quantity)} is not a quantity of Macaw.Data.Quantity.all/0"
@@ -384,12 +386,15 @@ defmodule Macaw.Data.Quantity do
     end
   end
 
-  @doc "As `of_unit/1`, the quantity alone, raising `ArgumentError` in `Macaw.Data.Unit.format_error/1`'s words."
+  @doc "As `of_unit/1`, the quantity alone, raising `Macaw.Data.Error` in `Macaw.Data.Unit.format_error/1`'s words."
   @spec of_unit!(Unit.code()) :: t() | nil
   def of_unit!(unit) do
     case of_unit(unit) do
-      {:ok, quantity} -> quantity
-      {:error, reason} -> raise ArgumentError, Unit.format_error(reason)
+      {:ok, quantity} ->
+        quantity
+
+      {:error, reason} ->
+        raise Macaw.Data.Error, reason: reason, message: Unit.format_error(reason)
     end
   end
 
@@ -459,12 +464,15 @@ defmodule Macaw.Data.Quantity do
     end
   end
 
-  @doc "As `label/1`, the label alone, raising `ArgumentError` naming the reason."
+  @doc "As `label/1`, the label alone, raising `Macaw.Data.Error` naming the reason."
   @spec label!(measure()) :: String.t() | nil
   def label!(measure) do
     case label(measure) do
-      {:ok, label} -> label
-      {:error, reason} -> raise ArgumentError, "not a measure: #{inspect(reason)}"
+      {:ok, label} ->
+        label
+
+      {:error, reason} ->
+        raise Macaw.Data.Error, reason: reason, message: "not a measure: " <> words(reason)
     end
   end
 

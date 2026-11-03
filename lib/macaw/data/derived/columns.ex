@@ -20,7 +20,7 @@ defmodule Macaw.Data.Derived.Columns do
     or `slice/3`'s start or count is not a non-negative integer.
 
   Each has a `!` variant (`sum!/2`, …) that answers the value alone, or raises
-  `ArgumentError` worded by `format_error/1`.
+  `Macaw.Data.Error` worded by `format_error/1`.
 
   - **What it holds:** `names/1`, `type/2`, `size/1`.
   - **Positional reads**, one value a row, in order, `nil` at a gap (`false` in
@@ -287,72 +287,74 @@ defmodule Macaw.Data.Derived.Columns do
 
   # -- the ! variants ----------------------------------------------------------------------
 
-  @doc "As `names/1`, the value, or `ArgumentError` worded by `format_error/1`."
+  @doc "As `names/1`, the value, or `Macaw.Data.Error` worded by `format_error/1`."
   @spec names!(Table.t()) :: [Table.name()]
   def names!(table), do: value!(names(table))
 
-  @doc "As `type/2`, the value, or `ArgumentError` worded by `format_error/1`."
+  @doc "As `type/2`, the value, or `Macaw.Data.Error` worded by `format_error/1`."
   @spec type!(Table.t(), name()) :: Table.type()
   def type!(table, name), do: value!(type(table, name))
 
-  @doc "As `size/1`, the value, or `ArgumentError` worded by `format_error/1`."
+  @doc "As `size/1`, the value, or `Macaw.Data.Error` worded by `format_error/1`."
   @spec size!(Table.t()) :: non_neg_integer()
   def size!(table), do: value!(size(table))
 
-  @doc "As `column/2`, the value, or `ArgumentError` worded by `format_error/1`."
+  @doc "As `column/2`, the value, or `Macaw.Data.Error` worded by `format_error/1`."
   @spec column!(Table.t(), name()) :: [term()]
   def column!(table, name), do: value!(column(table, name))
 
-  @doc "As `numbers/2`, the value, or `ArgumentError` worded by `format_error/1`."
+  @doc "As `numbers/2`, the value, or `Macaw.Data.Error` worded by `format_error/1`."
   @spec numbers!(Table.t(), name()) :: [number() | nil]
   def numbers!(table, name), do: value!(numbers(table, name))
 
-  @doc "As `instants/2`, the value, or `ArgumentError` worded by `format_error/1`."
+  @doc "As `instants/2`, the value, or `Macaw.Data.Error` worded by `format_error/1`."
   @spec instants!(Table.t(), name()) :: [integer() | nil]
   def instants!(table, name), do: value!(instants(table, name))
 
-  @doc "As `time_kind/2`, the kind, or `ArgumentError` worded by `format_error/1`."
+  @doc "As `time_kind/2`, the kind, or `Macaw.Data.Error` worded by `format_error/1`."
   @spec time_kind!(Table.t(), name()) :: DateTime | NaiveDateTime | Date | :mixed
   def time_kind!(table, name), do: value!(time_kind(table, name))
 
-  @doc "As `valid/2`, the value, or `ArgumentError` worded by `format_error/1`."
+  @doc "As `valid/2`, the value, or `Macaw.Data.Error` worded by `format_error/1`."
   @spec valid!(Table.t(), name()) :: [boolean()]
   def valid!(table, name), do: value!(valid(table, name))
 
-  @doc "As `count/2`, the value, or `ArgumentError` worded by `format_error/1`."
+  @doc "As `count/2`, the value, or `Macaw.Data.Error` worded by `format_error/1`."
   @spec count!(Table.t(), name()) :: non_neg_integer()
   def count!(table, name), do: value!(count(table, name))
 
-  @doc "As `sum/2`, the value, or `ArgumentError` worded by `format_error/1`."
+  @doc "As `sum/2`, the value, or `Macaw.Data.Error` worded by `format_error/1`."
   @spec sum!(Table.t(), name()) :: number()
   def sum!(table, name), do: value!(sum(table, name))
 
-  @doc "As `mean/2`, the value, or `ArgumentError` worded by `format_error/1`."
+  @doc "As `mean/2`, the value, or `Macaw.Data.Error` worded by `format_error/1`."
   @spec mean!(Table.t(), name()) :: float() | nil
   def mean!(table, name), do: value!(mean(table, name))
 
-  @doc "As `min/2`, the value, or `ArgumentError` worded by `format_error/1`."
+  @doc "As `min/2`, the value, or `Macaw.Data.Error` worded by `format_error/1`."
   @spec min!(Table.t(), name()) :: number() | DateTime.t() | NaiveDateTime.t() | Date.t() | nil
   def min!(table, name), do: value!(min(table, name))
 
-  @doc "As `max/2`, the value, or `ArgumentError` worded by `format_error/1`."
+  @doc "As `max/2`, the value, or `Macaw.Data.Error` worded by `format_error/1`."
   @spec max!(Table.t(), name()) :: number() | DateTime.t() | NaiveDateTime.t() | Date.t() | nil
   def max!(table, name), do: value!(max(table, name))
 
-  @doc "As `slice/3`, the value, or `ArgumentError` worded by `format_error/1`."
+  @doc "As `slice/3`, the value, or `Macaw.Data.Error` worded by `format_error/1`."
   @spec slice!(Table.t(), non_neg_integer(), non_neg_integer()) :: Table.t()
   def slice!(table, start, count), do: value!(slice(table, start, count))
 
-  @doc "As `take/2`, the value, or `ArgumentError` worded by `format_error/1`."
+  @doc "As `take/2`, the value, or `Macaw.Data.Error` worded by `format_error/1`."
   @spec take!(Table.t(), integer()) :: Table.t()
   def take!(table, n), do: value!(take(table, n))
 
-  @doc "As `rows/1`, the value, or `ArgumentError` worded by `format_error/1`."
+  @doc "As `rows/1`, the value, or `Macaw.Data.Error` worded by `format_error/1`."
   @spec rows!(Table.t()) :: [map()]
   def rows!(table), do: value!(rows(table))
 
   defp value!({:ok, value}), do: value
-  defp value!({:error, reason}), do: raise(ArgumentError, format_error(reason))
+
+  defp value!({:error, reason}),
+    do: raise(Macaw.Data.Error, reason: reason, message: format_error(reason))
 
   @doc """
   One reason as a line a person reads.

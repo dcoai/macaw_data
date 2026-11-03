@@ -84,7 +84,7 @@ defmodule Macaw.Data.Derived.FunctionsTest do
     assert Functions.registry(:none) == {:error, [{[], {:type, :modules}}]}
     assert {:ok, %{}} = Functions.registry([])
 
-    assert_raise ArgumentError, ~r/not a registry of derived-source functions/, fn ->
+    assert_raise Macaw.Data.Error, ~r/not a registry of derived-source functions/, fn ->
       Functions.registry!([Sources, Other])
     end
   end

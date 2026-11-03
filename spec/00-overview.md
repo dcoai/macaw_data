@@ -44,9 +44,10 @@ Each is released by git tag. An adopter published on Hex (visualize) switches wh
 
 **A public function answers bad input with `{:error, reason}`; it does not raise** (macaw_data#114). A raise is caught by no one, because this library and its adopters rescue nothing, while a value is read by the caller that can act on it.
 - **Success** is `{:ok, value}`, or a bare value only where nothing the caller passes can fail.
-- **A `name!` twin** may raise. It calls `name` and raises its `{:error, reason}` as an `ArgumentError` in that module's `format_error/1` words. The twin is for a caller that knows its input is valid, as the library's own callers often do.
+- **A `name!` twin** may raise. It calls `name` and raises its `{:error, reason}` as a `Macaw.Data.Error` (macaw_data#130, #157): the term itself on the exception's `reason`, exactly as the twin answers it, and its words for the message, never an `inspect`ed fault. A module with words of its own (`format_error/1`) words its reasons, and every other reason is worded by the library's one formatter, `Macaw.Data.Fault.sentence/2`. The terms are on the exception and not only in the message, so a reader of a crash report or a test reads them without parsing words. An `ArgumentError` has no field to carry them. The twin is for a caller that knows its input is valid, as the library's own callers often do.
 - **A macro's misuse** fails the build with a `CompileError`: there is no caller to answer.
 - **A broken internal invariant** may raise. That is a bug in this library, not bad input, and each one is named in the guard's allowlist with its reason.
+- **An argument of the wrong type is out of scope** (macaw_data#130). A `FunctionClauseError` from a guard on a public function's argument type, a map where a list is taken, is a programming error, not input a document, a viewer or a source controls. An argument of the right type but the wrong shape, a list of the wrong elements, is input, and answers a fault.
 
 **Reasons are data, in one vocabulary,** the shapes the library already answers:
 - a fault at a place, `{path, reason}`: a list of the keys, indexes and names that lead to the bad part, and why (`Table.from/1`, `Schema.new/1`, `Operations.apply/4`, a derived source's form, [01 §1.1](01-sources.md#sources-table), [04 §3.1](04-operations.md#operations-run));
@@ -54,6 +55,10 @@ Each is released by git tag. An adopter published on Hex (visualize) switches wh
 - a module's own named reasons, such as a unit's `{:dimension, from, to}` ([03](03-units.md)).
 
 Each module's `format_error/1` gives a reason's words, and each converted function's spec section names its reasons.
+
+```test:data-errors-twins
+every ! twin raises Macaw.Data.Error whose reason is exactly its value twin's error term and whose message is words with no inspected fault; the formatter words a fault list by path, a bare reason, a module's own reason through words:, and an unknown reason as its term
+```
 
 **The guard**, `ci/raises.exs`, holds the library to this. It reads every `.ex` file under `lib/` as code, so a raise in a doc or a comment is no site, and finds each `raise`, `reraise` and `throw` with the function it sits in, `Module.name/arity`. A public `name!` whose module also defines `name` of the same arity is a twin and passes. Every other site must be named in `ci/raises_allowlist.exs` with how many sites its function holds, a class and a reason, and an entry whose count is not what its function holds fails too. The classes are:
 - `:bang`: a private helper the twins share;

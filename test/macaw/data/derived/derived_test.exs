@@ -152,7 +152,7 @@ defmodule Macaw.Data.DerivedTest do
       assert {:error, [{[], {:type, :derived}}]} = Derived.new([1, 2])
       assert {:error, [{[], {:type, :derived}}]} = Derived.new(:nope)
 
-      assert_raise ArgumentError,
+      assert_raise Macaw.Data.Error,
                    ~r/not a derived source:\n  elixir: is required\n  from: is required\n  id: is required\n  schema: is required/,
                    fn ->
                      Derived.new!(%{})

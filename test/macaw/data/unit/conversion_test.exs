@@ -93,7 +93,7 @@ defmodule Macaw.Data.Unit.ConversionTest do
       assert Unit.convert(1, "{iso4217:USD}", "{iso4217:EUR}") ==
                {:error, {:currency, "{iso4217:USD}", "{iso4217:EUR}"}}
 
-      assert_raise ArgumentError, ~r/exchange rate is data/, fn ->
+      assert_raise Macaw.Data.Error, ~r/exchange rate is data/, fn ->
         Unit.convert!(1, "{iso4217:USD}", "{iso4217:EUR}")
       end
     end

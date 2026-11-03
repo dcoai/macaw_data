@@ -204,10 +204,10 @@ defmodule Macaw.Data.Derived.SandboxTest do
       assert {:error, :raised, MatchError} =
                call(~s|fn t -> {:ok, s} = #{@columns}.sum(t, #{w}); s end|, [table()])
 
-      assert {:error, :raised, ArgumentError} =
+      assert {:error, :raised, Macaw.Data.Error} =
                call(~s|fn t -> #{@columns}.sum!(t, #{w}) end|, [table()])
 
-      assert {:error, :raised, ArgumentError} =
+      assert {:error, :raised, Macaw.Data.Error} =
                call(~s|fn t -> #{@columns}.column!(t, #{w}) end|, [table()])
 
       assert call(~s|fn t -> #{@columns}.column(t, #{w}) end|, [table()]) ==
@@ -656,7 +656,7 @@ defmodule Macaw.Data.Derived.SandboxTest do
                {:error, [{nil, {:bound, :max_source, 10_000}}]}
 
       assert Sandbox.format_error({nil, {:bound, :max_source, 10_000}}) =~ "never raised"
-      assert_raise ArgumentError, ~r/never raised/, fn -> Sandbox.tightened!(max_heap: 0) end
+      assert_raise Macaw.Data.Error, ~r/never raised/, fn -> Sandbox.tightened!(max_heap: 0) end
 
       assert {:error, [{nil, {:too_long, 5, _}}]} = Sandbox.check("fn x -> x end", max_source: 5)
     end

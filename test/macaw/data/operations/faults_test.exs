@@ -39,7 +39,7 @@ defmodule Macaw.Data.Operations.FaultsTest do
     assert Operations.apply(@registry, nodes, rows) ==
              {:error, [{[1, "field"], {:reads, :number}}]}
 
-    assert_raise ArgumentError, "step 2, field: reads a value that is not a number", fn ->
+    assert_raise Macaw.Data.Error, "step 2, field: reads a value that is not a number", fn ->
       Operations.apply!(@registry, nodes, rows)
     end
 

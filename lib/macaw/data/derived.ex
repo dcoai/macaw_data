@@ -130,7 +130,7 @@ defmodule Macaw.Data.Derived do
     end
   end
 
-  @doc "The derived source, or `ArgumentError` naming every fault."
+  @doc "The derived source, or `Macaw.Data.Error` naming every fault."
   @spec new!(map() | keyword()) :: t()
   def new!(source) do
     case new(source) do
@@ -138,9 +138,11 @@ defmodule Macaw.Data.Derived do
         source
 
       {:error, errors} ->
-        raise ArgumentError,
-              "not a derived source:\n" <>
-                Enum.map_join(errors, "\n", &("  " <> format_error(&1)))
+        raise Macaw.Data.Error,
+          reason: errors,
+          message:
+            "not a derived source:\n" <>
+              Enum.map_join(errors, "\n", &("  " <> format_error(&1)))
     end
   end
 

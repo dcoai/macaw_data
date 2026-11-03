@@ -111,11 +111,11 @@ defmodule Macaw.Data.Derived.ColumnsTimeKindTest do
     assert Columns.time_kind([%{"t" => @utc}], "t") == {:error, {:type, :table}}
     assert Columns.time_kind(table, 1) == {:error, {:type, :name}}
 
-    assert_raise ArgumentError, ~s(column "v" is :number, not :time), fn ->
+    assert_raise Macaw.Data.Error, ~s(column "v" is :number, not :time), fn ->
       Columns.time_kind!(table, "v")
     end
 
-    assert_raise ArgumentError, ~r/no column "w"/, fn -> Columns.time_kind!(table, "w") end
+    assert_raise Macaw.Data.Error, ~r/no column "w"/, fn -> Columns.time_kind!(table, "w") end
   end
 
   @tag verifies: "derived-columns-time-kind"
