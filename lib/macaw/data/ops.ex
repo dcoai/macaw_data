@@ -19,8 +19,15 @@ defmodule Macaw.Data.Ops do
 
   **Errors are values** (spec/00 §5). `aggregate/2,3` answers `{:ok, value}` and
   `transform/2,3` `{:ok, rows}`, or `{:error, faults}`: `Macaw.Data.Operations`' faults
-  (spec/04 §3.1), at the call's single step, worded by `format_error/1`. In a stored
-  function a fault's atoms are spelled as its literals are (spec/02 §6.3), so it matches a
+  (spec/04 §3.1), worded by `format_error/1`.
+
+  **Where a fault is placed** (spec/04 §6, macaw_data#139): a transform call runs a
+  one-step pipeline, so its faults are at that step, `[0, key]` for an option and
+  `[0, "op"]` for its name or an `op` option. An aggregate call is no step, so its faults
+  name none: `[]` for an unknown name, `[key]` for an option, `["values"]` for a reading.
+  Options that are no map are at `["options"]` either way.
+
+  In a stored function a fault's atoms are spelled as its literals are (spec/02 §6.3), so it matches a
   reason with its own words. `aggregate!/2,3` and `transform!/2,3` answer the value alone,
   or raise `ArgumentError` with the faults' words, which the runner reports as `:raised`.
 
@@ -30,6 +37,10 @@ defmodule Macaw.Data.Ops do
       [%{v: 1}, %{v: 2}]
       iex> Macaw.Data.Ops.aggregate(["a"], "sum")
       {:error, [{["values"], {:reads, :number}}]}
+      iex> Macaw.Data.Ops.aggregate([1, 2], "mode")
+      {:error, [{[], {:unknown, :aggregate, "mode"}}]}
+      iex> Macaw.Data.Ops.transform([%{v: 1}], "mode")
+      {:error, [{[0, "op"], {:unknown, :transform, "mode"}}]}
   """
 
   alias Macaw.Data.{Operations, Table}
@@ -42,7 +53,8 @@ defmodule Macaw.Data.Ops do
 
   @doc """
   The named aggregate of `values`, `nil`s dropped, with its `options`: `{:ok, value}` or
-  `Macaw.Data.Operations.aggregate/4`'s `{:error, faults}`.
+  `Macaw.Data.Operations.aggregate/4`'s `{:error, faults}`, which name no step: `[]` for
+  an unknown name, `[key]` for an option, `["values"]` for a reading.
   """
   @spec aggregate(Enumerable.t(), String.t(), map()) ::
           {:ok, term()} | {:error, [Operations.fault()]}
@@ -64,7 +76,8 @@ defmodule Macaw.Data.Ops do
 
   @doc """
   The named transform run over `rows` with `options`, `{:ok, rows}` its answer as rows, or
-  `Macaw.Data.Operations.apply/4`'s `{:error, faults}`. Options that name an `op` are
+  `Macaw.Data.Operations.apply/4`'s `{:error, faults}` of its one step: `[0, key]` for an
+  option, `[0, "op"]` for an unknown name. Options that name an `op` are
   `{[0, "op"], {:invalid_for, name}}`: the name is the op.
   """
   @spec transform(Table.source() | Table.t(), String.t(), map()) ::

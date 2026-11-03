@@ -816,6 +816,23 @@ end
 
 **A column's statistics need no rows** (macaw_data#107). A stored function may also call `Macaw.Data.Derived.Columns` (02 §2.2, §6.2), on the allowlist beside `Ops`. Its `count`, `sum`, `mean`, `min` and `max` mean what the aggregates of the same names mean (§5) over one column's readings, and they read the column's buffers, through the kernels where loaded (§1.7). An input is handed as a table only to a function whose source reads its inputs as columns (02 §8). `Ops` itself still takes values and rows: `Ops.aggregate(Columns.numbers(t, "cpu"), "quantile", %{p: 0.95})` reads one column and makes no row.
 
+**Where a fault is placed** (macaw_data#139). A transform call runs a one-step pipeline, so its faults are that step's, as `apply/4` places them (§3.1). An aggregate call is no step, so its faults name no step index:
+
+| Call | Fault | Path |
+|---|---|---|
+| `aggregate` | a name no registered aggregate has | `[]`: `{[], {:unknown, :aggregate, name}}`, `Operations.aggregate/4`'s, the name being the call's and no option's |
+| `aggregate` | an option wrong, missing or not the aggregate's | `[key]`: `{["p"], :required}`, `{["q"], {:invalid_for, "quantile"}}` |
+| `aggregate` | a reading the aggregate does not read, or values that are no list | `["values"]`: `{:reads, kind}`, `{:type, {:list, :term}}` |
+| `transform` | a name no registered transform has, or options that name an `op` | `[0, "op"]`: `{:unknown, :transform, name}`, `{:invalid_for, name}` |
+| `transform` | an option wrong, missing or not the transform's, or a reading its step cannot read | `[0, key]`: `{[0, "n"], :required}` |
+| either | options that are no map | `["options"]`: `{:type, :map}` |
+
+So `format_error/1` words an aggregate's fault by its key alone (`p: is required`), and a transform's as step 1's (`step 1, n: is required`). 0.10.0's rule that a fault naming an op is at `[0, "op"]` is about steps, so it is the transform's case. From a stored function the paths are the same and the reasons spelled (§6.1). A name is a literal the checker holds to the registry, so a name the registry lacks never runs there: the call is refused at its line, `{:unknown_operation, :aggregate | :transform, name}` (§6.1).
+
+```test:operations-sandbox-paths
+from host code an aggregate's faults are at [] for an unknown name, with options or without, at [key] for an option wrong, missing or unread, at ["values"] for a reading and for values that are no list, at ["options"] for options no map, worded by key alone; a transform's are at [0, "op"] for an unknown name and an op option by either spelling, at [0, key] for an option, worded as step 1; a stored function gets the same paths with the reasons spelled and matches one by its own words, and an unknown aggregate or transform name is refused at its line
+```
+
 ```test:operations-sandbox-ops
 Ops takes its subject first and the name second, so a pipe reads in order; called from host code it runs macaw_data's own package, rows in and rows out, {:ok, _} or {:error, faults}, its ! twins raising; a transform's options that name an op are a fault
 ```

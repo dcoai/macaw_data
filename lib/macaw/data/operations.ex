@@ -327,7 +327,9 @@ defmodule Macaw.Data.Operations do
   The value of `values` by the aggregate named `name`, its `options` checked against its
   declaration and every `nil` reading dropped: `{:ok, value}` or `{:error, faults}`, each
   fault at its option's key (`[]` for the name itself). A reading the aggregate does not
-  read (`Macaw.Data.Aggregate.reads/1`) is `{["values"], {:reads, kind}}`.
+  read (`Macaw.Data.Aggregate.reads/1`) is `{["values"], {:reads, kind}}`. An aggregate
+  call is no step, so no path names a step index; a transform's, through `apply/4`, do
+  (spec/04 §6, macaw_data#139).
   """
   @spec aggregate(Registry.t(), String.t() | atom(), Enumerable.t(), map()) ::
           {:ok, term()} | {:error, [fault(), ...]}
