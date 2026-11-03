@@ -294,6 +294,7 @@ defmodule Macaw.Data.Delivery do
 
   def table(%__MODULE__{} = delivery, opts) do
     with {:ok, opts} <- Macaw.Data.Options.known(opts, types: %{}, names: nil),
+         :ok <- Table.types_map(opts[:types]),
          {:ok, source} <- named(delivery.rows, opts[:names] || delivery.names),
          do: Table.from(source, types: Map.merge(delivery.types, opts[:types]))
   end

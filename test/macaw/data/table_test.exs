@@ -297,6 +297,30 @@ defmodule Macaw.Data.TableTest do
   end
 
   describe "a table is columnar" do
+    @tag verifies: "data-errors-readers"
+    test "new/2 answers row maps, or any element that is no column, at its index" do
+      assert Table.new([%{t: 1, v: 2}, %{t: 2, v: 3}]) ==
+               {:error, [{[0], {:type, :column_spec}}, {[1], {:type, :column_spec}}]}
+
+      assert Table.new([{"v", :number, [1]}, %{v: 1}, :x, {"w", :number}]) ==
+               {:error,
+                [
+                  {[1], {:type, :column_spec}},
+                  {[2], {:type, :column_spec}},
+                  {[3], {:type, :column_spec}}
+                ]}
+
+      # A name given twice is still found past an element that is no column.
+      assert Table.new([:x, {"v", :number, [1]}, {"v", :number, [2]}]) ==
+               {:error, [{[0], {:type, :column_spec}}, {["v"], :duplicate}]}
+
+      assert_raise Macaw.Data.Error,
+                   ~r/^not a table: \[0\]: must be a column: \{name, type, values\}/,
+                   fn ->
+                     Table.new!([%{t: 1}])
+                   end
+    end
+
     @tag verifies: "table-new"
     test "new/1 builds named typed columns, and refuses every fault at once" do
       table =

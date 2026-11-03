@@ -62,7 +62,9 @@ defmodule Macaw.Data.Fault do
     end
   end
 
-  defp step(other), do: other
+  defp step(key) when is_binary(key) or is_integer(key), do: key
+  # A key of a caller's term that is neither, a reference or a tuple, read as Elixir writes it.
+  defp step(other), do: inspect(other)
 
   @doc """
   The words of a reason in the library's vocabulary, `nil` for a reason it does not word.
@@ -120,6 +122,7 @@ defmodule Macaw.Data.Fault do
     do: "a source: a table, rows, a map of columns, a tensor or a Table.Reader source"
 
   defp type_words(:column), do: "a column: a list of values, or a rank-1 tensor"
+  defp type_words(:column_spec), do: "a column: {name, type, values}"
   defp type_words(:table), do: "a Macaw.Data.Table"
   defp type_words(:time), do: "a time: a DateTime, a NaiveDateTime or a Date"
   defp type_words(:instant), do: "an instant: a time, or a number on the window field's scale"

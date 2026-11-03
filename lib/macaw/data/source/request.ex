@@ -81,15 +81,15 @@ defmodule Macaw.Data.Source.Request do
   """
   @spec new(keyword() | map()) :: {:ok, t()} | {:error, [{list(), term()}, ...]}
   def new(fields) when is_list(fields) or is_map(fields) do
-    given = Map.new(fields)
+    with {:ok, given} <- Macaw.Data.Options.fields(fields) do
+      faults =
+        Enum.flat_map(given, fn {key, value} -> field(key, value) end) ++
+          if(Map.has_key?(given, :now), do: [], else: [{[:now], :required}])
 
-    faults =
-      Enum.flat_map(given, fn {key, value} -> field(key, value) end) ++
-        if(Map.has_key?(given, :now), do: [], else: [{[:now], :required}])
-
-    case Enum.sort_by(faults, &elem(&1, 0)) do
-      [] -> {:ok, struct!(__MODULE__, given)}
-      faults -> {:error, faults}
+      case Enum.sort_by(faults, &elem(&1, 0)) do
+        [] -> {:ok, struct!(__MODULE__, given)}
+        faults -> {:error, faults}
+      end
     end
   end
 
@@ -111,7 +111,8 @@ defmodule Macaw.Data.Source.Request do
   defp field(:box, box), do: if(box?(box), do: [], else: [{[:box], {:type, :box}}])
   defp field(:region, nil), do: []
 
-  defp field(:region, region) when is_map(region) and map_size(region) > 0 do
+  defp field(:region, region)
+       when is_map(region) and not is_struct(region) and map_size(region) > 0 do
     for {name, range} <- region, not match?([_, _], range), do: {[:region, name], {:type, :range}}
   end
 

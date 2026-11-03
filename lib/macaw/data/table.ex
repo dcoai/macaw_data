@@ -137,29 +137,22 @@ defmodule Macaw.Data.Table do
   @spec new([{name(), type(), [term()]}], keyword()) ::
           {:ok, t()} | {:error, [{list(), term()}, ...]}
   def new(columns, opts \\ []) when is_list(columns) and is_list(opts) do
+    # The first column's length; an element before it that is no column is its own fault.
     size =
-      case columns do
-        [{_, _, values} | _] when is_list(values) -> length(values)
-        _ -> 0
-      end
+      Enum.find_value(columns, 0, fn
+        {_name, _type, values} when is_list(values) -> length(values)
+        _other -> nil
+      end)
 
     {checked, faults} =
       columns
       |> Enum.with_index()
-      |> Enum.reduce({[], []}, fn {{name, type, values}, i}, {checked, faults} ->
-        cond do
-          Enum.any?(Enum.take(columns, i), &(elem(&1, 0) == name)) ->
-            {checked, [{[name], :duplicate} | faults]}
+      |> Enum.reduce({[], []}, fn
+        {{name, type, values}, i}, {checked, faults} ->
+          column(columns, i, name, type, values, size, checked, faults)
 
-          type not in @types ->
-            {checked, [{[name], {:enum, @types}} | faults]}
-
-          not is_list(values) or length(values) != size ->
-            {checked, [{[name], {:length, size}} | faults]}
-
-          true ->
-            {[{name, type, values} | checked], faults}
-        end
+        {_other, i}, {checked, faults} ->
+          {checked, [{[i], {:type, :column_spec}} | faults]}
       end)
 
     checked = Enum.reverse(checked)
@@ -185,6 +178,23 @@ defmodule Macaw.Data.Table do
     case faults do
       [] -> {:ok, chunked(packed, counts, size, origin, offset)}
       _ -> {:error, Enum.sort_by(Enum.reverse(faults), &elem(&1, 0))}
+    end
+  end
+
+  # One `{name, type, values}` column checked against those before it.
+  defp column(columns, i, name, type, values, size, checked, faults) do
+    cond do
+      Enum.any?(Enum.take(columns, i), &match?({^name, _type, _values}, &1)) ->
+        {checked, [{[name], :duplicate} | faults]}
+
+      type not in @types ->
+        {checked, [{[name], {:enum, @types}} | faults]}
+
+      not is_list(values) or length(values) != size ->
+        {checked, [{[name], {:length, size}} | faults]}
+
+      true ->
+        {[{name, type, values} | checked], faults}
     end
   end
 
@@ -327,15 +337,25 @@ defmodule Macaw.Data.Table do
   `DateTime`s here, at the edge: a `Date` at midnight UTC, a `NaiveDateTime` as UTC, an
   ISO 8601 string parsed. A source whose rows are tuples has
   no names; `named/2` gives it some first. `{:ok, table}`, `source/1`'s faults for a source
-  of no shape it reads, or `new/1`'s faults.
+  of no shape it reads, `{[:types], {:type, :map}}` for `types:` that is no map, an option
+  it does not take `{[key], :unknown_key}`, or `new/1`'s faults.
   """
   @spec from(source() | t(), keyword()) :: {:ok, t()} | {:error, [{list(), term()}, ...]}
   def from(source, opts \\ [])
   def from(%__MODULE__{} = table, _opts), do: {:ok, table}
 
   def from(source, opts) do
-    with {:ok, rows} <- rows(source), do: from_rows(rows, opts)
+    with {:ok, opts} <- Macaw.Data.Options.known(opts, types: %{}),
+         :ok <- types_map(opts[:types]),
+         {:ok, rows} <- rows(source),
+         do: from_rows(rows, opts)
   end
+
+  # `types:` is a map from a name to a type, `new/1` judging each type.
+  @doc false
+  @spec types_map(term()) :: :ok | {:error, [{[:types], {:type, :map}}, ...]}
+  def types_map(types) when is_map(types) and not is_struct(types), do: :ok
+  def types_map(_types), do: {:error, [{[:types], {:type, :map}}]}
 
   @doc """
   Whether `source` is of a shape `from/2` and `rows/1` read (spec/01 §1.1, spec/00 §5):

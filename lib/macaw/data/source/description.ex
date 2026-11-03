@@ -75,17 +75,17 @@ defmodule Macaw.Data.Source.Description do
   """
   @spec new(keyword() | map()) :: {:ok, t()} | {:error, [{list(), term()}, ...]}
   def new(fields) when is_list(fields) or is_map(fields) do
-    given = Map.new(fields)
+    with {:ok, given} <- Macaw.Data.Options.fields(fields) do
+      faults =
+        Enum.flat_map(given, fn {key, value} -> field(key, value) end) ++
+          if(Map.has_key?(given, :schema), do: [], else: [{[:schema], :required}]) ++
+          lateness(Map.get(given, :lateness), Map.get(given, :schema)) ++
+          span_faults(Map.get(given, :chunk_span), Map.get(given, :schema))
 
-    faults =
-      Enum.flat_map(given, fn {key, value} -> field(key, value) end) ++
-        if(Map.has_key?(given, :schema), do: [], else: [{[:schema], :required}]) ++
-        lateness(Map.get(given, :lateness), Map.get(given, :schema)) ++
-        span_faults(Map.get(given, :chunk_span), Map.get(given, :schema))
-
-    case Enum.sort_by(faults, &elem(&1, 0)) do
-      [] -> {:ok, struct!(__MODULE__, given)}
-      faults -> {:error, faults}
+      case Enum.sort_by(faults, &elem(&1, 0)) do
+        [] -> {:ok, struct!(__MODULE__, given)}
+        faults -> {:error, faults}
+      end
     end
   end
 
