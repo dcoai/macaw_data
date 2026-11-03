@@ -17,8 +17,8 @@ defmodule Macaw.Data.Source.Push do
   at once, so a burst of pushes between two pulses costs one drain. `held/1` is the
   relation as it stands; `refetch/1` says when the holder must fetch a snapshot.
   `take_errors/1` hands the holder the errors recorded since it last took them, and
-  `pending?/1` says whether a drain has anything to apply, so a holder needs no field of
-  the struct.
+  `pending?/1` says whether a drain has anything to apply, and `trim/2` drops the chunks
+  wholly before a sliding window's start, so a holder needs no field of the struct.
 
   - **The handshake sends the schema first.** A delivery names its schema's version; one
     naming a version not yet cached falls back to `describe` (`drain/2`'s function, the
@@ -61,6 +61,7 @@ defmodule Macaw.Data.Source.Push do
   alias Macaw.Data.Schema.Cache
   alias Macaw.Data.Source.Description
   alias Macaw.Data.Source.Push.Changes
+  alias Macaw.Data.Table.Chunk
 
   @tag :macaw_source
 
@@ -78,7 +79,8 @@ defmodule Macaw.Data.Source.Push do
     waiting: %{},
     refetch: nil,
     lateness: nil,
-    chunk_span: nil
+    chunk_span: nil,
+    trimmed: nil
   ]
 
   @typedoc "A buffered message: a snapshot, or an increment and its number."
@@ -97,7 +99,8 @@ defmodule Macaw.Data.Source.Push do
           waiting: %{pos_integer() => Delivery.t()},
           refetch: term(),
           lateness: Duration.t() | number() | nil,
-          chunk_span: Duration.t() | number() | nil
+          chunk_span: Duration.t() | number() | nil,
+          trimmed: term()
         }
 
   @doc """
@@ -239,6 +242,56 @@ defmodule Macaw.Data.Source.Push do
   def pending?(%__MODULE__{pending: pending, waiting: waiting}),
     do: pending != [] or map_size(waiting) > 0
 
+  @doc """
+  The holding without the chunks wholly before `from` in the window field's order, for a
+  holder whose window slides (macaw_data#123, spec/01 §4): `{:ok, push}`, or `{:error,
+  [{[:from], {:type, type}}]}` for a `from` not of the window field's type (a time of any
+  kind for a `:time` field, compared on the instant scale; a number for a `:number` one).
+
+  - **Only whole chunks are dropped:** each held chunk whose every window value is before
+    `from`, through `Macaw.Data.Table.trim/2` over their rows, so nothing is copied or
+    cut and every chunk kept is the same chunk, by id and version. A chunk straddling
+    `from` is kept whole; finishing trims its rows.
+  - **The served window is narrowed, never widened:** it starts at `from`, or at the held
+    start where that is later; its upper end and `complete_until` are unchanged.
+  - **The trimmed start is kept** (spec/01 §4.2): after it, a retraction naming a row
+    before it that is not held, or a replace range wholly before it, is counted in
+    `ignored` as `:trimmed`, not recorded as a fault. A late insertion before it is still
+    placed; the next trim drops it. A snapshot taken replaces the holding and clears it.
+
+  It is a no-op `{:ok, push}` when nothing is held, when the schema has no window field,
+  for a `:point` window field, which has no order, and for a `nil` `from`, an open start.
+
+      iex> alias Macaw.Data.Source.Push
+      iex> push = Push.new!(:ticks, make_ref())
+      iex> Push.trim(push, 10) == {:ok, push}
+      true
+  """
+  @spec trim(t(), term()) :: {:ok, t()} | {:error, [{[:from], {:type, :time | :number}}]}
+  def trim(%__MODULE__{held: nil} = push, _from), do: {:ok, push}
+  def trim(%__MODULE__{} = push, nil), do: {:ok, push}
+
+  def trim(%__MODULE__{held: %Delivery{rows: table} = held} = push, from) do
+    case ordered_window(table) do
+      nil ->
+        {:ok, push}
+
+      {name, type} ->
+        if Window.applies?([from, nil], type),
+          do: {:ok, cut(push, held, name, from)},
+          else: {:error, [{[:from], {:type, type}}]}
+    end
+  end
+
+  @doc "As `trim/2`, the push alone, raising `ArgumentError` naming the fault."
+  @spec trim!(t(), term()) :: t()
+  def trim!(%__MODULE__{} = push, from) do
+    case trim(push, from) do
+      {:ok, push} -> push
+      {:error, faults} -> raise ArgumentError, "the holding cannot be trimmed: #{inspect(faults)}"
+    end
+  end
+
   # -- the handoff (spec/01 §4.1) ---------------------------------------------------------
 
   defp take(push, {:snapshot, %Delivery{served: %{position: nil}}}, _describe),
@@ -256,7 +309,8 @@ defmodule Macaw.Data.Source.Push do
             waiting = Map.reject(push.waiting, fn {seq, _d} -> seq <= p end)
             {claim, push} = claim(push, held)
             held = put_claim(held, claim)
-            advance(%{push | held: held, position: p, waiting: waiting, refetch: nil}, describe)
+            push = %{push | held: held, position: p, waiting: waiting, refetch: nil, trimmed: nil}
+            advance(push, describe)
 
           {:error, faults} ->
             fault(push, {:table, faults})
@@ -369,6 +423,7 @@ defmodule Macaw.Data.Source.Push do
       end
 
     {claim, push} = claim(push, delivery)
+    {delivery, push} = before_trimmed(push, delivery)
     {change, before, after_} = Changes.validate(delivery, schema, bound: bound)
 
     {table, faults, unheld} =
@@ -407,6 +462,8 @@ defmodule Macaw.Data.Source.Push do
     # An increment answers as of its change, so its `stale` is the holding's (spec/01 §4).
     held = %{held | served: %{held.served | stale: delivery.served.stale}}
 
+    {faults, push} = trimmed_retractions(push, faults, Schema.window_field(schema))
+
     push = %{
       push
       | held: put_claim(held, claim),
@@ -416,6 +473,79 @@ defmodule Macaw.Data.Source.Push do
     if unheld > 0,
       do: Enum.reduce(1..unheld, push, fn _, push -> ignore(push, :unheld) end),
       else: push
+  end
+
+  # -- the trimmed start (spec/01 §4, §4.2) -----------------------------------------------
+
+  # The held table's window field and its type, where it has an order.
+  defp ordered_window(table) do
+    with %{window: name} when name != nil <- Table.origin(table),
+         type when type in [:time, :number] <- Table.column_type(table, name) do
+      {name, type}
+    else
+      _none -> nil
+    end
+  end
+
+  # The leading chunks wholly before `from` dropped, the served window narrowed to start
+  # at `from` or the held start, and the trimmed start kept.
+  defp cut(push, %Delivery{rows: table, served: served} = held, name, from) do
+    dropped =
+      table
+      |> Table.chunks()
+      |> Enum.reduce_while(0, fn {chunk, first, count}, n ->
+        if before?(Chunk.values(chunk, name, first, count), from),
+          do: {:cont, n + count},
+          else: {:halt, n}
+      end)
+
+    rows = if dropped == 0, do: table, else: Table.trim(table, dropped)
+
+    window =
+      case served.window do
+        [held_from, to] -> [Window.latest(from, held_from), to]
+        nil -> [from, nil]
+      end
+
+    held = %{held | rows: rows, served: %{served | window: window}}
+    %{push | held: held, trimmed: Window.latest(push.trimmed, from)}
+  end
+
+  # Every value before `from`: a value with none (a row of no window value) is not.
+  defp before?(values, from),
+    do: Enum.all?(values, &(&1 != nil and Window.compare(&1, from) == :lt))
+
+  # A replace range wholly before the trimmed start (its `to`, exclusive, at or before
+  # it) is data the holder dropped: counted, not applied.
+  defp before_trimmed(%{trimmed: nil} = push, delivery), do: {delivery, push}
+
+  defp before_trimmed(%{trimmed: start} = push, %Delivery{replace: replace} = delivery) do
+    {gone, kept} =
+      Enum.split_with(replace, fn %{to: to} ->
+        to != nil and Window.comparable?(to, start) and Window.compare(to, start) != :gt
+      end)
+
+    {%{delivery | replace: kept},
+     Enum.reduce(gone, push, fn _, push -> ignore(push, :trimmed) end)}
+  end
+
+  # A retraction of a row not held, or held only at another window value, whose window
+  # value is before the trimmed start, names a row the trim dropped: counted, not a fault.
+  defp trimmed_retractions(%{trimmed: nil} = push, faults, _time), do: {faults, push}
+  defp trimmed_retractions(push, faults, nil), do: {faults, push}
+
+  defp trimmed_retractions(%{trimmed: start} = push, faults, time) do
+    Enum.reduce(faults, {[], push}, fn
+      {:retract, reason, row} = fault, {kept, push} when reason in [:not_held, :moved] ->
+        at = Table.get(row, time)
+
+        if at != nil and Window.comparable?(at, start) and Window.compare(at, start) == :lt,
+          do: {kept, ignore(push, :trimmed)},
+          else: {kept ++ [fault], push}
+
+      fault, {kept, push} ->
+        {kept ++ [fault], push}
+    end)
   end
 
   # -- the held table (spec/01 §2.6) ------------------------------------------------------

@@ -871,6 +871,16 @@ The subscriber holds a `Macaw.Data.Source.Push`, a value, not a process: `receiv
 
 **A holder reads a `Push` through its functions, never its fields** (macaw_data#123): `take_errors/1` answers `{errors, push}`, the errors recorded since they were last taken, in the order recorded (a gap, §4.1; a schema `describe` could not answer; a change's fault, §4.2; rows that don't pack, `{:table, faults}`), and the push holding none, so a subscription that lives long holds only what its holder has not read. Taking them changes nothing else. `pending?/1` is whether `drain/2` has anything buffered to apply: a snapshot or an increment received or handed in since the last drain, or increments held back waiting on a gap, which apply once the numbers before them or a snapshot arrive (§4.1). A schema message is cached as it is received, so it leaves nothing pending.
 
+**A holder whose window slides trims its holding** (macaw_data#123): `trim(push, from)` answers `{:ok, push}` without the held chunks wholly before `from` in the window field's order, or `{:error, [{[:from], {:type, type}}]}` for a `from` not of the window field's type (a time of any kind for a `:time` field, compared on the instant scale, §2.4; a number for a `:number` one); `trim!/2` raises.
+- **Only whole chunks are dropped:** each chunk whose every window value is before `from`, through `Table.trim/2` over those chunks' rows (§1.1.1), so nothing is copied or cut and every chunk kept is the same chunk, by id and version (§1.1.3). A chunk straddling `from` is kept whole, since finishing trims its rows (§2.4). The held rows are in the window field's order (a row of no window value last), so what is kept is a suffix holding every row at or after `from`.
+- **The served window is narrowed, never widened:** it starts at `from`, or at the held start where that is later. Its upper end and `complete_until` (§4.4) are unchanged.
+- **It is a no-op** when nothing is held, when the schema has no window field, for a `:point` window field, which has no order, and for a `nil` `from`, an open start.
+- **The trimmed start is kept,** and a change before it is counted rather than refused (§4.2).
+
+```test:push-trim
+a trim drops the chunks wholly before from and keeps every other by id and version, a straddling chunk whole; the served window starts at from or the held start, its upper end and complete_until unchanged, never widened by an earlier from or a second trim; a time window trims by instant whatever kind from is; nothing held, no window field, a point window field and a nil from are no-ops, a from of the wrong type a fault; for generated holdings, spans and froms the kept rows are a suffix of the held holding every row at or after from, its chunks the held chunks
+```
+
 ```test:push-accessors
 take_errors/1 after a gap, rows that don't pack and an unresolvable version gives them in that order and leaves none, taking again gives none, and nothing else changes; pending?/1 is false when new, after a schema message and after a drain, and true after a received or handed-in snapshot, a received increment, and while an increment waits on a gap until the snapshot that fills it is drained
 ```
@@ -952,6 +962,7 @@ a request names the subscription it is a snapshot for, nil by default, and refus
 - **With no identity declared,** a retraction matches by the whole row, one copy per unit of weight.
 - **What is recorded in `errors`,** never applied to a guessed row: a retraction of a row not held (`{:retract, :not_held, row}`); one whose identity is held only at another window value (`{:retract, :moved, row}`); one that can't tell distinct rows apart (`{:retract, :ambiguous, row}`).
 - **A thinned holding may lack rows.** Where what is held came from a delivery that was `capped` or reduced to a budget (`reduced_by` set), a retraction naming an unheld row, or one held only at another window value, is a no-op counted in `ignored` (`:unheld`), not an error. Against a complete holding it stays a recorded fault.
+- **A trimmed holding has dropped rows on purpose** (§4, macaw_data#123). After `Push.trim/2`, the push keeps the trimmed start, the latest of its trims. A retraction naming a row before it that is not held, or held only at another window value, is a no-op counted in `ignored` (`:trimmed`), not an error; one naming a row still held (in a chunk kept whole across the start) is applied. A replace range wholly before it (its `to`, exclusive, at or before the start) is counted `:trimmed` and not applied, since what it replaces was dropped. A late insertion before the start is still placed, as data the source sent, and the next trim drops it. A change at or after the start applies as before. A snapshot taken replaces the holding and clears the trimmed start.
 
 **`replace`: a range replacement.** Each says that over `[from, to)` of the window field (`from: nil` from the start, `to: nil` open-ended), limited to `identities` (a list of identities as `Schema.identity/2` answers them, `nil` for every one), the relation is exactly `rows`.
 - **As a change,** it is a retraction of everything held in the range plus an insertion of `rows`. The receiver computes the retraction from what it holds, so the source never has to remember what it sent. A rollup rebuild ("from T onward, exactly these buckets") and retracting a post with months of backfill are each one replacement.
@@ -978,6 +989,10 @@ a replacement equals the row retractions and insertions it stands for on any hel
 
 ```test:push-thinned
 after a capped or reduced delivery, a retraction of an unheld row is counted in ignored, not errors; against a complete holding it is an error
+```
+
+```test:push-trimmed
+after a trim, a retraction of a dropped row and a replace range wholly before the start are counted trimmed in ignored, not errors; a retraction of a row still held in the straddling chunk applies, and so do replaces reaching past the start and after it; a late insertion before the start is placed and the next trim drops it; a retraction of a row never held after the start is still a fault; a snapshot clears the trimmed start
 ```
 
 ```test:delivery-changes
