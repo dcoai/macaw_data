@@ -10,7 +10,7 @@ defmodule Macaw.Data.ConformanceTest do
 
   alias Macaw.Data.Source.Conformance
   alias Macaw.Data.Test.Reference
-  alias Macaw.Data.Test.Sources.{Broken, Fleet, Places}
+  alias Macaw.Data.Test.Sources.{Asked, Broken, Fleet, Places}
 
   doctest Conformance
 
@@ -24,7 +24,8 @@ defmodule Macaw.Data.ConformanceTest do
       [window: [4, 12]],
       [window: [-5, 8]],
       [window: [nil, 6]],
-      [params: %{"scale" => 3}]
+      [params: %{"scale" => 3}],
+      [params: %{"floor" => 5}]
     ]
 
   use Conformance,
@@ -94,6 +95,7 @@ defmodule Macaw.Data.ConformanceTest do
     no_identity: {:deliveries, :no_identity},
     keeps_pushing: {:unsubscribe, :pushed_after_unsubscribe},
     clock: {:determinism, :answer_moved},
+    nil_unread: {:deliveries, :raised},
     viewer_dependent: {:viewers, :viewer_dependent}
   ]
 
@@ -107,6 +109,34 @@ defmodule Macaw.Data.ConformanceTest do
     test "an honest source passes every check" do
       assert Conformance.check(Broken.new(), [{:down, Broken.new(:down)} | @opts]) == []
       assert Conformance.check(Broken.new(:identified), @opts) == []
+    end
+
+    @tag verifies: "conformance-nil-default"
+    test "a nil default is asked given nil, whatever the requests name" do
+      for call <- [[], [[params: %{"floor" => 1}]]] do
+        opts = [budgets: [nil]] ++ if(call == [], do: [], else: [requests: call])
+        assert [] == Conformance.check(:deliveries, Asked.new(self()), opts)
+        assert_received {:asked, %{"floor" => nil}}
+      end
+
+      findings =
+        Conformance.check(:deliveries, Broken.new(:nil_unread),
+          requests: [[params: %{"floor" => 1}]],
+          budgets: [nil]
+        )
+
+      assert [{:deliveries, {:raised, {:fetch, {ask, nil}}, _reason}} = finding] = findings
+      assert ask == [params: %{"floor" => nil}]
+      assert is_binary(Conformance.format(finding))
+    end
+
+    @tag verifies: "conformance-nil-default"
+    test "a source with no nil default is asked nothing more" do
+      source = Asked.new(self(), %{"scale" => %{type: :number, default: 1}})
+      assert [] == Conformance.check(:deliveries, source, requests: [[], []], budgets: [nil])
+      assert_received {:asked, _}
+      assert_received {:asked, _}
+      refute_received {:asked, _}
     end
 
     @tag verifies: "conformance-stale"

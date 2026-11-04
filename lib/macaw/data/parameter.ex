@@ -3,7 +3,7 @@ defmodule Macaw.Data.Parameter do
   A parameter: the one shape for every typed option, a source's or a component's
   (spec/01 §2.2).
 
-      %{type: type, default: value, values: [value] | nil,
+      %{type: type, default: value | nil, values: [value] | nil,
         legal_for: {slot, field, fact} | nil, bindable: false, doc: "…"}
 
   A parameter's `type` is a data-model type (`:time`, `:number`, `:category`, `:text`,
@@ -14,9 +14,11 @@ defmodule Macaw.Data.Parameter do
   the runtime that binds slots resolves (macaw_compose spec 05 §1.1); `bindable` says
   whether the value may be bound to state, closed by default.
 
-  **A parameter with no `default` is required.** `validate/2` checks a map of given values
-  against a map of parameters: every fault at once, by name, a missing one filled from its
-  default.
+  **A parameter with no `default` is required, and one whose `default` is `nil` is optional
+  with no value,** on any type (macaw_data#172): `nil` is still no value of the type, only
+  legal where the default says so, and given explicitly it is the same as not given.
+  `validate/2` checks a map of given values against a map of parameters: every fault at
+  once, by name, a missing one filled from its default.
 
   macaw_data owns the shape (the owner's decision, 2026-10-27): sources take parameters
   before any component exists, and macaw_compose's components use the same shape.
@@ -50,11 +52,14 @@ defmodule Macaw.Data.Parameter do
 
   @doc """
   `:ok`, or every fault of a parameter declaration, each `{path, reason}` from the
-  parameter: `[:type]` required and one of the types, `[:default]` and each of `[:values, i]`
-  a value of the type, the default among `values` when both are given, `[:legal_for]` a
-  `{slot, field, fact}`, `[:bindable]` a boolean, `[:doc]` a string, and no other key.
+  parameter: `[:type]` required and one of the types, `[:default]`, unless `nil`, and each
+  of `[:values, i]` a value of the type, the default, unless `nil`, among `values` when both
+  are given, `[:legal_for]` a `{slot, field, fact}`, `[:bindable]` a boolean, `[:doc]` a
+  string, and no other key.
 
       iex> Macaw.Data.Parameter.check(%{type: :number, default: 5, doc: "bins"})
+      :ok
+      iex> Macaw.Data.Parameter.check(%{type: :number, default: nil})
       :ok
       iex> Macaw.Data.Parameter.check(%{type: :category, values: ["a", "b"], default: "c"})
       {:error, [{[:default], :not_in_values}]}
@@ -79,6 +84,8 @@ defmodule Macaw.Data.Parameter do
   defp key(:type, type, _),
     do: if(type?(type), do: [], else: [{[:type], {:enum, @types ++ [:term]}}])
 
+  defp key(:default, nil, _type), do: []
+
   defp key(:default, value, type),
     do:
       if(type?(type) and not conforms?(type, value), do: [{[:default], {:type, type}}], else: [])
@@ -102,6 +109,8 @@ defmodule Macaw.Data.Parameter do
   defp key(:doc, _other, _type), do: [{[:doc], {:type, :string}}]
   defp key(key, _value, _type), do: [{[key], :unknown_key}]
 
+  defp in_values(%{default: nil}), do: []
+
   defp in_values(%{values: [_ | _] = values, default: default}) do
     if default in values, do: [], else: [{[:default], :not_in_values}]
   end
@@ -119,8 +128,20 @@ defmodule Macaw.Data.Parameter do
   `%Macaw.Layers.Color{}` or a typed color, `Macaw.Data.Schema.color?/1`; a string is never
   one), a `{longitude, latitude}` pair for `:point`, a map for `{:document, type}`, anything
   for `:term`. `nil` is no value of any type but `:term`.
+
+  Given a parameter instead of a type, a value is read as of the parameter's type, and
+  `nil` also conforms to a parameter whose default is `nil`.
+
+      iex> Macaw.Data.Parameter.conforms?(:number, nil)
+      false
+      iex> Macaw.Data.Parameter.conforms?(%{type: :number}, nil)
+      false
+      iex> Macaw.Data.Parameter.conforms?(%{type: :number, default: nil}, nil)
+      true
   """
-  @spec conforms?(type(), term()) :: boolean()
+  @spec conforms?(type() | t(), term()) :: boolean()
+  def conforms?(%{type: _type, default: nil}, nil), do: true
+  def conforms?(%{type: type}, value), do: conforms?(type, value)
   def conforms?(:term, _value), do: true
   def conforms?(_type, nil), do: false
   def conforms?(:time, value), do: match?(%DateTime{}, value)
@@ -144,13 +165,19 @@ defmodule Macaw.Data.Parameter do
   once by name: `{:ok, values}` with each missing parameter's default filled in, or
   `{:error, faults}`. A name no parameter has is `{[name], :unknown_param}`; a missing
   parameter with no default `{[name], :required}`; a value not of its type
-  `{[name], {:type, type}}`; one outside its `values` `{[name], {:enum, values}}`.
+  `{[name], {:type, type}}`; one outside its `values` `{[name], {:enum, values}}`. `nil`
+  given to a parameter whose default is `nil` is none of these: it is the same as not giving
+  it.
 
       iex> params = %{"bins" => %{type: :number, default: 10}, "agg" => %{type: :category, values: ["max", "mean"]}}
       iex> Macaw.Data.Parameter.validate(params, %{"agg" => "max"})
       {:ok, %{"agg" => "max", "bins" => 10}}
       iex> Macaw.Data.Parameter.validate(params, %{"agg" => "sum", "zoom" => 2})
       {:error, [{["agg"], {:enum, ["max", "mean"]}}, {["zoom"], :unknown_param}]}
+      iex> Macaw.Data.Parameter.validate(%{"low" => %{type: :number, default: nil}}, %{})
+      {:ok, %{"low" => nil}}
+      iex> Macaw.Data.Parameter.validate(%{"low" => %{type: :number}}, %{"low" => nil})
+      {:error, [{["low"], {:type, :number}}]}
   """
   @spec validate(%{String.t() => t()}, map()) :: {:ok, map()} | {:error, [fault(), ...]}
   def validate(parameters, given) when is_map(parameters) and is_map(given) do
@@ -175,6 +202,7 @@ defmodule Macaw.Data.Parameter do
 
   defp value(%{default: default}, :error), do: {:ok, default}
   defp value(_parameter, :error), do: {:error, :required}
+  defp value(%{default: nil}, {:ok, nil}), do: {:ok, nil}
 
   defp value(%{type: type} = parameter, {:ok, value}) do
     values = Map.get(parameter, :values)

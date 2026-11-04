@@ -34,7 +34,8 @@ defmodule Macaw.Data.Source.Conformance do
     * `context:` the host's configuration for the source, passed to `describe/2` (`nil`).
     * `requests:` what is asked, each a keyword list of `Macaw.Data.Source.Request` fields
       among `params`, `window`, `box`, `region`, `latest` and `as_of`; `[[]]` by default.
-      A source naming a capability needs a request that probes it.
+      A source naming a capability needs a request that probes it. A parameter whose
+      default is `nil` is also asked given `nil`, on the first request.
     * `budgets:` the budgets each request is fetched with, `[nil, 5]`.
     * `now:` the request's `now`, a `DateTime`; the moment the check starts by default.
     * `viewers:` two opaque viewers, the first asking every request and the second held
@@ -241,7 +242,7 @@ defmodule Macaw.Data.Source.Conformance do
 
   defp run(:deliveries, source, o) do
     with {:ok, description} <- described(source, o) do
-      for ask <- o.requests, budget <- o.budgets do
+      for ask <- o.requests ++ nil_asks(description, o.requests), budget <- o.budgets do
         Deliveries.probe(source, {ask, budget}, description, o)
       end
       |> List.flatten()
@@ -364,6 +365,14 @@ defmodule Macaw.Data.Source.Conformance do
   # -- describing ----------------------------------------------------------------------------
 
   # The source's description, or the findings that stop a check that needs one.
+  # A parameter whose default is `nil` given `nil`, on the first request (spec/01 §2.2, §9):
+  # a source that declares one has to read it, whatever `requests:` names.
+  defp nil_asks(%Description{params: params}, requests) do
+    for ask <- Enum.take(requests, 1), {name, %{default: nil}} <- params do
+      Keyword.update(ask, :params, %{name => nil}, &Map.put(&1, name, nil))
+    end
+  end
+
   defp described(source, o) do
     case call(fn -> Source.describe(source, o.context) end, :describe, o) do
       {:ok, {:ok, %Description{schema: %Schema{}} = description}} -> {:ok, description}

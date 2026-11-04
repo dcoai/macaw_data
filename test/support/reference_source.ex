@@ -1,8 +1,8 @@
 defmodule Macaw.Data.Test.Reference do
   @moduledoc """
   A reference source for the contract's tests: a clock-free table of `t` and
-  `v` over a numeric window field, a `scale` parameter, and every capability it is asked
-  to declare. It honors the window and the budget itself; it does not push.
+  `v` over a numeric window field, a `scale` parameter, an optional `floor` with no value
+  by default (spec/01 §2.2), and every capability it is asked to declare. It honors the window and the budget itself; it does not push.
   """
   @behaviour Macaw.Data.Source
 
@@ -21,7 +21,10 @@ defmodule Macaw.Data.Test.Reference do
   def describe(%__MODULE__{} = source, _context) do
     Description.new(
       schema: @schema,
-      params: %{"scale" => %{type: :number, default: 1, doc: "multiplies v"}},
+      params: %{
+        "scale" => %{type: :number, default: 1, doc: "multiplies v"},
+        "floor" => %{type: :number, default: nil, doc: "the least v kept, none when nil"}
+      },
       supports: source.supports,
       viewer_independent: source.viewer_independent
     )
@@ -32,7 +35,7 @@ defmodule Macaw.Data.Test.Reference do
     scale = request.params["scale"]
 
     all =
-      for t <- 1..n//1, within?(t, request.window) do
+      for t <- 1..n//1, within?(t, request.window), above?(t * scale, request.params["floor"]) do
         %{"t" => t, "v" => t * scale, "who" => viewer_name(request.viewer)}
       end
 
@@ -48,6 +51,9 @@ defmodule Macaw.Data.Test.Reference do
        ]
      )}
   end
+
+  defp above?(_v, nil), do: true
+  defp above?(v, floor), do: v >= floor
 
   defp within?(_t, nil), do: true
   defp within?(t, [from, to]), do: (from == nil or t >= from) and (to == nil or t <= to)

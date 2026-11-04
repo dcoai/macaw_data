@@ -609,16 +609,17 @@ a description defaults its parameters, capabilities and independence, and refuse
 
 ```elixir
 %{type: type,                           # required
-  default: value,                       # absent: the parameter is required
+  default: value | nil,                 # absent: required; nil: optional, with no value
   values: [value] | nil,                # a closed list of legal values
   legal_for: {slot, field, fact} | nil, # legal values follow from a bound slot's schema
   bindable: false,                      # may it be bound to state? closed by default
   doc: "…"}
 ```
 
-- **Types:** a data-model type (`:time`, `:number`, `:category`, `:text`, `:color`, `:point`), `{:document, type}` for a nested document of a document type, or `:term`, a value its owner validates, only for options migrated from untyped forms. `conforms?/2` says whether a value is of a type: a `DateTime`, a number, a string or non-boolean atom or number, a string, a data color (a color term, never a string, §1.7), a `{longitude, latitude}` in range, a map, or anything for `:term`; `nil` is a value only of `:term`.
-- **`check/1`** reports every fault of a declaration, by path: the type required and known; the default and each of the values of the type; the default among the values when both are given; `legal_for` a `{slot, field, fact}`; `bindable` a boolean; `doc` a string; no other key. `keys/0` is the six keys.
-- **`validate/2`** checks given values against a map of parameters by name, every fault at once: a name no parameter has is `:unknown_param`, a missing parameter with no default `:required`, a value not of its type `{:type, type}`, one outside its values `{:enum, values}`. It answers the values with every missing parameter's default filled in.
+- **Types:** a data-model type (`:time`, `:number`, `:category`, `:text`, `:color`, `:point`), `{:document, type}` for a nested document of a document type, or `:term`, a value its owner validates, only for options migrated from untyped forms. `conforms?/2` says whether a value is of a type: a `DateTime`, a number, a string or non-boolean atom or number, a string, a data color (a color term, never a string, §1.7), a `{longitude, latitude}` in range, a map, or anything for `:term`; `nil` is a value only of `:term`. Given a parameter rather than a type, `conforms?/2` reads the parameter's type, and `nil` also conforms to a parameter whose default is `nil`.
+- **A `nil` default is optional with no value** (macaw_data#172), on any type. A number has nothing to stand for "none", and a sentinel collides with a real value, so absence is said directly: `%{type: :number, default: nil}` is a parameter whose value is `nil` when not given, and `nil` given explicitly is the same as not giving it. `nil` is still no value of the type: only a `nil` default makes it legal, so a required parameter and one with any other default refuse it, and `values` needn't list it, nor may list it for a type it isn't a value of. A required `:term` takes `nil` as a value, as it takes anything. `bindable` is unchanged: `nil` is the value until state has one.
+- **`check/1`** reports every fault of a declaration, by path: the type required and known; the default, unless `nil`, and each of the values of the type; the default, unless `nil`, among the values when both are given; `legal_for` a `{slot, field, fact}`; `bindable` a boolean; `doc` a string; no other key. `keys/0` is the six keys.
+- **`validate/2`** checks given values against a map of parameters by name, every fault at once: a name no parameter has is `:unknown_param`, a missing parameter with no default `:required`, a value not of its type `{:type, type}`, one outside its values `{:enum, values}`, and `nil` given to a parameter whose default is `nil` is none of these. It answers the values with every missing parameter's default filled in, so a `nil` default answers `nil` whether given or not.
 - **Legal values may come from the type.** metresis's aggregation is a category whose values are `legal(metric)`, so no consumer can ask for an aggregation the type forbids; `legal_for` names where such values come from, which the runtime that binds slots resolves. (metresis.md C1.)
 
 ```test:params-shape
@@ -631,6 +632,14 @@ values conform to their types and to nothing else: times, numbers, categories, t
 
 ```test:params-validate
 given values are checked by name, every fault at once, defaults filled in; a value in the closed values is accepted and any other refused by name, for generated values
+```
+
+```test:params-nil-default
+a nil default passes check on every type and beside values that don't list it; nil conforms to a parameter whose default is nil and to no other, the type form unchanged; validate fills nil when absent and takes nil given as absent, with values too; a required parameter and another default still refuse nil; values listing nil is still a fault of a type nil is no value of
+```
+
+```test:params-nil-default-fetch
+fetch/3 hands a source the same request whether a nil-default parameter is given nil or not given, and a required one given nil never reaches the source
 ```
 
 ### 2.3 The request {#sources-request}
@@ -1173,7 +1182,7 @@ Every source runs **one kit**, `Macaw.Data.Source.Conformance`: the contract of 
 | `:determinism` | one request, one `now`: two fetches give one answer, the same rows and served terms. A row stamped after `now` arrived between them and is not compared. An answer depends on the request, never on a clock the source reads |
 | `:viewers` | a source declaring `viewer_independent` answers the two `viewers:` alike, which pooling across viewers (§6) relies on |
 
-**Requests.** `requests:` lists what is asked, each a keyword list of request fields among `params`, `window`, `box`, `region`, `latest`, `order` and `as_of` (`[[]]` by default), each fetched at every one of `budgets:` (`[nil, 5]`), at `now:` (the moment the check starts by default) and as the first of `viewers:`. A capability the source names that no request probes is a finding (`{:no_probe, capability}`), and so is a request the schema cannot answer (`{:probe, ask, faults}`): both are the run's to fix. The other options are `context:`, `as_of:` (a day before `now` by default), `push:`, `down:`, `timeout:`, `reductions:`, `processes:` and `quiet:`.
+**Requests.** `requests:` lists what is asked, each a keyword list of request fields among `params`, `window`, `box`, `region`, `latest`, `order` and `as_of` (`[[]]` by default), each fetched at every one of `budgets:` (`[nil, 5]`), at `now:` (the moment the check starts by default) and as the first of `viewers:`. A capability the source names that no request probes is a finding (`{:no_probe, capability}`), and so is a request the schema cannot answer (`{:probe, ask, faults}`): both are the run's to fix. **A parameter whose default is `nil`** (§2.2) is also asked given `nil`, on the first request, under `:deliveries`, whatever `requests:` names, so a source that declares one and cannot read `nil` is a finding. The other options are `context:`, `as_of:` (a day before `now` by default), `push:`, `down:`, `timeout:`, `reductions:`, `processes:` and `quiet:`.
 
 **Isolation.** Every callback runs in a process of its own (`Macaw.Data.Bounded`), so a raise or an exit is a finding (`{:raised, call, reason}`), not a crash of the check, and a raise logs no error-level message: the process is spawned through `:proc_lib`, and the finding is its report ([02 §6.4](02-derived.md#derived-runner), macaw_data#79). A callback is judged by the **reductions** its process spends against `reductions:`, the source author's cost budget (`nil` makes no cost claim), with the reductions of the named `processes:` during the call added for a source that works in a server; liveness is a separate wall-clock bound, `timeout:`, for a call blocked in `receive`, which is `{:hung, call, timeout}`. A budgeted callback still working when `timeout:` passes is left to its budget, so a slow one on a loaded host is judged by its count, never hung (macaw_data#33); a callback with no budget has only the clock, and past it is hung whatever it is doing. **Load changes no verdict:** nothing is judged by the clock but a hang.
 
@@ -1185,6 +1194,10 @@ an honest source passes every check, with a down source and declared identities 
 
 ```test:conformance-flaws
 every flaw of the broken sources fails the check it targets with the finding that names it, every check is failed by some flaw, and every finding formats as a line
+```
+
+```test:conformance-nil-default
+a source declaring a nil default that reads nil passes every check; one that can't is a raised finding under deliveries even when every request names the parameter with a value; a source with no nil default is asked nothing more
 ```
 
 ```test:conformance-errors

@@ -53,6 +53,7 @@ defmodule Macaw.Data.Test.Sources do
       :identified,
       :no_identity,
       :clock,
+      :nil_unread,
       :viewer_dependent,
       :as_of_ignored,
       :as_of_origin_lie
@@ -95,7 +96,7 @@ defmodule Macaw.Data.Test.Sources do
         Description.new!(
           schema: schema,
           supports: supports,
-          params: %{"scale" => %{type: :number, default: 1}},
+          params: params(flaw),
           viewer_independent: true
         )
 
@@ -238,6 +239,12 @@ defmodule Macaw.Data.Test.Sources do
 
     defp bounds(_window), do: :error
 
+    # A nil default (spec/01 §2.2) this flaw declares and can't read.
+    defp params(:nil_unread),
+      do: %{"scale" => %{type: :number, default: 1}, "floor" => %{type: :number, default: nil}}
+
+    defp params(_flaw), do: %{"scale" => %{type: :number, default: 1}}
+
     # The honest answer, then the one rule a flaw breaks.
     defp served(source, flaw, from, to, request) do
       lo = max(from || 0, 0)
@@ -247,6 +254,7 @@ defmodule Macaw.Data.Test.Sources do
       hi = if flaw == :window_overrun, do: @last, else: hi
       shift = shift(source, flaw, request)
       scale = request.params["scale"]
+      scale = if flaw == :nil_unread, do: scale + request.params["floor"], else: scale
 
       rows = for t <- lo..hi//1, do: row(t, rem(t * 7, 5) * scale + shift, flaw)
       rows = if flaw == :missing_row and from != nil, do: List.delete_at(rows, 2), else: rows
@@ -317,6 +325,37 @@ defmodule Macaw.Data.Test.Sources do
       do: rem(DateTime.to_unix(now), 7)
 
     defp shift(_source, _flaw, _request), do: 0
+  end
+
+  defmodule Asked do
+    @moduledoc """
+    A source that tells its test what each fetch was asked: one row, whatever the request,
+    and `{:asked, params}` to the given process. It declares `floor`, an optional number
+    with no value (spec/01 §2.2), unless given other parameters.
+    """
+    @behaviour Macaw.Data.Source
+
+    alias Macaw.Data.{Delivery, Schema}
+    alias Macaw.Data.Source.Description
+
+    defstruct [:test, :params]
+
+    @schema Schema.new!(%{"v" => %{type: :number}})
+
+    def new(test, params \\ %{"floor" => %{type: :number, default: nil}}),
+      do: %__MODULE__{test: test, params: params}
+
+    @impl true
+    def describe(%__MODULE__{params: params}, _context),
+      do: Description.new(schema: @schema, params: params)
+
+    @impl true
+    def fetch(%__MODULE__{test: test}, request) do
+      send(test, {:asked, request.params})
+
+      {:ok,
+       Delivery.new!([%{"v" => 1}], types: %{"v" => :number}, schema: Schema.version(@schema))}
+    end
   end
 
   defmodule Fleet do
