@@ -1,6 +1,20 @@
 # Changelog
 
-## Unreleased
+## v0.12.1 (2026-11-04)
+
+**A typed parameter can default to no value, and a push holder, a stack and a schema's map form answer as faults what they raised** (#172, #166, #178, #177, #182). `default: nil` on a typed `Macaw.Data.Parameter` means optional with no value. `Macaw.Data.Source.Push.drain/2` answers every delivery `Macaw.Data.Delivery.new/2` accepts, `Macaw.Data.Source.Push.trim/2` keeps a box window, `Macaw.Data.Stack.generate/2` answers a value it can't stack or a sum past a float's range, and `Macaw.Data.Schema.from_map/1` answers a struct at its path. Two random CI failures go with them. This is a patch, and some calls behave differently, including a few that worked: read the guide below.
+
+### Upgrading from 0.12.0
+
+- **`Macaw.Data.Source.Push.new/3` refuses a bad `cache:`, `limit:`, `lateness:` or `chunk_span:` at the call, including values that were never read before.** A bad `limit:` on a source with a window field, a bad `chunk_span:` on a source with no window field and a bad `lateness:` on a source with no `complete_until` all worked, and now answer `{:error, faults}`. The owner accepted this in a patch because only nonsense option values are affected. Pass a value of the right type or drop the option.
+- **`Macaw.Data.Stack.series/2` raises `Macaw.Data.Error` instead of `ArithmeticError`,** and `Macaw.Data.Stack.generate!/2`'s message changed. A test that asserts either one changes with it.
+- **`Macaw.Data.Source.Description.chunk_span/2` answers `nil` for extreme resolutions,** so those chunks align by row count.
+- **A float window value past 2^53 spans is its own slot.**
+- **A struct that enumerates as `{key, value}` pairs is no description in `Macaw.Data.Schema.from_map/1`.** A `MapSet` of them read as one, and is now a fault.
+- **`Macaw.Data.Stack.generate/2` costs more on `wiggle`, for its checked arithmetic.** 50k rows x 3 keys went from 5,404,131 to 9,180,325 reductions; the time in ms is within noise.
+- **New API:** `default: nil` on a typed parameter, `Macaw.Data.Stack.stacked/2` and `stacked!/2`.
+
+### Changes
 
 - **Added:** `default: nil` on a typed `Macaw.Data.Parameter` is optional with no value (#172, #175, spec/01 §2.2). A number has nothing to stand for "none", and a sentinel collides with a real value. `Macaw.Data.Parameter.check/1` accepts it on any type, beside `values` that don't list it, and `Macaw.Data.Parameter.validate/2` answers `nil` when it is absent and takes `nil` given as the same thing. `Macaw.Data.Parameter.conforms?/2` also takes a parameter: `nil` conforms to one whose default is `nil`, and to nothing else but `:term`. `conforms?(type, nil)` is unchanged. A required parameter and one with any other default still refuse `nil`, and listing `nil` in the `values` of a type it is no value of is still a fault. `bindable` is unchanged. No stored document's digest changes: nothing digested holds a parameter, and no described source could declare this before. `Macaw.Data.Source.Conformance`'s `:deliveries` check asks each such parameter given `nil`, on the first request, so a source that declares one and can't read `nil` is a finding.
 - **Fixed:** `Macaw.Data.Source.Push.drain/2` answers every delivery `Macaw.Data.Delivery.new/2` accepts, where it raised (#166, #176, spec/01 §4). A snapshot or an increment of tuple rows without `names:`, or of tuple rows of another width than their names, is `{:table, faults}` in `errors`, `Macaw.Data.Delivery.named_rows/1`'s faults, as rows that don't pack already are. A refused snapshot leaves what is held and the position as they were. A refused increment consumes its number and applies nothing, neither its retractions and replacements nor its `complete_until` and `stale`. A property over generated deliveries found the same class elsewhere on the path, each now answered:
