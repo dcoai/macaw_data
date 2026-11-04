@@ -366,21 +366,27 @@ defmodule Macaw.Data.Operations.Transforms.Stack do
 
   @impl true
   def finish(%{"fields" => fields, "order" => order, "offset" => offset} = node, partials, at) do
-    %{input: input, key: key} = at
     sizes = Enum.map(partials, fn [first | _] -> length(first) end)
     readings = Enum.zip_with([List.duplicate([], length(fields)) | partials], &Enum.concat/1)
     by_field = fields |> Enum.zip(Enum.map(readings, &List.to_tuple/1)) |> Map.new()
     count = Enum.sum(sizes)
     {keys, order} = order(order, fields, by_field, count)
 
-    series =
+    stack =
       Macaw.Data.Stack.new()
       |> Macaw.Data.Stack.keys(keys)
       |> Macaw.Data.Stack.value(fn j, field -> elem(by_field[field], j) || 0 end)
       |> Macaw.Data.Stack.order(order)
       |> Macaw.Data.Stack.offset(offset)
-      |> Macaw.Data.Stack.series(Enum.to_list(0..(count - 1)//1))
 
+    # Its readings are numbers (bind/3), so all a stack can refuse here is a sum.
+    case Macaw.Data.Stack.stacked(stack, Enum.to_list(0..(count - 1)//1)) do
+      {:ok, series} -> output(node, series, fields, sizes, at)
+      {:error, _faults} -> {:error, {"fields", :overflow}}
+    end
+  end
+
+  defp output(node, series, fields, sizes, %{input: input, key: key}) do
     by_key = Map.new(series, &{&1.key, &1})
     places = places(sizes)
 

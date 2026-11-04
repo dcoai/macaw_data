@@ -12,6 +12,12 @@
   - A number resolution, claim, lateness or window value past what a float's arithmetic holds raised `ArithmeticError`. `Macaw.Data.Source.Description.chunk_span/2` derives no span from a resolution under a nanosecond a row (over a time field) or under `1.0e-280` of the field's units (over a number one), or over `1.0e280` of either, so those chunks are aligned by row count; a value past a float's precision over its span is its own slot; a span reaching back past the earliest `DateTime` starts there.
 
   Nothing that worked changes: every resolution, value and row a push could hold before reads and lays out the same.
+- **Fixed:** `Macaw.Data.Stack.generate/2` answers a value it can't stack as a fault, where it raised `ArithmeticError` (#178, #179, spec/04 §4.8). This also removes a random CI failure: the reader property hit this only when a generated row used a stack key, so its verdict depended on the seed. The property now generates rows under the stack's own keys.
+  - A value that is no number, from the default value function or a caller's, is `{[key, j], {:reads, :number}}`, row `j` under `key`, every one at once. `generate!/2` raises those faults. The default function still reads `nil` as `0`. A caller's function answering `nil` answers no number.
+  - A sum past a float's range raised too, and is `:overflow`: `{[key, j], :overflow}` for a point, `{[:order], :overflow}` for a series' sum an order reads. The `stack` step raised the same way from `Macaw.Data.Operations.apply/4` and answers `{[i, "fields"], :overflow}`.
+  - **Added:** `Macaw.Data.Stack.stacked/2` and `stacked!/2`, the value form over a list of any data. `series/2` keeps its bare list and is now `stacked!/2`, so it raises `Macaw.Data.Error` where it raised `ArithmeticError`.
+
+  Nothing that worked changes. One stack does no arithmetic, so it takes any value and answers it as it is, as it did: one key under the `:none` offset and an order of `:none`, `:reverse` or `{:keys, _}`. Every sum a float holds is the BEAM's own answer, to the bit, and integers of any size stay exact. `generate!/2`'s message now starts "not a source it stacks".
 
 ## v0.12.0 (2026-11-03)
 

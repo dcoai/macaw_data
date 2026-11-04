@@ -396,6 +396,11 @@
     reason: "generate/2's twin: raises the faults generate/2 answers, as Macaw.Data.Error"
   },
   %{
+    at: {Macaw.Data.Stack, :stacked!, 2},
+    class: :bang,
+    reason: "stacked/2's twin: raises the faults stacked/2 answers, as Macaw.Data.Error"
+  },
+  %{
     at: {Macaw.Data.Table.Digest, :not_data, 1},
     class: :invariant,
     reason:

@@ -149,6 +149,40 @@ defmodule Macaw.Data.ReadersNeverRaiseTest do
     end
   end
 
+  # The stack's own keys, so a value reaches its arithmetic on every run (#178): a raise
+  # here fails on every seed, where rows of generated names reached it now and then.
+  defp reading do
+    one_of([
+      leaf(),
+      integer(),
+      float(),
+      member_of([1.0e308, -1.0e308, 1.7976931348623157e308, 5.0e-324, 10 ** 400, -(10 ** 400)])
+    ])
+  end
+
+  @tag verifies: "operations-stack-values"
+  property "Stack.generate/2 answers any value under its own keys, whatever its order and offset" do
+    orders = [:none, :reverse, :ascending, :descending, :insideout, {:keys, ["b"]}]
+    offsets = [:none, :expand, :diverging, :silhouette, :wiggle]
+
+    check all(
+            keys <- member_of([[:a], [:a, "b"], [:a, "b", :c]]),
+            order <- member_of(orders),
+            offset <- member_of(offsets),
+            own <- boolean(),
+            rows <-
+              list_of(fixed_map(%{:a => reading(), "b" => reading(), :c => reading()}),
+                max_length: 3
+              )
+          ) do
+      stack = Stack.new() |> Stack.keys(keys) |> Stack.order(order) |> Stack.offset(offset)
+      stack = if own, do: Stack.value(stack, &Table.get(&1, &2)), else: stack
+
+      answers(fn -> Stack.generate(stack, rows) end, fn -> Stack.generate!(stack, rows) end)
+      answers(fn -> Stack.stacked(stack, rows) end, fn -> Stack.stacked!(stack, rows) end)
+    end
+  end
+
   @tag verifies: "data-errors-readers"
   property "Schema.new/1, from_map/1 and from_json/2 answer any document as a schema or faults" do
     keys = Schema.attributes()
