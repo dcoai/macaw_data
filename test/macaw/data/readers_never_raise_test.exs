@@ -284,7 +284,7 @@ defmodule Macaw.Data.ReadersNeverRaiseTest do
     end
   end
 
-  @tag verifies: "data-errors-readers"
+  @tag verifies: ["data-errors-readers", "push-options"]
   property "Push.new/3 and Finish.ceiling/2 answer any options as a value or faults" do
     check all(
             name <- leaf(),
@@ -295,6 +295,31 @@ defmodule Macaw.Data.ReadersNeverRaiseTest do
       answers(fn -> Push.new(name, make_ref(), push) end, fn ->
         Push.new!(name, make_ref(), push)
       end)
+
+      # What new/3 accepts works: its options never raise from what uses them (#177).
+      with {:ok, %Push{} = accepted} <- Push.new(name, make_ref(), push) do
+        for fields <- [%{"t" => %{type: :number, window: true}}, %{"t" => %{type: :number}}] do
+          schema = Schema.new!(fields)
+          rows = [%{"t" => 1}, %{"t" => 2}]
+          claim = [position: 0, complete_until: 1, resolution: 1]
+          snapshot = Macaw.Data.Delivery.new!(rows, schema: schema.version, served: claim)
+
+          increment =
+            Macaw.Data.Delivery.new!([%{"t" => 3}],
+              schema: schema.version,
+              served: [resolution: 1]
+            )
+
+          pushed =
+            accepted
+            |> Push.snapshot(snapshot)
+            |> Push.receive(Push.increment_message(accepted.ref, 1, increment))
+            |> elem(1)
+            |> Push.drain(fn _name -> {:ok, schema} end)
+
+          assert {:ok, %Push{}} = Push.trim(pushed, 1)
+        end
+      end
 
       answers(fn -> Finish.ceiling(budget, ceiling) end, fn ->
         Finish.ceiling!(budget, ceiling)

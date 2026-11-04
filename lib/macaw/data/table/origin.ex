@@ -89,16 +89,29 @@ defmodule Macaw.Data.Table.Origin do
   # months); `nil` for anything else.
   @spec span_us(term()) :: pos_integer() | nil
   def span_us(%Duration{year: 0, month: 0} = d) do
-    {us, _precision} = d.microsecond
+    if duration?(d) do
+      {us, _precision} = d.microsecond
 
-    total =
-      (((d.week * 7 + d.day) * 24 + d.hour) * 60 + d.minute) * 60_000_000 + d.second * 1_000_000 +
-        us
+      total =
+        (((d.week * 7 + d.day) * 24 + d.hour) * 60 + d.minute) * 60_000_000 +
+          d.second * 1_000_000 + us
 
-    if total > 0, do: total
+      if total > 0, do: total
+    end
   end
 
   def span_us(_other), do: nil
+
+  @doc false
+  # Whether a `Duration` is one its functions can read: integers in every unit, as
+  # `Duration.new!/1` makes. The struct alone can hold anything.
+  @spec duration?(term()) :: boolean()
+  def duration?(%Duration{microsecond: {us, precision}} = d)
+      when is_integer(us) and precision in 0..6 do
+    Enum.all?([d.year, d.month, d.week, d.day, d.hour, d.minute, d.second], &is_integer/1)
+  end
+
+  def duration?(_other), do: false
 
   # -- layout -----------------------------------------------------------------------------
 
@@ -240,6 +253,11 @@ defmodule Macaw.Data.Table.Origin do
 
   defp slot(v, span) when is_integer(v) and is_integer(span),
     do: Integer.floor_div(v, span) * span
+
+  # A span past what a float holds, over a float: the value lies in the span from zero, or
+  # the one before it.
+  defp slot(v, span) when is_float(v) and is_integer(span) and span >= @largest_float,
+    do: if(v < 0, do: -span, else: 0)
 
   defp slot(v, span) when is_number(v) do
     # Past a float's precision over the span, the value is its own span's start.

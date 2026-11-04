@@ -142,6 +142,13 @@ defmodule Macaw.Data.Fault do
   defp type_words(:reference), do: "a reference"
   defp type_words(:order), do: "an order: a list of {field, :asc | :desc}, each field a name"
   defp type_words(:duration), do: "a Duration"
+  defp type_words(:integer), do: "an integer"
+  defp type_words(:cache), do: "a Macaw.Data.Schema.Cache"
+  defp type_words(:lateness), do: "a lateness: a number or a Duration"
+
+  defp type_words(:chunk_span),
+    do: "a chunk span: a positive number, or a positive Duration of fixed length"
+
   defp type_words(:schema), do: "a Macaw.Data.Schema"
   defp type_words(:registry), do: "an operations registry"
   defp type_words(:modules), do: "a list of modules"

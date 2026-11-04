@@ -64,6 +64,7 @@ defmodule Macaw.Data.Source.Push do
   alias Macaw.Data.Source.Description
   alias Macaw.Data.Source.Push.Changes
   alias Macaw.Data.Table.Chunk
+  alias Macaw.Data.Table.Origin
 
   @tag :macaw_source
 
@@ -112,6 +113,18 @@ defmodule Macaw.Data.Source.Push do
   description's hard bound (spec/01 §4.4), `nil` by default, accepting a change of any
   age; `chunk_span:` the description's `chunk_span` (spec/01 §1.1.3), `nil` by default,
   derived from the resolution held.
+
+  A value it can't use is its fault by path, every one at once, never a failure at a later
+  drain (macaw_data#177): `{[:cache], {:type, :cache}}`; `{[:limit], {:type, :integer}}`;
+  `{[:lateness], {:type, :lateness}}` for anything but `nil`, a number or a well-formed
+  `Duration`; `{[:chunk_span], {:type, :chunk_span}}` for anything but `nil`, a positive
+  number or a positive `Duration` of fixed length. There is no schema here to judge a
+  value against: a number against a time field, or the reverse, is the delivery's fault, as
+  ever. A limit of `0` or below holds nothing.
+
+      iex> alias Macaw.Data.Source.Push
+      iex> Push.new(:ticks, make_ref(), limit: "x", chunk_span: 0)
+      {:error, [{[:limit], {:type, :integer}}, {[:chunk_span], {:type, :chunk_span}}]}
   """
   @spec new(term(), reference(), keyword()) :: {:ok, t()} | {:error, [{list(), term()}, ...]}
   def new(name, ref, opts \\ []) when is_reference(ref) do
@@ -121,7 +134,8 @@ defmodule Macaw.Data.Source.Push do
              limit: 100_000,
              lateness: nil,
              chunk_span: nil
-           ) do
+           ),
+         :ok <- values(opts) do
       {:ok,
        %__MODULE__{
          name: name,
@@ -133,6 +147,31 @@ defmodule Macaw.Data.Source.Push do
        }}
     end
   end
+
+  defp values(opts) do
+    case for {key, type} <- [
+               cache: :cache,
+               limit: :integer,
+               lateness: :lateness,
+               chunk_span: :chunk_span
+             ],
+             not value?(type, opts[key]),
+             do: {[key], {:type, type}} do
+      [] -> :ok
+      faults -> {:error, faults}
+    end
+  end
+
+  defp value?(:cache, %Cache{entries: entries}) when is_map(entries),
+    do: Enum.all?(entries, fn {_key, schema} -> match?(%Schema{}, schema) end)
+
+  defp value?(:cache, _other), do: false
+  defp value?(:integer, limit), do: is_integer(limit)
+  defp value?(:lateness, nil), do: true
+  defp value?(:lateness, lateness), do: is_number(lateness) or Origin.duration?(lateness)
+  defp value?(:chunk_span, nil), do: true
+  defp value?(:chunk_span, span) when is_number(span), do: span > 0
+  defp value?(:chunk_span, span), do: Origin.span_us(span) != nil
 
   @doc "As `new/3`, the subscription alone, raising `Macaw.Data.Error` naming the faults."
   @spec new!(term(), reference(), keyword()) :: t()
@@ -260,7 +299,8 @@ defmodule Macaw.Data.Source.Push do
     cut and every chunk kept is the same chunk, by id and version. A chunk straddling
     `from` is kept whole; finishing trims its rows.
   - **The served window is narrowed, never widened:** it starts at `from`, or at the held
-    start where that is later; its upper end and `complete_until` are unchanged.
+    start where that is later; its upper end and `complete_until` are unchanged. A box
+    has no start to narrow, so it stays as it is.
   - **The trimmed start is kept** (spec/01 §4.2): after it, a retraction naming a row
     before it that is not held, or a replace range wholly before it, is counted in
     `ignored` as `:trimmed`, not recorded as a fault. A late insertion before it is still
@@ -524,6 +564,7 @@ defmodule Macaw.Data.Source.Push do
       case served.window do
         [held_from, to] -> [Window.latest(from, held_from), to]
         nil -> [from, nil]
+        %{} = box -> box
       end
 
     held = %{held | rows: rows, served: %{served | window: window}}

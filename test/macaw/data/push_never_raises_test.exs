@@ -292,7 +292,12 @@ defmodule Macaw.Data.PushNeverRaisesTest do
 
   defp served do
     optional_map(%{
-      window: one_of([constant(nil), list_of(value(), length: 2)]),
+      window:
+        one_of([
+          constant(nil),
+          list_of(value(), length: 2),
+          constant(%{west: 0, south: 0, east: 1, north: 1})
+        ]),
       resolution:
         one_of([
           value(),
@@ -364,21 +369,66 @@ defmodule Macaw.Data.PushNeverRaisesTest do
     end
   end
 
-  defp lateness,
-    do:
-      member_of([nil, 0, 1, 1.0e308, 10 ** 400, Duration.new!(second: 1), Duration.new!(day: 1)])
+  # A Duration of any sign or length is a lateness, whichever claim it is taken from.
+  defp lateness do
+    member_of([
+      nil,
+      0,
+      1,
+      -5,
+      1.0e308,
+      -1.0e308,
+      10 ** 400,
+      Duration.new!(second: 1),
+      Duration.new!(day: 1),
+      Duration.new!(second: -1),
+      Duration.new!(month: 1),
+      Duration.new!(year: 100_000),
+      Duration.new!(year: -100_000),
+      Duration.new!(second: 10 ** 30),
+      Duration.new!([])
+    ])
+  end
 
-  @tag verifies: "push-unread-rows"
-  property "drain/2 answers a push for any delivery Delivery.new/2 accepts" do
+  defp limit, do: member_of([100_000, 2, 1, 0, -1, 10 ** 400, -(10 ** 400)])
+
+  defp chunk_span do
+    member_of([
+      nil,
+      10,
+      0.5,
+      5.0e-324,
+      1.0e308,
+      10 ** 400,
+      Duration.new!(second: 1),
+      Duration.new!(day: 1),
+      Duration.new!(second: 10 ** 30)
+    ])
+  end
+
+  defp from do
+    one_of([value(), member_of([0, 2, 1.5, ~U[2026-01-01 00:00:01Z], ~D[2026-01-02]])])
+  end
+
+  @tag verifies: ["push-unread-rows", "push-trim-box"]
+  property "drain/2 and trim/2 answer a push for any delivery Delivery.new/2 accepts" do
     check all(
             first <- schemas(),
             second <- schemas(),
             lateness <- lateness(),
+            limit <- limit(),
+            chunk_span <- chunk_span(),
+            from <- from(),
             messages <- list_of(message(), max_length: 4),
             max_runs: 300
           ) do
       push =
-        Push.new!(:ticks, make_ref(), lateness: lateness, cache: Cache.new([{:ticks, first}]))
+        Push.new!(:ticks, make_ref(),
+          lateness: lateness,
+          limit: limit,
+          chunk_span: chunk_span,
+          cache: Cache.new([{:ticks, first}])
+        )
 
       describe = fn _ -> {:ok, first} end
 
@@ -398,7 +448,12 @@ defmodule Macaw.Data.PushNeverRaisesTest do
                   else: Push.increment_message(push.ref, seq, d)
 
               {:ok, push} = Push.receive(push, message)
-              Push.drain(push, describe)
+              push = Push.drain(push, describe)
+
+              case Push.trim(push, from) do
+                {:ok, %Push{} = trimmed} -> trimmed
+                {:error, [{[:from], {:type, _type}}]} -> push
+              end
 
             {:error, _faults} ->
               push

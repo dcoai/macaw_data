@@ -900,12 +900,22 @@ The subscriber holds a `Macaw.Data.Source.Push`, a value, not a process: `receiv
 
 **A holder whose window slides trims its holding** (macaw_data#123): `trim(push, from)` answers `{:ok, push}` without the held chunks wholly before `from` in the window field's order, or `{:error, [{[:from], {:type, type}}]}` for a `from` not of the window field's type (a time of any kind for a `:time` field, compared on the instant scale, §2.4; a number for a `:number` one); `trim!/2` raises.
 - **Only whole chunks are dropped:** each chunk whose every window value is before `from`, through `Table.trim/2` over those chunks' rows (§1.1.1), so nothing is copied or cut and every chunk kept is the same chunk, by id and version (§1.1.3). A chunk straddling `from` is kept whole, since finishing trims its rows (§2.4). The held rows are in the window field's order (a row of no window value last), so what is kept is a suffix holding every row at or after `from`.
-- **The served window is narrowed, never widened:** it starts at `from`, or at the held start where that is later. Its upper end and `complete_until` (§4.4) are unchanged.
+- **The served window is narrowed, never widened:** it starts at `from`, or at the held start where that is later. Its upper end and `complete_until` (§4.4) are unchanged. A box (§3) has no start to narrow, so it stays as it is, while the chunks still drop (macaw_data#177).
 - **It is a no-op** when nothing is held, when the schema has no window field, for a `:point` window field, which has no order, and for a `nil` `from`, an open start.
 - **The trimmed start is kept,** and a change before it is counted rather than refused (§4.2).
 
 ```test:push-trim
 a trim drops the chunks wholly before from and keeps every other by id and version, a straddling chunk whole; the served window starts at from or the held start, its upper end and complete_until unchanged, never widened by an earlier from or a second trim; a time window trims by instant whatever kind from is; nothing held, no window field, a point window field and a nil from are no-ops, a from of the wrong type a fault; for generated holdings, spans and froms the kept rows are a suffix of the held holding every row at or after from, its chunks the held chunks
+```
+
+```test:push-trim-box
+a trim of a holding whose served window is a box answers, the box unchanged, the chunks wholly before from dropped and the trimmed start kept; for generated deliveries with box windows, trim/2 after drain/2 answers and never raises
+```
+
+**`Push.new/3` checks its options' values** (macaw_data#177), every fault at once, so a value it can't use fails at the call and not at a later drain: `cache` a `Schema.Cache`, `{[:cache], {:type, :cache}}`; `limit` an integer, `{[:limit], {:type, :integer}}`, where `0` or below holds nothing; `lateness` `nil`, a number or a well-formed `Duration`, `{[:lateness], {:type, :lateness}}`; `chunk_span` `nil`, a positive number or a positive `Duration` of fixed length, `{[:chunk_span], {:type, :chunk_span}}`. `new!/3` raises those faults. `new/3` knows no schema, so a value of the wrong kind for the window field (a number span over a `:time` field, a `Duration` lateness over a `:number` one) is judged where it is used: `{:table, faults}` and `{:lateness, :incompatible, claim}` in `errors`. A `Description` holds a stricter rule than `new/3` for `lateness`, a non-negative number or a `Duration` by its field, since it has the schema.
+
+```test:push-options
+new/3 refuses a cache, limit, lateness and chunk_span it can't use, by path, every one at once, and new!/3 raises those faults; a limit of zero or below holds nothing, a negative lateness and a Duration of any sign or length are kept and drain; a Duration holding no integers is refused for both; for generated options, a push new/3 accepts never raises from drain/2 or trim/2
 ```
 
 ```test:push-accessors
