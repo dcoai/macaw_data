@@ -45,6 +45,18 @@ defmodule Macaw.Data.ReadersNeverRaiseTest do
     ])
   end
 
+  # Structs of every kind a map test passes: one that enumerates, one that enumerates as
+  # pairs, one with fields that read as a description's keys, and plain values.
+  defp structs do
+    [
+      ~U[2026-01-01 00:00:00Z],
+      ~D[2026-01-01],
+      1..2,
+      MapSet.new([{"type", "number"}]),
+      %URI{path: "type"}
+    ]
+  end
+
   defp name,
     do: one_of([atom(:alphanumeric), string(:alphanumeric, min_length: 1, max_length: 4)])
 
@@ -211,8 +223,19 @@ defmodule Macaw.Data.ReadersNeverRaiseTest do
                   "[1, {",
                   "null"
                 ])
-              ])
+              ]),
+            named <- string(:alphanumeric, min_length: 1, max_length: 4),
+            struct <- member_of(structs())
           ) do
+      # On every run, not when a pair happens to be a binary name then a struct (#182).
+      assert Schema.from_map([[named, struct]]) ==
+               {:error, [{[named], {:type, :description}}]}
+
+      assert {:error, [_ | _] = in_values} =
+               Schema.from_map([[named, %{"type" => "category", "values" => [struct]}]])
+
+      assert {[named, :values], {:type, :values}} in in_values
+
       answers(fn -> Schema.new(fields) end, fn -> Schema.new!(fields) end)
 
       assert match?({:ok, %Schema{}}, Schema.from_map(pairs)) or

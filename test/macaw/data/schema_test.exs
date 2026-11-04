@@ -1301,6 +1301,31 @@ defmodule Macaw.Data.SchemaTest do
       end
     end
 
+    @tag verifies: "schema-json-read"
+    test "from_map/1 answers a struct as a description or a value entry at its path" do
+      now = ~U[2026-01-01 00:00:00Z]
+
+      assert Schema.from_map([["a", now]]) == {:error, [{["a"], {:type, :description}}]}
+      assert Schema.from_map([["a", 1..2]]) == {:error, [{["a"], {:type, :description}}]}
+
+      # A struct that enumerates as a description's pairs is no description.
+      pairs = MapSet.new([{"type", "number"}])
+      assert Schema.from_map([["a", pairs]]) == {:error, [{["a"], {:type, :description}}]}
+
+      assert Schema.from_map([["a", %{"type" => "category", "values" => ["up", now]}]]) ==
+               {:error, [{["a", :values], {:type, :values}}]}
+
+      # The root keeps its own fault, and the other descriptions are still judged.
+      assert Schema.from_map(now) == {:error, [{[], {:type, :schema}}]}
+
+      assert Schema.from_map([["a", now], ["b", %{"type" => "number"}]]) ==
+               {:error, [{["a"], {:type, :description}}]}
+
+      # A document embedding the schema answers it under `schema`.
+      assert Macaw.Data.Derived.from_map(%{"schema" => [["a", now]]})
+             |> then(fn {:error, faults} -> {[:schema, "a"], {:type, :description}} in faults end)
+    end
+
     @tag verifies: "schema-json-round-trip"
     property "a schema read back from its JSON form has its version and its JSON" do
       check all(fields <- schema_fields()) do

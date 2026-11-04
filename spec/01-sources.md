@@ -505,6 +505,7 @@ the version is pinned for two schemas, is the kernel's digest of the schema's te
 - a color the reader does not read, a bare string among them, stays as written, for `new/1` to refuse as `{:type, :color}`: JSON text is no more a color than any other string;
 - a key no description or entry has stays its string, and a word outside its vocabulary stays its string, for `new/1` to refuse by name;
 - anything but a list of `[string, map]` pairs is `{[], {:type, :schema}}`;
+- a struct is a map and no description, nor a value entry, so it stays as given, for `new/1` to refuse at its path: `{[name], {:type, :description}}`, `{[name, :values], {:type, :values}}` (macaw_data#182). A struct that enumerates, a `MapSet` of pairs, is not read by them;
 - **a schema holds no URL:** the reader reads no `$url` (no position of a schema is a URL), so one stays its object, refused by `new/1` by type at its position, and no `%Macaw.Layers.Url{}` comes out of a read. The kernel's URL policy ([macaw_layers 01 §8.3](https://github.com/dcoai/macaw_layers/blob/main/spec/01-kernel.md#kernel-url-policy)) has nothing here to judge.
 
 A schema read back from its JSON form has the same version and the same JSON form, a literal or a typed color in an entry included; one spelled with strings, as JSON spells it, reads back exactly.

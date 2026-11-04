@@ -873,6 +873,7 @@ defmodule Macaw.Data.Schema do
   color is read by the colors' own reader (`Macaw.Layers.Color.Form`), so no atom is made.
   A key no description or value entry has stays its string, for `new/1` to refuse by name,
   and a color the reader does not read stays as written, for `new/1` to refuse as no color.
+  A struct as a description or a value entry stays too, for `new/1` to refuse at its path.
   """
   @spec from_map(term()) :: {:ok, t()} | {:error, [error(), ...]}
   defdelegate from_map(pairs), to: Form

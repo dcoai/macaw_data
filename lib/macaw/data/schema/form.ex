@@ -122,7 +122,9 @@ defmodule Macaw.Data.Schema.Form do
     quantity: Vocabulary.table(Quantity.all())
   }
 
-  defp read_description(description) when is_map(description) do
+  # A struct passes `is_map/1` and is no description, nor is it an entry: it stays as given,
+  # for `new/1` to refuse at its path, and a struct that enumerates is not read by its pairs.
+  defp read_description(description) when is_map(description) and not is_struct(description) do
     Map.new(description, fn {key, value} ->
       case Vocabulary.fetch(@attribute_table, key) do
         {:ok, :status} -> {:status, read_status(value)}
@@ -149,7 +151,7 @@ defmodule Macaw.Data.Schema.Form do
 
   defp read_status(other), do: other
 
-  defp read_value(entry) when is_map(entry) do
+  defp read_value(entry) when is_map(entry) and not is_struct(entry) do
     Map.new(entry, fn {key, value} ->
       case Vocabulary.fetch(@entry_table, key) do
         {:ok, :color} -> {:color, read_color(value)}
