@@ -4,13 +4,15 @@ defmodule Macaw.Data.Source.Push.Changes do
   # lateness, overlapping replacements, and changes inside a replaced range, each a fault
   # and not applied. `{change, before, after}`: the changes for `Table.apply/2`
   # (`retract`, `replace` with only the rows inside each, `insert`), and the faults that
-  # come before its retraction faults and after them, in §4.2's order. Matching a
+  # come before its retraction faults and after them, in §4.2's order. `rows` are its
+  # insertions, read by name by the caller, which answers rows that can't be. Matching a
   # retraction against what is held is `Table.apply/2`'s.
 
   alias Macaw.Data.{Delivery, Schema, Table, Window}
 
   @doc false
-  def validate(%Delivery{} = increment, %Schema{} = schema, bound: bound) do
+  def validate(%Delivery{} = increment, rows, %Schema{} = schema, bound: bound)
+      when is_list(rows) do
     ctx = %{schema: schema, time: Schema.window_field(schema), bound: bound}
 
     {replacements, before} = timely_ranges(increment.replace, ctx)
@@ -24,7 +26,7 @@ defmodule Macaw.Data.Source.Push.Changes do
         {kept ++ [%{r | rows: inside}], faults ++ Enum.map(out, &{:outside, &1})}
       end)
 
-    {others, after_} = timely(Delivery.named_rows!(increment), ctx, after_)
+    {others, after_} = timely(rows, ctx, after_)
     {others, after_} = outside(others, replacements, ctx, after_)
 
     {%{retract: retractions, replace: replacements, insert: others}, before, after_}

@@ -49,6 +49,8 @@ defmodule Macaw.Data.Table.Apply do
 
   # Rows given as the edge reads them, as `Delivery.table/2` packs: a time column's ISO
   # strings, dates and naive times as `DateTime`s, a category's atom as its string.
+  defp edge(%_{} = row, ctx), do: row |> Map.from_struct() |> edge(ctx)
+
   defp edge(row, ctx) do
     Map.new(row, fn {key, value} ->
       name = column(key, ctx)
@@ -58,9 +60,16 @@ defmodule Macaw.Data.Table.Apply do
 
   defp column(key, ctx) do
     Enum.find_value(ctx.header, fn {name, _type} ->
-      if to_string(name) == to_string(key), do: name
+      if key_spelling(name) == key_spelling(key), do: name
     end)
   end
+
+  # A row key as a name's spelling: a key that spells nothing (a row map's keys are its
+  # own) is itself, and is no column.
+  defp key_spelling(key) when is_atom(key) or is_binary(key) or is_number(key),
+    do: to_string(key)
+
+  defp key_spelling(key), do: key
 
   # The faults of packing the rows to be inserted; none applies if any.
   defp packs([], _ctx), do: []
@@ -142,7 +151,7 @@ defmodule Macaw.Data.Table.Apply do
       _fields ->
         Enum.all?(retraction, fn {field, value} ->
           held = Table.get(row, field)
-          if to_string(field) == ctx.time, do: same_time?(held, value), else: held == value
+          if key_spelling(field) == ctx.time, do: same_time?(held, value), else: held == value
         end)
     end
   end
@@ -163,7 +172,7 @@ defmodule Macaw.Data.Table.Apply do
 
   defp same_time?(a, b), do: a == b or (pos(a) != nil and pos(a) == pos(b))
 
-  defp normal(row), do: Map.new(row, fn {k, v} -> {to_string(k), v} end)
+  defp normal(row), do: Map.new(row, fn {k, v} -> {key_spelling(k), v} end)
 
   # -- range retractions ----------------------------------------------------------------------
 

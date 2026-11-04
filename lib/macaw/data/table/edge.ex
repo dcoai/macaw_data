@@ -176,6 +176,9 @@ defmodule Macaw.Data.Table.Edge do
     end
   end
 
+  # A name of neither spelling (a row map's keys are its own): only itself, above.
+  def key(_row, _name), do: nil
+
   defp scan(row, name) do
     found = Enum.find(Map.keys(row), &(is_atom(&1) and Atom.to_string(&1) == name))
     if found, do: Process.put({Macaw.Data.Table, name}, found)

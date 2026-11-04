@@ -50,7 +50,9 @@ defmodule Macaw.Data.Source.Push do
   - **What is held is a chunked table** (spec/01 §2.6): `held/1`'s rows are a
     `Macaw.Data.Table` of the source's origin, its columns the schema's fields, packed as
     `Delivery.table/2` packs; every change reaches it through `Macaw.Data.Table.apply/2`,
-    a settled range's in its delta. Rows that don't pack are `{:table, faults}` in `errors`.
+    a settled range's in its delta. Rows that don't pack, or can't be read by name (tuple
+    rows without `names:`, macaw_data#166), are `{:table, faults}` in `errors`, and nothing
+    of that delivery is applied.
 
   It is not a process: the process that subscribes receives the messages in its mailbox
   and passes them here. Ported from the logic of visualize's `Visualize.Feed.Monitor`,
@@ -191,7 +193,9 @@ defmodule Macaw.Data.Source.Push do
   push rate. Increments apply by their numbers, a snapshot hands off by its position
   (spec/01 §4.1). A delivery naming a version the cache lacks is resolved through
   `describe` (`Schema.Cache.resolve/4`); one that cannot be is dropped and its reason
-  kept in `errors`. A delivery naming no version is read under the held schema's.
+  kept in `errors`. A delivery naming no version is read under the held schema's. A
+  delivery `Delivery.new/2` accepts never raises here: rows that can't be read by name or
+  don't pack are `{:table, faults}` in `errors`, nothing of that delivery applied.
   """
   @spec drain(t(), Cache.describe()) :: t()
   def drain(%__MODULE__{pending: pending} = push, describe) do
@@ -220,9 +224,9 @@ defmodule Macaw.Data.Source.Push do
 
   @doc """
   The errors recorded since they were last taken, in the order recorded, and the push
-  holding none (macaw_data#123): a gap, an unresolvable schema, a fault of a change or of
-  packing rows (`{:table, faults}`). A holder takes them after each drain, so a
-  subscription that lives long holds only what it has not yet read.
+  holding none (macaw_data#123): a gap, an unresolvable schema, a fault of a change, or
+  rows that can't be read by name or don't pack (`{:table, faults}`). A holder takes them
+  after each drain, so a subscription that lives long holds only what it has not yet read.
 
       iex> alias Macaw.Data.Source.Push
       iex> {[], push} = Push.take_errors(Push.new!(:ticks, make_ref()))
@@ -379,11 +383,13 @@ defmodule Macaw.Data.Source.Push do
     push = %{push | position: seq}
 
     with {:ok, schema, push} <- resolve(push, delivery, describe),
-         :ok <- resolution(push.held, delivery) do
-      merge(push, delivery, schema)
+         :ok <- resolution(push.held, delivery),
+         {:ok, rows} <- Delivery.named_rows(delivery) do
+      merge(push, delivery, rows, schema)
     else
       {:error, reason, push} -> fault(push, reason)
       {:resolution, _held, _given} = mismatch -> %{fault(push, mismatch) | refetch: mismatch}
+      {:error, faults} -> fault(push, {:table, faults})
     end
   end
 
@@ -416,9 +422,16 @@ defmodule Macaw.Data.Source.Push do
   # §2.6, §4.2): judged first (lateness, overlaps, conflicts), then matched and placed in
   # the held table's chunks, a settled range's in its delta. The served window grows over
   # the rows inserted.
-  defp merge(push, delivery, schema) do
-    held = push.held || empty(push, delivery, schema)
-    held = reheld(push, held, schema)
+  defp merge(push, delivery, rows, schema) do
+    with {:ok, held} <- holding_now(push, delivery, schema),
+         {:ok, held} <- reheld(push, held, schema) do
+      merge(push, held, delivery, rows, schema)
+    else
+      {:error, faults} -> fault(push, {:table, faults})
+    end
+  end
+
+  defp merge(push, held, delivery, rows, schema) do
     old = held.rows
 
     # Late changes are judged against the claim held before this increment.
@@ -430,7 +443,7 @@ defmodule Macaw.Data.Source.Push do
 
     {claim, push} = claim(push, delivery)
     {delivery, push} = before_trimmed(push, delivery)
-    {change, before, after_} = Changes.validate(delivery, schema, bound: bound)
+    {change, before, after_} = Changes.validate(delivery, rows, schema, bound: bound)
 
     {table, faults, unheld} =
       Table.apply(
@@ -560,33 +573,36 @@ defmodule Macaw.Data.Source.Push do
   # edge packs them, in the window field's order with rows of no window value last, on the
   # source's origin. `{:ok, held}` or the packing's faults.
   defp holding(push, %Delivery{} = delivery, schema) do
-    rows = delivery |> Delivery.named_rows!() |> ordered(Schema.window_field(schema))
-    header = header(schema)
-
-    columns =
-      for {name, type} <- header,
-          do: {name, type, Enum.map(rows, &Table.at_edge(type, Table.get(&1, name)))}
-
-    case Table.new(columns, origin: origin(push, schema, delivery.served.resolution)) do
-      {:ok, table} -> {:ok, %{delivery | rows: table, names: nil, retracted: [], replace: []}}
-      {:error, faults} -> {:error, faults}
+    with {:ok, rows} <- Delivery.named_rows(delivery),
+         rows = ordered(rows, Schema.window_field(schema)),
+         columns =
+           for(
+             {name, type} <- header(schema),
+             do: {name, type, Enum.map(rows, &Table.at_edge(type, Table.get(&1, name)))}
+           ),
+         {:ok, table} <-
+           Table.new(columns, origin: origin(push, schema, delivery.served.resolution)) do
+      {:ok, %{delivery | rows: table, names: nil, retracted: [], replace: []}}
     end
   end
 
-  # Nothing held yet: an empty table of the increment's resolution.
-  defp empty(push, delivery, schema) do
-    {:ok, held} = holding(push, %{delivery | rows: [], names: nil}, schema)
-    %{held | served: %{held.served | window: nil, complete_until: nil}}
+  # What is held, or with nothing held yet an empty table of the increment's resolution.
+  defp holding_now(%{held: %Delivery{} = held}, _delivery, _schema), do: {:ok, held}
+
+  defp holding_now(push, delivery, schema) do
+    with {:ok, held} <- holding(push, %{delivery | rows: [], names: nil}, schema) do
+      {:ok, %{held | served: %{held.served | window: nil, complete_until: nil}}}
+    end
   end
 
-  # A held table under another schema's fields (the schema changed): its rows held again.
+  # A held table under another schema's fields (the schema changed): `{:ok, held}`, its
+  # rows held again, or the faults of rows that don't pack under the new fields.
   defp reheld(push, %Delivery{rows: table} = held, schema) do
     if Enum.map(Table.names(table), &{&1, Table.column_type(table, &1)}) == header(schema) do
-      held
+      {:ok, held}
     else
       # A held table always answers its rows.
-      {:ok, again} = holding(push, %{held | rows: Table.rows!(table)}, schema)
-      again
+      holding(push, %{held | rows: Table.rows!(table)}, schema)
     end
   end
 
@@ -631,13 +647,29 @@ defmodule Macaw.Data.Source.Push do
   # `complete_until − lateness`, in the window field's terms; `nil` without both.
   defp bound(nil, _lateness), do: nil
   defp bound(_claim, nil), do: nil
+
+  defp bound(claim, lateness) when is_integer(claim) and is_integer(lateness),
+    do: claim - lateness
+
+  # Past what a float's subtraction holds: no row is later than a lateness so large, and
+  # a claim so large is its own bound.
+  defp bound(_claim, lateness) when is_number(lateness) and abs(lateness) > 1.0e300, do: nil
+
+  defp bound(claim, lateness)
+       when is_number(claim) and abs(claim) > 1.0e300 and is_number(lateness), do: claim
+
   defp bound(claim, lateness) when is_number(claim) and is_number(lateness), do: claim - lateness
   defp bound(%DateTime{} = claim, %Duration{} = d), do: DateTime.shift(claim, Duration.negate(d))
 
   defp bound(%NaiveDateTime{} = claim, %Duration{} = d),
     do: NaiveDateTime.shift(claim, Duration.negate(d))
 
-  defp bound(%Date{} = claim, %Duration{} = d), do: Date.shift(claim, Duration.negate(d))
+  # A date's claim is its midnight: a lateness of hours or less leaves a naive time.
+  defp bound(%Date{} = claim, %Duration{hour: 0, minute: 0, second: 0, microsecond: {0, _}} = d),
+    do: Date.shift(claim, Duration.negate(d))
+
+  defp bound(%Date{} = claim, %Duration{} = d),
+    do: claim |> NaiveDateTime.new!(~T[00:00:00]) |> bound(d)
 
   # A claim the lateness can't be taken from (a time against a number): recorded, and
   # no bound applied.

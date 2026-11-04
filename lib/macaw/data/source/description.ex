@@ -29,6 +29,12 @@ defmodule Macaw.Data.Source.Description do
   alias Macaw.Data.{Parameter, Schema, Table}
   alias Macaw.Data.Table.Origin
 
+  # The finest and coarsest resolutions a chunk's span is derived from: past them a span
+  # rounds to nothing or overflows, and the chunks are aligned by row count.
+  @finest_second 1.0e-9
+  @finest_step 1.0e-280
+  @coarsest 1.0e280
+
   # A named resolution's seconds, for the span derived from it (spec/01 §1.1.3).
   @seconds %{second: 1, minute: 60, hour: 3600, day: 86_400}
 
@@ -192,8 +198,10 @@ defmodule Macaw.Data.Source.Description do
   `chunk_span` when there is one; else `Macaw.Data.Table.chunk_rows/0` times the
   resolution: of *r* seconds (a positive number, or `:second`, `:minute`, `:hour` or
   `:day`) a `Duration` over a `:time` window field, of *r* in the field's units a number
-  over a `:number` one. `nil` for a resolution it can't read and for a source with no time
-  or number window field: its chunks are aligned by row count. Never from the data.
+  over a `:number` one. `nil` for a resolution it can't read, a number too fine or too
+  coarse for a span to hold (under a nanosecond a row, under `1.0e-280` of the field's
+  units, over `1.0e280` of either), and for a source with no time or number window field:
+  its chunks are aligned by row count. Never from the data.
 
       iex> alias Macaw.Data.{Schema, Source.Description}
       iex> d = Description.new!(schema: Schema.new!(%{t: %{type: :time}}))
@@ -215,7 +223,8 @@ defmodule Macaw.Data.Source.Description do
           micro -> Duration.new!(second: div(us, 1_000_000), microsecond: {micro, 6})
         end
 
-      {:number, _} when is_number(resolution) and resolution > 0 ->
+      {:number, _}
+      when is_number(resolution) and resolution >= @finest_step and resolution <= @coarsest ->
         resolution * Table.chunk_rows()
 
       _ ->
@@ -223,7 +232,7 @@ defmodule Macaw.Data.Source.Description do
     end
   end
 
-  defp seconds(r) when is_number(r) and r > 0, do: r
+  defp seconds(r) when is_number(r) and r >= @finest_second and r <= @coarsest, do: r
   defp seconds(r) when is_map_key(@seconds, r), do: Map.fetch!(@seconds, r)
   defp seconds(_r), do: nil
 end

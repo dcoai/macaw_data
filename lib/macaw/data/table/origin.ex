@@ -10,6 +10,9 @@ defmodule Macaw.Data.Table.Origin do
   @keys [:source, :resolution, :window, :span, :offset]
   @naive_epoch ~N[1970-01-01 00:00:00.000000]
   @day_us 86_400_000_000
+  @largest_float 1.7976931348623157e308
+  @float_precision 9_007_199_254_740_992
+  @earliest_us -377_705_116_800_000_000
 
   @typedoc "An origin, normalized: the offset is the table's, not the origin's."
   @type t :: %{source: term(), resolution: term(), window: term() | nil, span: term() | nil}
@@ -101,8 +104,9 @@ defmodule Macaw.Data.Table.Origin do
 
   # The table's chunks as `[{count, id}]`, in order, for `size` rows from `offset` among
   # the source's: `id` nil where the chunk's id is its content digest. `:invalid` when a
-  # window value is of no kind a window takes (the column's own fault reports it), and
-  # `{:error, faults}` when the rows are not in the window field's order.
+  # window value is of no kind a window takes, or not of its span's (a number under a
+  # `Duration`, a time under a number): the column's own fault reports it. `{:error,
+  # faults}` when the rows are not in the window field's order.
   @doc false
   @spec layout(
           t() | nil,
@@ -117,7 +121,7 @@ defmodule Macaw.Data.Table.Origin do
   def layout(%{window: window, span: span} = origin, _offset, columns, _size, _rows)
       when window != nil and span != nil do
     {_, _, values} = List.keyfind(columns, window, 0)
-    positions = Enum.map(values, &position/1)
+    positions = Enum.map(values, &spanned(&1, span))
 
     cond do
       :invalid in positions ->
@@ -168,9 +172,12 @@ defmodule Macaw.Data.Table.Origin do
   def windowed?(_origin), do: false
 
   @doc false
-  # The slot a window value lies in, under an origin in event time.
+  # The slot a window value lies in, under an origin in event time; `:invalid`, which no
+  # chunk's slot is, for a value its span can't slot.
   @spec slot_of(t(), term()) :: term()
-  def slot_of(%{span: span}, value), do: slot(value, span)
+  def slot_of(%{span: span}, value) do
+    if spanned(value, span) == :invalid, do: :invalid, else: slot(value, span)
+  end
 
   @doc false
   # Whether a slot's span lies wholly before `until`: its end at or before it
@@ -198,6 +205,14 @@ defmodule Macaw.Data.Table.Origin do
   @spec position(term()) :: number() | nil | :invalid
   def position(value), do: at(value)
 
+  # A window value's position, `:invalid` where its span can't slot it.
+  defp spanned(value, span) when is_number(value) and not is_number(span), do: :invalid
+
+  defp spanned(value, span) when is_number(span) and not is_number(value) and value != nil,
+    do: :invalid
+
+  defp spanned(value, _span), do: at(value)
+
   # The first index whose position comes before the one before it.
   defp unsorted([], _previous, _i), do: nil
 
@@ -222,10 +237,20 @@ defmodule Macaw.Data.Table.Origin do
   # The start of the span a window value lies in: a UTC DateTime for a DateTime, a
   # NaiveDateTime for a naive time or a date, a number for a number; `nil` for none.
   defp slot(nil, _span), do: nil
-  defp slot(v, span) when is_number(v), do: floor_div(v, span) * span
 
+  defp slot(v, span) when is_integer(v) and is_integer(span),
+    do: Integer.floor_div(v, span) * span
+
+  defp slot(v, span) when is_number(v) do
+    # Past a float's precision over the span, the value is its own span's start.
+    if abs(v) >= @largest_float or abs(v) / @float_precision >= span,
+      do: v,
+      else: trunc(Float.floor(v / span)) * span
+  end
+
+  # The earliest instant a `DateTime` holds, for a span reaching back past it.
   defp slot(%DateTime{} = t, span),
-    do: DateTime.from_unix!(start_us(at(t), span), :microsecond)
+    do: DateTime.from_unix!(max(start_us(at(t), span), @earliest_us), :microsecond)
 
   defp slot(t, span),
     do: NaiveDateTime.add(@naive_epoch, start_us(at(t), span), :microsecond)
@@ -234,7 +259,4 @@ defmodule Macaw.Data.Table.Origin do
     span_us = span_us(span)
     Integer.floor_div(us, span_us) * span_us
   end
-
-  defp floor_div(v, span) when is_integer(v) and is_integer(span), do: Integer.floor_div(v, span)
-  defp floor_div(v, span), do: trunc(Float.floor(v / span))
 end

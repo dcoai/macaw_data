@@ -11,17 +11,12 @@ defmodule Macaw.Data.RowsTwinCallersTest do
 
   @twins [:rows!, :named_rows!]
 
-  # `{module, function, arity, twin}` => why its argument always answers. A known gap
-  # names the issue that removes it.
+  # `{module, function, arity, twin}` => why its argument always answers.
   @reviewed %{
     {Macaw.Data.Derived.Engine, :subject, 1, :rows!} =>
       "a delivery Delivery.new/2 built, its rows' shape checked; neither a table nor a row list",
     {Macaw.Data.Derived.Engine, :input_rows, 1, :rows!} => "a %Table{}: a table always answers",
-    {Macaw.Data.Source.Push, :reheld, 3, :rows!} => "the held %Table{}: a table always answers",
-    {Macaw.Data.Source.Push, :holding, 3, :named_rows!} =>
-      "known gap: a snapshot of unnamed tuple rows raises from Push.drain/2, macaw_data#166",
-    {Macaw.Data.Source.Push.Changes, :validate, 3, :named_rows!} =>
-      "known gap: an increment of unnamed tuple rows raises from Push.drain/2, macaw_data#166"
+    {Macaw.Data.Source.Push, :reheld, 3, :rows!} => "the held %Table{}: a table always answers"
   }
 
   # Every call of a twin in `source`: `{module, function, arity, twin}`, module-nested.
