@@ -1,25 +1,18 @@
 # vendored.exs — the Macaw family's CI scripts in ci/ are the copies they were vendored
-# as, and at a release the family's current ones (dco-tek/macaw/macaw_data#162, #165).
+# as, and at a release the family's current ones (spec/00 §3, macaw_data#162, #165).
 #
 #     elixir ci/vendored.exs                    # CI: every copy hashes to its manifest entry
 #     elixir ci/vendored.exs --reference [DIR]  # release: and every copy is the reference's
 #     elixir ci/vendored.exs --vendor [DIR]     # copy the reference in, rewrite the manifest
 #
-# Every .exs in claude-tools' macaw_ci/, this script among them, is copied into a library's
-# ci/ byte for byte, because CI can't reach claude-tools. A copy drifts two ways: edited in
-# the library, which CI catches against the SHA-256 each copy had when it was vendored
-# (ci/vendored_manifest.exs); or left behind when the reference moves on, which only a
-# machine holding the reference can see, so a library's `mix hex.publish` alias runs the
-# `--reference` form. DIR defaults to $MACAW_CI_REFERENCE, else
-# ~/Projects/claude-tools/macaw_ci. A reference that isn't there fails: no answer is never
-# a clean one.
-#
-# A library adopting it runs the reference's copy once, from its root:
-#
-#     elixir ~/Projects/claude-tools/macaw_ci/vendored.exs --vendor
-#
-# then gives CI a job running `elixir ci/vendored.exs` and puts
-# `cmd elixir ci/vendored.exs --reference` first in its hex.publish alias.
+# The family's scripts (advisories.exs, raises.exs, release_guard.exs, spec_links.exs) live
+# in claude-tools' macaw_ci/ and are copied into ci/ byte for byte, because CI can't reach
+# claude-tools. A copy drifts two ways: edited here, which CI catches against the SHA-256
+# each copy had when it was vendored (ci/vendored_manifest.exs); or left behind when the
+# reference moves on, which only a machine holding the reference can see, so `mix
+# hex.publish` runs the `--reference` form. DIR defaults to $MACAW_CI_REFERENCE, else
+# ~/Projects/claude-tools/macaw_ci. A reference that isn't there fails: no answer is
+# never a clean one. This script is macaw_data's own, not a family copy.
 #
 # Exit 0 when every copy holds, 1 with one line per problem, 2 on bad arguments.
 
@@ -135,7 +128,7 @@ defmodule Vendored do
 
     File.write!(Path.join(root, @manifest), """
     # The Macaw family's CI scripts vendored into ci/, each with the SHA-256 it had when it
-    # was vendored, read by ci/vendored.exs. Written by
+    # was vendored, read by ci/vendored.exs (spec/00 §3, macaw_data#165). Written by
     # `elixir ci/vendored.exs --vendor`; never edited by hand.
     %{
     #{Enum.join(entries, ",\n")}
