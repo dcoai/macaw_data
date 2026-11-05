@@ -1,6 +1,39 @@
 # Changelog
 
-## Unreleased
+## v0.13.0 (2026-11-05)
+
+**Errors are values past the readers: every reader has a `!` twin, an improper list and arithmetic past a float's range answer faults, and `Macaw.Data.Reduce`, `Macaw.Data.FFT` and `Macaw.Data.Source`'s dispatch answer values** (#184, #169, #181, #185, #193, #192, #191, #195). A breaking change for a direct caller of `Macaw.Data.Reduce` or `Macaw.Data.FFT`, and new `!` twins.
+
+### Upgrading from 0.12.x
+
+- **Breaking: `Macaw.Data.Reduce.lttb/3`, `Macaw.Data.Reduce.m4/3`, `Macaw.Data.FFT.magnitudes/1` and `Macaw.Data.FFT.window/2` answer `{:ok, value}` or `{:error, reason}`.** Each answered a bare list. Call `lttb!/3`, `m4!/3`, `magnitudes!/1` or `window!/2` for the old answer. `lttb/2` and `m4/2` change with them. The `lttb` and `m4` steps keep the shape of their answers.
+- **New `!` twins:** `Macaw.Data.Table.from!/2`, `Macaw.Data.Schema.from_map!/1`, `Macaw.Data.Schema.from_json!/2` and `Macaw.Data.Derived.from_map!/2`.
+- **Calls that worked near a float's range are now refused,** with a fault in place of the answer. `8.0e307` is the bound called half the largest float below.
+  - `Macaw.Data.Reduce.lttb/3`: `{:values, :overflow}` when `count × |x|`, `count × |y|` or `4 × x range × y range` reaches `8.0e307`.
+  - `Macaw.Data.Reduce.m4/3`: `{:values, :overflow}` for an `x` at or above `8.0e307`, and `{:width, width}` for a width at or above it.
+  - `Macaw.Data.FFT.fft/1`: `{:values, :overflow}` when the absolute parts sum to `8.0e307` or more. `Macaw.Data.FFT.magnitudes/1` refuses a term whose square passes a float's range.
+  - `Macaw.Data.FFT.spectrum/3`: `{:values, :overflow}` when the absolute sum of the readings reaches `1.0e152`, and `{:every, :overflow}` for an interval whose frequencies pass a float's range.
+  - The `lttb` and `m4` steps: `{[i, "fields"], :overflow}` for an `x` at or above `8.0e307`, a number at or above `1.0e301` under a `time` scale or past a float's range under `log`, and for `lttb` a line whose triangles or bucket means could pass the range.
+- **`Macaw.Data.Operations.validate/3` refuses what is no data in a step's `:term` option.** A function, a PID, a reference, a port or an improper list in `filter`'s `value` is `{[i, "value"], {:type, :term}}`. `validate/3` accepted them and `apply/4` raised, so a test that only validated such a node changes.
+- **`Macaw.Data.Source.Finish.ceiling/2` refuses a `host:` or `page:` that is no positive integer,** `{[key], {:type, :pos_integer}}`, every fault at once. `host: 10.5` and `host: 0` answered before, and `host: :nope` applied no limit at all. `ceiling(5, host: 0)` is now an error, so a caller using `0` for "nothing" must say so itself.
+- **`Macaw.Data.Source`'s dispatch answers `{:error, :not_a_source}` for a term that is no source,** from `describe/2`, `fetch/3`, `subscribe/2` and a `describer/1` lookup, holding nothing of the term. `unsubscribe/2` answers `:ok` for such a term. A `describer/1` lookup of a non-tuple entry answered `{:ok, entry}` as if it were a schema, which was a bug. A test asserting `FunctionClauseError` from any of these changes.
+- **An `:overflow` fault reads "is beyond a float's range"** where it read "sums beyond a float's range". A test on those words changes.
+- **An improper list answers a fault at every reader,** where it raised. `Macaw.Data.Table.new/2` has `{[], {:type, :columns}}` and `Macaw.Data.Operations.validate/3` `{["nodes"], {:type, :nodes}}`, both new. `Macaw.Data.Derived.from_map/2` still raises on an improper list inside a map form: that is the kernel's to refuse (spec/00 §5).
+- **spec/04 §4.4's `lttb` tolerance is wider for a sparse-spike series:** twice the exact algorithm's error plus `0.005`, plus `1/n` for each peak kept beyond the exact algorithm's. No picked row changes.
+- **Cost at 50k rows, before to after.** The direct calls pay for the new extent check; the steps skip it.
+
+  | Call | Reductions | ms |
+  |---|---|---|
+  | `lttb` step, kernels, `n` 1000 | 1,079,886 → 1,099,226 (+1.8%) | within noise |
+  | `m4` step, kernels, width 1000 | 1,111,055 → 1,112,078 | within noise |
+  | `lttb` step, Elixir path, `refs` `n` 1000 | 144,929 → 132,427 (-8.6%) | 5.4 → 4.4 |
+  | `Macaw.Data.Reduce.lttb/3` direct, `n` 1000 | 465,853 → 670,227 (+44%) | 25.9 → 20.5 |
+  | `Macaw.Data.Reduce.m4/3` direct, width 1000 | 699,005 → 903,355 (+29%) | 16.7 → 19.3 |
+  | `Macaw.Data.FFT.fft/1`, 32,768 samples | about 5.41M → 5.55M (+2.6%) | within noise, about 110 |
+  | `Macaw.Data.FFT.spectrum/3`, 32,768 samples | about 6.21M → 6.39M (+3%) | within noise, about 145 |
+  | `Macaw.Data.Table.source/1` | 50,018 → 53,143 (+6%) | 0.63 → about 1.1 |
+
+### Changes
 
 - **`Macaw.Data.Source.Finish.ceiling/2` refuses a `host:` or `page:` that is no positive integer** (#195), `{[key], {:type, :pos_integer}}`, every fault at once. A term that isn't a number orders above every number, so `host: :nope` or `host: "10"` applied no limit and `ceiling(nil, host: :nope)` answered `{:nope, false}`. `host: 10.5` and `host: 0`, which used to answer, are now refused.
 - **`Macaw.Data.Source.describe/2`, `fetch/3` and `subscribe/2` answer `{:error, :not_a_source}` for a term that is no source** (#191), where they raised `FunctionClauseError` or `UndefinedFunctionError`. `describer/1` answers it for an entry that is no `{source, context}` pair: such an entry either raised or, for one that wasn't a tuple, answered `{:ok, entry}` as if it were a schema. `unsubscribe/2` answers `:ok` for such a term, and for a module with `subscribe/2` and no `unsubscribe/2`. A wrong `Description` or `Request`, or a `pid` that isn't one, stays a programming error (spec/00 §5).
