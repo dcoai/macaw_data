@@ -28,8 +28,25 @@ defmodule Macaw.Data.ReadersNeverRaiseTest do
     ])
   end
 
-  defp value,
-    do: one_of([leaf(), list_of(leaf(), max_length: 3), map_of(leaf(), leaf(), max_length: 2)])
+  # A list of the type a reader takes, with the wrong tail: `is_list/1` passes it, and
+  # `Enum` raises on it (#184, #169). `ReadersImproperListsTest` makes each list of a valid
+  # input improper on every run; here one reaches the shapes the generators make.
+  defp improper_list do
+    map({nonempty(list_of(leaf(), max_length: 2)), leaf()}, fn {list, tail} ->
+      tail = if is_list(tail), do: :tail, else: tail
+      tail = if tail == nil, do: :tail, else: tail
+      list |> Enum.reverse() |> Enum.reduce(tail, &[&1 | &2])
+    end)
+  end
+
+  defp value do
+    one_of([
+      leaf(),
+      list_of(leaf(), max_length: 3),
+      improper_list(),
+      map_of(leaf(), leaf(), max_length: 2)
+    ])
+  end
 
   # A map form's value: the terms a decoded document holds. A struct, a tuple or a
   # reference in a map form raises inside macaw_layers' `Form.from_map/3` today, the

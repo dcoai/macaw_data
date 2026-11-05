@@ -411,6 +411,9 @@ defmodule Macaw.Data.OperationsTest do
         {{[0, "thresholds"], {:type, {:one_of, [{:integer, 1}, {:list, :number}]}}},
          "step 1, thresholds: is an integer of at least 1 or a list, each a number"},
         {{["scale"], :required}, "scale: is required"},
+        {{["nodes"], {:type, :nodes}}, "nodes: must be a list of nodes"},
+        {{[0, "value"], {:type, :term}},
+         "step 1, value: is not data: a function, a PID, a reference, a port or an improper list"},
         {{[], {:unknown, :aggregate, "mode"}}, "the name: aggregate \"mode\" is not available"}
       ]
 

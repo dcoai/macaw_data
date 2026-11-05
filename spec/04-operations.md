@@ -85,7 +85,7 @@ An option is declared `{name, %Option{type: type, default: value, required: bool
 | `{:one_of, types}` | a value of the first of `types` that holds it |
 | `:duration` | `[n, unit]`, `n` a number and `unit` one of `second`, `minute`, `hour`, `day`, `week`, `year` (§4.3) |
 | `:aggregate` | the name of an aggregate in the registry (§2) |
-| `:term` | any value |
+| `:term` | any value that is data: no function, PID, reference, port or improper list (spec/00 §5) |
 
 `Option.check(registry, option, value)` answers `{:ok, value}`, the value as `run/3` is given it (an enum's atom, an aggregate's module), or `{:error, reason}` (§3.1).
 

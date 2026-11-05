@@ -30,6 +30,8 @@ defmodule Macaw.Data.Derived do
       {:ok, ["ops", "health"]}
   """
 
+  import Macaw.Data.Lists, only: [is_proper_list: 1]
+
   alias Macaw.Data.{Delivery, Schema, Table, Window}
   alias Macaw.Data.Derived.{Form, Last, Sandbox}
   alias Macaw.Data.Derived.Sandbox.Names, as: Spelling
@@ -168,7 +170,7 @@ defmodule Macaw.Data.Derived do
   defp name(name) when is_atom(name) and name not in @not_names, do: Names.name(name)
   defp name(name), do: name
 
-  defp named_inputs(inputs) when is_list(inputs) do
+  defp named_inputs(inputs) when is_proper_list(inputs) do
     Enum.map(inputs, fn
       {name, window} -> {input(name), named_window(window)}
       other -> other
@@ -183,7 +185,7 @@ defmodule Macaw.Data.Derived do
 
   defp named_window(window), do: window
 
-  defp input([_ | _] = path), do: Enum.map(path, &name/1)
+  defp input([_ | _] = path) when is_proper_list(path), do: Enum.map(path, &name/1)
   defp input({:source, name}), do: {:source, name(name)}
   defp input(name), do: name(name)
 
@@ -209,7 +211,7 @@ defmodule Macaw.Data.Derived do
 
   defp from(nil), do: [{[:from], :required}]
 
-  defp from([_ | _] = inputs) do
+  defp from([_ | _] = inputs) when is_proper_list(inputs) do
     each =
       inputs
       |> Enum.with_index()
@@ -226,7 +228,7 @@ defmodule Macaw.Data.Derived do
   defp input_name(name, _i) when is_binary(name) and name != "", do: []
   defp input_name({:source, name}, _i) when is_binary(name) and name != "", do: []
 
-  defp input_name([_ | _] = path, i) do
+  defp input_name([_ | _] = path, i) when is_proper_list(path) do
     if Enum.all?(path, &(is_binary(&1) and &1 != "")),
       do: [],
       else: [{[:from, i], {:type, :input_name}}]
@@ -317,7 +319,7 @@ defmodule Macaw.Data.Derived do
   defp per(:identity, [_, _ | _]), do: [{[:per], {:per, :ambiguous}}]
   defp per(:identity, _from), do: []
 
-  defp per({:identity, name}, from) when is_list(from) do
+  defp per({:identity, name}, from) when is_proper_list(from) do
     if Enum.any?(from, &match?({^name, _window}, &1)),
       do: [],
       else: [{[:per], {:per, {:unknown_input, name}}}]
@@ -469,7 +471,7 @@ defmodule Macaw.Data.Derived do
       "vm.memory.total"
   """
   @spec key(name() | atom()) :: String.t() | nil
-  def key([_ | _] = path), do: path |> List.last() |> Names.name()
+  def key([_ | _] = path) when is_proper_list(path), do: path |> List.last() |> Names.name()
   def key({:source, name}), do: Names.name(name)
 
   def key(name) when is_binary(name) or (is_atom(name) and name not in @not_names),

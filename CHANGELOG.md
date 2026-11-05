@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- **An improper list answers its position's fault at every reader** (#184, #169). One guard judges a list, and a test makes each list of a valid input of each reader improper on every run. `Macaw.Data.Table.new/2` has `{[], {:type, :columns}}` and `Macaw.Data.Operations.validate/3` `{["nodes"], {:type, :nodes}}`.
+- **A step's `:term` option refuses what is no data** (#187). A function, a PID, a reference, a port or an improper list in `filter`'s `value` is `{[i, "value"], {:type, :term}}` from `validate/3` and `apply/4`, where `apply/4` raised `ArgumentError` from the step's digest. `validate/3` accepted them before, so a test that only validated such a node changes.
+
 ## v0.12.1 (2026-11-04)
 
 **A typed parameter can default to no value, and a push holder, a stack and a schema's map form answer as faults what they raised** (#172, #166, #178, #177, #182). `default: nil` on a typed `Macaw.Data.Parameter` means optional with no value. `Macaw.Data.Source.Push.drain/2` answers every delivery `Macaw.Data.Delivery.new/2` accepts, `Macaw.Data.Source.Push.trim/2` keeps a box window, `Macaw.Data.Stack.generate/2` answers a value it can't stack or a sum past a float's range, and `Macaw.Data.Schema.from_map/1` answers a struct at its path. Two random CI failures go with them. This is a patch, and some calls behave differently, including a few that worked: read the guide below.

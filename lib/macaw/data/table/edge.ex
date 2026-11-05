@@ -5,6 +5,8 @@ defmodule Macaw.Data.Table.Edge do
   # columns. `Macaw.Data.Table` delegates its row helpers here, and their docs are its;
   # these are the port of visualize's `Visualize.Data.Table`.
 
+  import Macaw.Data.Lists, only: [is_proper_list: 1]
+
   alias Macaw.Data.Schema
 
   @compile {:no_warn_undefined, [Table, Table.Reader, Nx]}
@@ -19,7 +21,7 @@ defmodule Macaw.Data.Table.Edge do
   def source(%{__struct__: Macaw.Data.Delivery, rows: rows}), do: source(rows)
   def source([]), do: :ok
 
-  def source(list) when is_list(list) do
+  def source(list) when is_proper_list(list) do
     if Enum.all?(list, &is_map/1) or Enum.all?(list, &is_tuple/1),
       do: :ok,
       else: {:error, [{[], {:type, :rows}}]}
@@ -257,7 +259,7 @@ defmodule Macaw.Data.Table.Edge do
 
   defp columns?(_list, _first), do: false
 
-  defp column_length(values) when is_list(values), do: length(values)
+  defp column_length(values) when is_proper_list(values), do: length(values)
 
   defp column_length(%{__struct__: Nx.Tensor} = tensor) do
     if Nx.rank(tensor) == 1, do: Nx.axis_size(tensor, 0)

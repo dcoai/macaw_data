@@ -14,6 +14,8 @@ defmodule Macaw.Data.Schema.Form do
 
   @behaviour Macaw.Layers.Version
 
+  import Macaw.Data.Lists, only: [is_proper_list: 1]
+
   alias Macaw.Data.{Quantity, Schema}
   alias Macaw.Layers.{Color, Version, Vocabulary}
   alias Macaw.Layers.Form, as: Adapter
@@ -39,7 +41,7 @@ defmodule Macaw.Data.Schema.Form do
 
   @doc false
   @spec from_map(term()) :: {:ok, Schema.t()} | {:error, [Schema.error(), ...]}
-  def from_map(pairs) when is_list(pairs) do
+  def from_map(pairs) when is_proper_list(pairs) do
     if Enum.all?(pairs, &match?([name, d] when is_binary(name) and is_map(d), &1)),
       do: pairs |> Map.new(fn [name, d] -> {name, read_description(d)} end) |> Schema.new(),
       else: {:error, [{[], {:type, :schema}}]}
@@ -128,7 +130,7 @@ defmodule Macaw.Data.Schema.Form do
     Map.new(description, fn {key, value} ->
       case Vocabulary.fetch(@attribute_table, key) do
         {:ok, :status} -> {:status, read_status(value)}
-        {:ok, :values} when is_list(value) -> {:values, Enum.map(value, &read_value/1)}
+        {:ok, :values} when is_proper_list(value) -> {:values, Enum.map(value, &read_value/1)}
         {:ok, word} when is_map_key(@word_tables, word) -> {word, read_word(word, value)}
         {:ok, key} -> {key, value}
         :error -> {key, value}
@@ -143,7 +145,7 @@ defmodule Macaw.Data.Schema.Form do
 
   defp read_word(_word, value), do: value
 
-  defp read_status(pairs) when is_list(pairs) do
+  defp read_status(pairs) when is_proper_list(pairs) do
     if Enum.all?(pairs, &match?([_state, _role], &1)),
       do: Map.new(pairs, fn [state, role] -> {state, role} end),
       else: pairs
@@ -181,6 +183,6 @@ defmodule Macaw.Data.Schema.Form do
 
   defp read_color(other), do: other
 
-  defp read_payload(list) when is_list(list), do: Enum.map(list, &read_color/1)
+  defp read_payload(list) when is_proper_list(list), do: Enum.map(list, &read_color/1)
   defp read_payload(payload), do: read_color(payload)
 end

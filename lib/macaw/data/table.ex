@@ -44,6 +44,8 @@ defmodule Macaw.Data.Table do
   and a struct source or a tensor raises `UndefinedFunctionError` where it is read.
   """
 
+  import Macaw.Data.Lists, only: [is_proper_list: 1]
+
   alias Macaw.Data.Table.Edge
   alias Macaw.Data.Table.Chunk
   alias Macaw.Data.Table.Column
@@ -124,7 +126,9 @@ defmodule Macaw.Data.Table do
   `{[name, i], {:type, type}}` for a value its type does not hold, `{[name, i], :not_data}`
   for a value that is not data (a function, a PID, a reference, a port, an improper list:
   it has no digest), `{[name], {:length, n}}` for a column whose length is not the first
-  column's `n`, `{[name], :duplicate}` for a name given twice. A number column holds
+  column's `n`, `{[name], :duplicate}` for a name given twice, `{[], {:type, :columns}}`
+  for an improper list of columns and `{[:opts], {:type, :keyword}}` for improper options.
+  A number column holds
   numbers; a time column `DateTime`s, `NaiveDateTime`s or `Date`s; a color column color
   terms (`Macaw.Data.Schema.color?/1`); a point column `{longitude, latitude}` pairs of
   numbers; the others any value. `nil` is missing in every type.
@@ -136,11 +140,13 @@ defmodule Macaw.Data.Table do
   """
   @spec new([{name(), type(), [term()]}], keyword()) ::
           {:ok, t()} | {:error, [{list(), term()}, ...]}
-  def new(columns, opts \\ []) when is_list(columns) and is_list(opts) do
+  def new(columns, opts \\ [])
+
+  def new(columns, opts) when is_proper_list(columns) and is_proper_list(opts) do
     # The first column's length; an element before it that is no column is its own fault.
     size =
       Enum.find_value(columns, 0, fn
-        {_name, _type, values} when is_list(values) -> length(values)
+        {_name, _type, values} when is_proper_list(values) -> length(values)
         _other -> nil
       end)
 
@@ -181,6 +187,12 @@ defmodule Macaw.Data.Table do
     end
   end
 
+  def new(columns, opts) when is_proper_list(columns) and is_list(opts),
+    do: {:error, [{[:opts], {:type, :keyword}}]}
+
+  def new(columns, opts) when is_list(columns) and is_list(opts),
+    do: {:error, [{[], {:type, :columns}}]}
+
   # One `{name, type, values}` column checked against those before it.
   defp column(columns, i, name, type, values, size, checked, faults) do
     cond do
@@ -190,7 +202,7 @@ defmodule Macaw.Data.Table do
       type not in @types ->
         {checked, [{[name], {:enum, @types}} | faults]}
 
-      not is_list(values) or length(values) != size ->
+      not Macaw.Data.Lists.proper?(values) or length(values) != size ->
         {checked, [{[name], {:length, size}} | faults]}
 
       true ->

@@ -17,6 +17,8 @@ defmodule Macaw.Data.Source.Order do
   (spec/04 §4.1) compare by the same keys (`key/2`), so a filter and a sort never disagree.
   """
 
+  import Macaw.Data.Lists, only: [is_proper_list: 1]
+
   alias Macaw.Data.{Schema, Table}
 
   @typedoc "A direction of one key."
@@ -43,7 +45,7 @@ defmodule Macaw.Data.Source.Order do
       [{[:order, 0], {:type, :order}}, {[:order, 2], {:duplicate, "p50"}}]
   """
   @spec shape(term()) :: [{list(), term()}]
-  def shape(order) when is_list(order) do
+  def shape(order) when is_proper_list(order) do
     {faults, _seen} =
       order
       |> Enum.with_index()

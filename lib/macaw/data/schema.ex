@@ -52,6 +52,8 @@ defmodule Macaw.Data.Schema do
 
   """
 
+  import Macaw.Data.Lists, only: [is_proper_list: 1]
+
   alias Macaw.Data.{Quantity, Table, Unit}
   alias Macaw.Data.Schema.Form
   alias Macaw.Layers.{Color, Document}
@@ -510,7 +512,8 @@ defmodule Macaw.Data.Schema do
     in_order(name, description) ++ in_values(name, description)
   end
 
-  defp in_order(name, %{order: order, status: status}) when is_list(order) and is_map(status) do
+  defp in_order(name, %{order: order, status: status})
+       when is_proper_list(order) and is_map(status) do
     order = Enum.map(order, &spell/1)
 
     for {state, _role} <- status,
@@ -520,12 +523,13 @@ defmodule Macaw.Data.Schema do
 
   defp in_order(_name, _description), do: []
 
-  defp in_values(name, %{values: [_ | _] = declared} = description) do
+  defp in_values(name, %{values: [_ | _] = declared} = description)
+       when is_proper_list(declared) do
     values = Enum.map(declared, &spell(bare(&1)))
 
     order =
       case Map.get(description, :order) do
-        [_ | _] = order ->
+        [_ | _] = order when is_proper_list(order) ->
           for {state, i} <- Enum.with_index(order),
               spell(state) not in values,
               do: {[name, :order, i], :not_in_values}
@@ -727,7 +731,7 @@ defmodule Macaw.Data.Schema do
 
   defp measure(_name, _description, _faults), do: []
 
-  defp order([_ | _] = states, path) do
+  defp order([_ | _] = states, path) when is_proper_list(states) do
     if Enum.all?(states, &state?/1),
       do: distinct(states, path),
       else: [{path, {:type, :order}}]
@@ -754,7 +758,7 @@ defmodule Macaw.Data.Schema do
 
   # A closed set of values is a list like an order, each distinct by value (visualize D-194); an entry
   # may be a map of its value, name and color (visualize D-224).
-  defp declared_values([_ | _] = values, path) do
+  defp declared_values([_ | _] = values, path) when is_proper_list(values) do
     if Enum.all?(values, &(state?(&1) or entry?(&1))) do
       entries =
         values

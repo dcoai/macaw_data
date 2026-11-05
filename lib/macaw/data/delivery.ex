@@ -64,6 +64,8 @@ defmodule Macaw.Data.Delivery do
 
   """
 
+  import Macaw.Data.Lists, only: [is_proper_list: 1]
+
   alias Macaw.Data.Source.Request
   alias Macaw.Data.{Table, Window}
 
@@ -160,12 +162,13 @@ defmodule Macaw.Data.Delivery do
     `{[:replace], {:type, :list}}` and `{[:replace, i], {:type, :replacement}}`.
 
   `format_error/1` gives a fault's words. The rows themselves are not read: a source's
-  rows are its own until a reader reads them.
+  rows are its own until a reader reads them. So a list of rows is not walked here, and an
+  improper one is `Macaw.Data.Table.rows/1`'s fault when it is read.
   """
   @spec new(Table.source() | Table.t(), keyword()) :: {:ok, t()} | {:error, [fault(), ...]}
   def new(rows, opts \\ [])
 
-  def new(rows, opts) when is_list(opts) do
+  def new(rows, opts) when is_proper_list(opts) do
     names = Keyword.get(opts, :names)
     types = Keyword.get(opts, :types, %{})
     {served, served_faults} = served(Keyword.get(opts, :served, []))
@@ -415,7 +418,7 @@ defmodule Macaw.Data.Delivery do
 
   defp names(nil), do: []
 
-  defp names(names) when is_list(names) do
+  defp names(names) when is_proper_list(names) do
     if Enum.all?(names, &(is_atom(&1) or is_binary(&1))),
       do: [],
       else: [{[:names], {:type, :names}}]
@@ -425,14 +428,14 @@ defmodule Macaw.Data.Delivery do
 
   defp types(%{} = types) when not is_struct(types), do: []
 
-  defp types(types) when is_list(types) do
+  defp types(types) when is_proper_list(types) do
     if Enum.all?(types, &match?({_, _}, &1)), do: [], else: [{[:types], {:type, :map}}]
   end
 
   defp types(_other), do: [{[:types], {:type, :map}}]
 
   # The served facts over their defaults, and every fault among them.
-  defp served(facts) when is_list(facts) or (is_map(facts) and not is_struct(facts)) do
+  defp served(facts) when is_proper_list(facts) or (is_map(facts) and not is_struct(facts)) do
     Enum.reduce(facts, {@served_defaults, []}, fn
       {key, value}, {acc, faults} when is_map_key(@served_defaults, key) ->
         {Map.put(acc, key, value), faults ++ check(key, value)}
@@ -481,7 +484,7 @@ defmodule Macaw.Data.Delivery do
 
   defp retracted([]), do: []
 
-  defp retracted(rows) when is_list(rows) do
+  defp retracted(rows) when is_proper_list(rows) do
     for {row, i} <- Enum.with_index(rows), not row?(row), do: {[:retracted, i], {:type, :row}}
   end
 
@@ -491,7 +494,7 @@ defmodule Macaw.Data.Delivery do
 
   defp replace([]), do: {[], []}
 
-  defp replace(list) when is_list(list) do
+  defp replace(list) when is_proper_list(list) do
     list
     |> Enum.with_index()
     |> Enum.map_reduce([], fn {given, i}, faults ->
@@ -508,8 +511,8 @@ defmodule Macaw.Data.Delivery do
     replacement = Map.merge(@replacement, given)
 
     if Map.keys(given) -- Map.keys(@replacement) == [] and
-         (is_nil(replacement.identities) or is_list(replacement.identities)) and
-         is_list(replacement.rows) and Enum.all?(replacement.rows, &row?/1),
+         (is_nil(replacement.identities) or Macaw.Data.Lists.proper?(replacement.identities)) and
+         Macaw.Data.Lists.proper?(replacement.rows) and Enum.all?(replacement.rows, &row?/1),
        do: {:ok, replacement},
        else: :error
   end

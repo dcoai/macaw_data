@@ -24,6 +24,8 @@ defmodule Macaw.Data.Operations do
       {:error, [{[0, "op"], {:unknown, :transform, "doubel"}}]}
   """
 
+  import Macaw.Data.Lists, only: [is_proper_list: 1]
+
   alias Macaw.Data.Operations.{Aggregates, Option, Registry, Transforms}
 
   # `table` is optional: a source is asked about its protocol only when it is loaded.
@@ -145,7 +147,8 @@ defmodule Macaw.Data.Operations do
   every fault of every node, ordered by path.
   """
   @spec validate(Registry.t(), [map()], map()) :: {:ok, [map()]} | {:error, [fault(), ...]}
-  def validate(%Registry{} = registry, nodes, context) when is_list(nodes) and is_map(context) do
+  def validate(%Registry{} = registry, nodes, context)
+      when is_proper_list(nodes) and is_map(context) do
     {checked, faults} =
       nodes
       |> Enum.with_index()
@@ -157,6 +160,9 @@ defmodule Macaw.Data.Operations do
       faults -> {:error, Enum.sort(faults)}
     end
   end
+
+  def validate(%Registry{}, nodes, context) when is_list(nodes) and is_map(context),
+    do: {:error, [{["nodes"], {:type, :nodes}}]}
 
   defp check_node(_registry, node, i, _context) when not is_map(node),
     do: {nil, [{[i], :not_a_node}]}
@@ -315,11 +321,14 @@ defmodule Macaw.Data.Operations do
   # A source of a shape `Table.from/2` reads (spec/01 §1.1): row maps, `{name, values}`
   # columns, a map of columns, a tensor or a `Table.Reader` source; told apart without
   # reading a value.
-  defp shaped?(rows) when is_list(rows) do
+  defp shaped?(rows) when is_proper_list(rows) do
     Enum.all?(rows, &(is_map(&1) and not is_struct(&1))) or
       Enum.all?(
         rows,
-        &match?({name, values} when is_list(values) and (is_atom(name) or is_binary(name)), &1)
+        &match?(
+          {name, values} when is_proper_list(values) and (is_atom(name) or is_binary(name)),
+          &1
+        )
       )
   end
 
@@ -329,7 +338,7 @@ defmodule Macaw.Data.Operations do
     do: Code.ensure_loaded?(Elixir.Table.Reader) and Elixir.Table.Reader.impl_for(struct) != nil
 
   defp shaped?(columns) when is_map(columns),
-    do: Enum.all?(columns, fn {_name, values} -> is_list(values) end)
+    do: Enum.all?(columns, fn {_name, values} -> Macaw.Data.Lists.proper?(values) end)
 
   defp shaped?(_other), do: false
 
@@ -479,6 +488,11 @@ defmodule Macaw.Data.Operations do
   defp why({:invalid_for, op}), do: "is not read by #{op}"
   defp why({:unknown, kind, name}), do: "#{kind} #{inspect(name)} is not available"
   defp why({:needs, need}), do: "needs a #{need}, which the caller does not give"
+  defp why({:type, :nodes}), do: "must be a list of nodes"
+
+  defp why({:type, :term}),
+    do: "is not data: a function, a PID, a reference, a port or an improper list"
+
   defp why({:type, type}), do: "is #{words(type)}"
   defp why(other), do: inspect(other)
 
@@ -505,7 +519,8 @@ defmodule Macaw.Data.Operations do
   defp words({:one_of, types}), do: types |> Enum.map(&words/1) |> or_list()
   defp words(:duration), do: "a duration [n, unit], unit one of " <> or_list(units())
   defp words(:aggregate), do: "the name of an aggregate"
-  defp words(:term), do: "any value"
+
+  defp words(:term), do: "data"
 
   defp units, do: Enum.map(Option.units(), fn {unit, _} -> Atom.to_string(unit) end)
 

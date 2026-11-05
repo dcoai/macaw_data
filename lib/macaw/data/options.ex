@@ -4,9 +4,10 @@ defmodule Macaw.Data.Options do
   # does not take is a fault, `{[key], :unknown_key}`, never a raise, as
   # `Keyword.validate!/2` would. The options come back with the defaults filled in.
 
+  import Macaw.Data.Lists, only: [is_proper_list: 1]
   @doc false
   @spec known(term(), keyword()) :: {:ok, keyword()} | {:error, [{[term()], term()}, ...]}
-  def known(opts, defaults) when is_list(opts) do
+  def known(opts, defaults) when is_proper_list(opts) do
     case for(item <- opts, fault = fault(item, defaults), do: fault) do
       [] -> {:ok, Keyword.merge(defaults, opts)}
       faults -> {:error, faults}
@@ -23,7 +24,7 @@ defmodule Macaw.Data.Options do
   @spec fields(list() | map()) :: {:ok, map()} | {:error, [{[], {:type, :keyword}}, ...]}
   def fields(fields) when is_map(fields) and not is_struct(fields), do: {:ok, fields}
 
-  def fields(fields) when is_list(fields) do
+  def fields(fields) when is_proper_list(fields) do
     if Enum.all?(fields, &match?({_key, _value}, &1)),
       do: {:ok, Map.new(fields)},
       else: {:error, [{[], {:type, :keyword}}]}

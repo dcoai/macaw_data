@@ -126,6 +126,7 @@ defmodule Macaw.Data.Fault do
 
   defp type_words(:column), do: "a column: a list of values, or a rank-1 tensor"
   defp type_words(:column_spec), do: "a column: {name, type, values}"
+  defp type_words(:columns), do: "a list of columns, each {name, type, values}"
   defp type_words(:table), do: "a Macaw.Data.Table"
   defp type_words(:time), do: "a time: a DateTime, a NaiveDateTime or a Date"
   defp type_words(:instant), do: "an instant: a time, or a number on the window field's scale"

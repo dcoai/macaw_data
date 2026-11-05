@@ -30,6 +30,8 @@ defmodule Macaw.Data.Operations.Option do
   atoms by their strings.
   """
 
+  import Macaw.Data.Lists, only: [is_proper_list: 1]
+
   alias Macaw.Data.Operations.Registry
 
   @enforce_keys [:type]
@@ -84,7 +86,12 @@ defmodule Macaw.Data.Operations.Option do
   @spec check(Registry.t() | term(), t() | type(), term()) :: {:ok, term()} | {:error, term()}
   def check(registry, %__MODULE__{type: type}, value), do: check(registry, type, value)
 
-  def check(_registry, :term, value), do: {:ok, value}
+  # A step's identity is the kernel's digest of its node (`step_digest/2`), so a value it
+  # takes is data: a function, a PID, a reference, a port or an improper list is refused
+  # here, where its fault has a place.
+  def check(_registry, :term = type, value) do
+    if Macaw.Data.Table.Digest.data?(value), do: {:ok, value}, else: refuse(type)
+  end
 
   def check(_registry, type, value) when type in [:field, :name] do
     if (is_atom(value) and value not in [nil, true, false]) or is_binary(value),
@@ -135,7 +142,7 @@ defmodule Macaw.Data.Operations.Option do
     end
   end
 
-  def check(registry, {:list, inner} = type, value) when is_list(value) do
+  def check(registry, {:list, inner} = type, value) when is_proper_list(value) do
     checked = Enum.map(value, &check(registry, inner, &1))
 
     if Enum.all?(checked, &match?({:ok, _}, &1)),

@@ -26,6 +26,8 @@ defmodule Macaw.Data.Source.Description do
   `new/1` builds one and reports every fault at once.
   """
 
+  import Macaw.Data.Lists, only: [is_proper_list: 1]
+
   alias Macaw.Data.{Parameter, Schema, Table}
   alias Macaw.Data.Table.Origin
 
@@ -124,7 +126,7 @@ defmodule Macaw.Data.Source.Description do
 
   defp field(:params, _), do: [{[:params], {:type, :map}}]
 
-  defp field(:supports, supports) when is_list(supports) do
+  defp field(:supports, supports) when is_proper_list(supports) do
     supports
     |> Enum.with_index()
     |> Enum.reduce({MapSet.new(), []}, fn {c, i}, {seen, faults} ->

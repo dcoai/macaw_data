@@ -24,6 +24,8 @@ defmodule Macaw.Data.Parameter do
   before any component exists, and macaw_compose's components use the same shape.
   """
 
+  import Macaw.Data.Lists, only: [is_proper_list: 1]
+
   alias Macaw.Data.Schema
 
   @types [:time, :number, :category, :text, :color, :point]
@@ -92,7 +94,7 @@ defmodule Macaw.Data.Parameter do
 
   defp key(:values, nil, _type), do: []
 
-  defp key(:values, [_ | _] = values, type) do
+  defp key(:values, [_ | _] = values, type) when is_proper_list(values) do
     for {v, i} <- Enum.with_index(values),
         type?(type),
         not conforms?(type, v),
@@ -111,7 +113,7 @@ defmodule Macaw.Data.Parameter do
 
   defp in_values(%{default: nil}), do: []
 
-  defp in_values(%{values: [_ | _] = values, default: default}) do
+  defp in_values(%{values: [_ | _] = values, default: default}) when is_proper_list(values) do
     if default in values, do: [], else: [{[:default], :not_in_values}]
   end
 
@@ -209,7 +211,7 @@ defmodule Macaw.Data.Parameter do
 
     cond do
       not conforms?(type, value) -> {:error, {:type, type}}
-      is_list(values) and value not in values -> {:error, {:enum, values}}
+      Macaw.Data.Lists.proper?(values) and value not in values -> {:error, {:enum, values}}
       true -> {:ok, value}
     end
   end
