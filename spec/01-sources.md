@@ -559,10 +559,10 @@ a cached version costs nothing, an unknown one calls describe once and is cached
 ```
 
 - **`describe/2`** takes the host's configuration for the source as its `context`, **never a viewer**: what a source is doesn't depend on who asks. So it is answered at boot and cached until the source's schema version changes (§1.12), and validation reads it without I/O ([macaw_compose 07](https://github.com/dcoai/macaw/blob/main/spec/07-documents.md#documents-validation-time)).
-- **The dispatch functions** (`Source.describe/2`, `fetch/3`, `subscribe/2`, `unsubscribe/2`) call a source's module. An answer of the wrong shape is a value too: `{:error, {:bad_describe, answer}}` or `{:error, {:bad_fetch, answer}}`.
+- **The dispatch functions** (`Source.describe/2`, `fetch/3`, `subscribe/2`, `unsubscribe/2`) call a source's module. An answer of the wrong shape is a value too: `{:error, {:bad_describe, answer}}` or `{:error, {:bad_fetch, answer}}`. So is a term that is no source, no struct or one whose module lacks the callback: `{:error, :not_a_source}` from `describe/2`, `fetch/3` and `subscribe/2`, naming nothing of the term, which may hold credentials (macaw_data#191). `unsubscribe/2` on one is `:ok`, as on a source that does not push.
 - **`fetch/3` checks the request against the description first** (§2.2): a request with an unknown, missing or illegal parameter is `{:error, {:params, faults}}`, and the source is never called. The source receives every parameter, defaults filled in. A range asked backward is refused the same way (macaw_data#122): a window or a region field's range whose `from` is after its `to` is `{:error, {:window, faults}}`, `Window.check/2`'s `{[:window], {:window, :inverted}}` and `{[:region, field], {:window, :inverted}}` (§2.3). It is the caller's mistake, not a request the source reads as its own, so no source is asked for an empty, backward range; every other fault `check/2` finds reaches the source, which answers it as a value (§9's `:errors`).
 - **`subscribe/2` on a source that does not push** is `{:error, :no_push}`, and `unsubscribe/2` on one is `:ok`.
-- **`describer/1`** turns a map of named sources, each with its context, into the describe function `Schema.Cache.resolve/4` takes; a name not in the map is `{:error, :no_source}`.
+- **`describer/1`** turns a map of named sources, each with its context, into the describe function `Schema.Cache.resolve/4` takes; a name not in the map is `{:error, :no_source}`, and an entry that is no `{source, context}` pair of a source is `{:error, :not_a_source}`.
 - **Errors are values.** A source never raises. (visualize.md C1; metresis.md C1.)
 - **The viewer is an argument, not a setting.** A source may refuse, filter or tease by it. Macaw never writes a viewer to a document, delivery or record. (dcotek_web.md C11; visualize.md C11.)
 - **Preferences are state, not part of the viewer.** A viewer's display preferences (`theme`, `zone`, `units`) are state sources ([macaw_compose 03](https://github.com/dcoai/macaw/blob/main/spec/03-state.md#state-sources)), persisted like any other state and passed to components in their context. The viewer carries identity and access only.
@@ -578,11 +578,11 @@ fetch/3 refuses bad parameters, and an inverted window or region range, without 
 ```
 
 ```test:contract-push-dispatch
-subscribe/2 reaches a pushing source and is no_push for one that does not; unsubscribe/2 is :ok for both
+subscribe/2 reaches a pushing source and is no_push for one that does not; unsubscribe/2 is :ok for both; over generated terms, describe/2, fetch/3, subscribe/2 and unsubscribe/2 never raise, answering not_a_source, or :ok from unsubscribe/2, for a term that is no source
 ```
 
 ```test:contract-describer
-describer/1 answers a named source's schema, no_source for an unknown name, and serves Schema.Cache.resolve/4
+describer/1 answers a named source's schema, no_source for an unknown name, not_a_source for an entry that is no source, naming nothing of it, and serves Schema.Cache.resolve/4
 ```
 
 ### 2.1 The description {#sources-description}

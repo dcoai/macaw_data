@@ -47,16 +47,29 @@ defmodule Macaw.Data.Source do
 
   @doc """
   The source's description, `{:ok, description}` or `{:error, reason}`. An answer that is
-  neither is `{:error, {:bad_describe, answer}}`: a source's fault the caller can show.
+  neither is `{:error, {:bad_describe, answer}}`: a source's fault the caller can show. A
+  term that is no source, no struct or one whose module has no `describe/2`, is
+  `{:error, :not_a_source}`, which holds nothing of the term: it may hold credentials.
   """
   @spec describe(t(), term()) :: {:ok, Description.t()} | {:error, term()}
-  def describe(%module{} = source, context) do
-    case module.describe(source, context) do
-      {:ok, %Description{}} = ok -> ok
-      {:error, _reason} = error -> error
-      other -> {:error, {:bad_describe, other}}
+  def describe(source, context) do
+    case implementer(source, :describe, 2) do
+      nil -> {:error, :not_a_source}
+      module -> described(module.describe(source, context))
     end
   end
+
+  defp described({:ok, %Description{}} = ok), do: ok
+  defp described({:error, _reason} = error), do: error
+  defp described(other), do: {:error, {:bad_describe, other}}
+
+  # The module of a struct that implements the callback. A struct literal does not load its
+  # module, so it is loaded before it is asked.
+  defp implementer(%module{}, name, arity) when is_atom(module) do
+    if Code.ensure_loaded?(module) and function_exported?(module, name, arity), do: module
+  end
+
+  defp implementer(_source, _name, _arity), do: nil
 
   @doc """
   One answer for a request, checked first against the description:
@@ -71,7 +84,14 @@ defmodule Macaw.Data.Source do
   {:bad_fetch, answer}}`.
   """
   @spec fetch(t(), Description.t(), Request.t()) :: {:ok, Delivery.t()} | {:error, term()}
-  def fetch(%module{} = source, %Description{} = description, %Request{} = request) do
+  def fetch(source, %Description{} = description, %Request{} = request) do
+    case implementer(source, :fetch, 2) do
+      nil -> {:error, :not_a_source}
+      module -> checked_fetch(module, source, description, request)
+    end
+  end
+
+  defp checked_fetch(module, source, description, request) do
     with {:ok, filled} <- params(description, request),
          :ok <- order(description, request),
          :ok <- ranges(description, request) do
@@ -114,28 +134,33 @@ defmodule Macaw.Data.Source do
   end
 
   @doc """
-  The source's pushes sent to `pid` (spec/01 §4): `{:ok, ref}`, or `{:error, :no_push}` for
-  a source whose module does not implement `subscribe/2`.
+  The source's pushes sent to `pid` (spec/01 §4): `{:ok, ref}`, `{:error, :no_push}` for a
+  source whose module does not implement `subscribe/2`, or `{:error, :not_a_source}` for a
+  term that is no source.
   """
   @spec subscribe(t(), pid()) :: {:ok, reference()} | {:error, term()}
-  def subscribe(%module{} = source, pid) when is_pid(pid) do
-    if push?(module), do: module.subscribe(source, pid), else: {:error, :no_push}
+  def subscribe(source, pid) when is_pid(pid) do
+    case {implementer(source, :subscribe, 2), implementer(source, :describe, 2)} do
+      {nil, nil} -> {:error, :not_a_source}
+      {nil, _module} -> {:error, :no_push}
+      {module, _} -> module.subscribe(source, pid)
+    end
   end
 
-  @doc "A subscription stopped; `:ok` for a source that does not push."
+  @doc "A subscription stopped; `:ok` for a source that does not push, and for a term that is no source."
   @spec unsubscribe(t(), reference()) :: :ok
-  def unsubscribe(%module{} = source, ref) when is_reference(ref) do
-    if push?(module), do: module.unsubscribe(source, ref), else: :ok
+  def unsubscribe(source, ref) when is_reference(ref) do
+    case implementer(source, :unsubscribe, 2) do
+      nil -> :ok
+      module -> module.unsubscribe(source, ref)
+    end
   end
-
-  # A struct literal does not load its module, so it is loaded before it is asked.
-  defp push?(module),
-    do: Code.ensure_loaded?(module) and function_exported?(module, :subscribe, 2)
 
   @doc """
   A map of sources by name, with the host's context for each, as the describe function
-  `Macaw.Data.Schema.Cache.resolve/4` takes: a name's present schema, or
-  `{:error, :no_source}` for a name not in the map.
+  `Macaw.Data.Schema.Cache.resolve/4` takes: a name's present schema,
+  `{:error, :no_source}` for a name not in the map, or `{:error, :not_a_source}` for an
+  entry that is no `{source, context}` pair of a source.
   """
   @spec describer(%{term() => {t(), term()}}) :: (term() -> {:ok, Schema.t()} | {:error, term()})
   def describer(sources) when is_map(sources) do
@@ -148,5 +173,6 @@ defmodule Macaw.Data.Source do
   end
 
   defp found(:error), do: {:error, :no_source}
-  defp found(ok), do: ok
+  defp found({:ok, {_source, _context}} = entry), do: entry
+  defp found({:ok, _entry}), do: {:error, :not_a_source}
 end

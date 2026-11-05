@@ -1,6 +1,7 @@
 defmodule Macaw.Data.SourceTest do
   @moduledoc "`Macaw.Data.Source` (spec/01 §2): the behavior, its description and its request."
   use ExUnit.Case, async: true
+  use ExUnitProperties
 
   alias Macaw.Data.{Delivery, Schema, Source}
   alias Macaw.Data.Source.{Description, Request}
@@ -189,6 +190,49 @@ defmodule Macaw.Data.SourceTest do
 
     assert Source.subscribe(%Reference{}, self()) == {:error, :no_push}
     assert Source.unsubscribe(%Reference{}, make_ref()) == :ok
+  end
+
+  defmodule NoCallbacks do
+    defstruct secret: "credential"
+  end
+
+  describe "a term that is no source (#191)" do
+    @tag verifies: "contract-push-dispatch"
+    test "the dispatch functions answer not_a_source, and a struct with no callback is one" do
+      {:ok, description} = Source.describe(%Reference{}, %{})
+      request = Request.new!(now: @now)
+
+      for term <- [:nope, %NoCallbacks{}, %{__struct__: :no_such_module}, %{__struct__: "x"}, 1] do
+        assert Source.describe(term, nil) == {:error, :not_a_source}
+        assert Source.fetch(term, description, request) == {:error, :not_a_source}
+        assert Source.subscribe(term, self()) == {:error, :not_a_source}
+        assert Source.unsubscribe(term, make_ref()) == :ok
+      end
+    end
+
+    @tag verifies: "contract-push-dispatch"
+    property "no generated term raises from a dispatch function" do
+      {:ok, description} = Source.describe(%Reference{}, %{})
+      request = Request.new!(now: @now)
+
+      check all(term <- term()) do
+        assert Source.describe(term, nil) == {:error, :not_a_source}
+        assert Source.fetch(term, description, request) == {:error, :not_a_source}
+        assert Source.subscribe(term, self()) == {:error, :not_a_source}
+        assert Source.unsubscribe(term, make_ref()) == :ok
+      end
+    end
+
+    @tag verifies: "contract-describer"
+    test "describer/1 answers it for an entry that is no source, naming nothing of it" do
+      describe = fn entry -> Source.describer(%{"x" => entry}).("x") end
+
+      assert describe.({:ok, :nope}) == {:error, :not_a_source}
+      assert describe.(:nope) == {:error, :not_a_source}
+      assert describe.({1, 2, 3}) == {:error, :not_a_source}
+      assert describe.({%NoCallbacks{secret: "credential"}, %{}}) == {:error, :not_a_source}
+      assert Source.describer(%{}).("x") == {:error, :no_source}
+    end
   end
 
   @tag verifies: "contract-describer"
