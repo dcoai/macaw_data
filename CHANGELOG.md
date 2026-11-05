@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **spec/04 §4.4 states what `lttb`'s tolerance holds for** (#193). A random property failed about once in 2,000 sparse-spike series at `n` of 20. The step kept more peaks than `Macaw.Data.Reduce.lttb/3`, and the error metric charges a kept peak. No picked row changes: the bound adds `1/n` for each peak kept beyond the exact algorithm's.
 - **`Macaw.Data.Table.from!/2`, `Macaw.Data.Schema.from_map!/1`, `Macaw.Data.Schema.from_json!/2` and `Macaw.Data.Derived.from_map!/2`,** the twins spec/00 §5 says every reader has (#185). Each raises `Macaw.Data.Error` with exactly its reader's faults. A test reads the spec's list and asserts every twin is exported.
 - **A step's arithmetic past a float's range is `:overflow`, never `ArithmeticError`** (#181). `mean`, `median`, `quantile`, `variance`, `deviation`, `slope` and `delta` answer it as `sum` did, `bin`'s edges at `field`, `window`'s bounds at `from` and `to`, and `spectrum` at `field`, `every` and `time`. What a float holds is the BEAM's answer, to the bit, except in one case below. A fault of `:overflow` reads "is beyond a float's range" where it read "sums beyond a float's range".
 - **`lttb` and `m4` answer `{[i, "fields"], :overflow}` where their arithmetic could pass a float's range** (#181). An `x` at or above half the largest float, a number at 1.0e301 under a `time` scale or past a float's range under `log`, and for `lttb` a line whose triangles or bucket means could pass it. A line near those bounds that happened to work is now refused. Inside them, the rows kept are the same.

@@ -211,6 +211,8 @@ defmodule Macaw.Data.Operations.LadderTest do
   end
 
   describe "lttb as MinMaxLTTB (spec/04 §4.4)" do
+    @peak 40.0
+
     # The mean absolute error of a reduced line read at every input x, over the y extent.
     defp error(rows, kept) do
       {lo, hi} = rows |> Enum.map(&elem(&1, 1)) |> Enum.min_max()
@@ -238,31 +240,48 @@ defmodule Macaw.Data.Operations.LadderTest do
             seed <- integer(1..10_000),
             count <- integer(600..3_000)
           ) do
-        :rand.seed(:exsss, {seed, seed, seed})
-
-        case kind do
-          :sine ->
-            for i <- 0..(count - 1), do: {i, :math.sin(i / 90) * 10 + :rand.uniform() * 3}
-
-          :walk ->
-            Enum.scan(0..(count - 1), {0, 0.0}, fn i, {_, y} -> {i, y + :rand.normal()} end)
-
-          :spikes ->
-            for i <- 0..(count - 1),
-                do: {i, if(:rand.uniform() < 0.01, do: 40.0, else: :rand.uniform())}
-        end
+        series(kind, seed, count)
       end
     end
 
+    defp series(kind, seed, count) do
+      :rand.seed(:exsss, {seed, seed, seed})
+
+      case kind do
+        :sine ->
+          for i <- 0..(count - 1), do: {i, :math.sin(i / 90) * 10 + :rand.uniform() * 3}
+
+        :walk ->
+          Enum.scan(0..(count - 1), {0, 0.0}, fn i, {_, y} -> {i, y + :rand.normal()} end)
+
+        :spikes ->
+          for i <- 0..(count - 1),
+              do: {i, if(:rand.uniform() < 0.01, do: @peak, else: :rand.uniform())}
+      end
+    end
+
+    defp peaks(rows), do: Enum.count(rows, fn {_, y} -> y == @peak end)
+
+    # spec/04 §4.4's bound. A peak the step keeps beyond the exact algorithm's is charged 1/n
+    # of the extent, about what its triangle costs under this metric.
+    defp bound(rows, picked, exact, n) do
+      2 * error(rows, exact) + 0.005 + max(peaks(picked) - peaks(exact), 0) / n
+    end
+
+    defp lttb_picked(rows, n) do
+      kept = run(table(rows), %{op: "lttb", fields: ["t", "v"], n: n})
+      Enum.map(Table.column(kept, "i"), &Enum.at(rows, &1))
+    end
+
     @tag verifies: "operations-lttb-minmax"
-    property "within twice the exact algorithm's error plus 0.005, at most n rows, ends kept" do
+    property "within the exact algorithm's error by the bound, at most n rows, ends kept" do
       check all(rows <- series_gen(), n <- member_of([20, 60, 150]), max_runs: 25) do
         input = table(rows)
         kept = run(input, %{op: "lttb", fields: ["t", "v"], n: n})
         picked = Enum.map(Table.column(kept, "i"), &Enum.at(rows, &1))
         exact = Reduce.lttb(rows, n)
 
-        assert error(rows, picked) <= 2 * error(rows, exact) + 0.005
+        assert error(rows, picked) <= bound(rows, picked, exact, n)
         assert Table.size(kept) <= n
         assert hd(picked) == hd(rows) and List.last(picked) == List.last(rows)
 
@@ -272,6 +291,23 @@ defmodule Macaw.Data.Operations.LadderTest do
                    kept
                  )
         end
+      end
+    end
+
+    # macaw_data#193: seed 513870's series, and the worst of 2,000 measured.
+    @tag verifies: "operations-lttb-minmax"
+    test "a peak the step keeps beyond the exact algorithm's is what passes twice its error" do
+      for {seed, count} <- [{4007, 762}, {6901, 730}] do
+        rows = series(:spikes, seed, count)
+        picked = lttb_picked(rows, 20)
+        exact = Reduce.lttb(rows, 20)
+
+        assert peaks(picked) > peaks(exact)
+        assert error(rows, picked) > 2 * error(rows, exact) + 0.005
+        assert error(rows, picked) <= bound(rows, picked, exact, 20)
+
+        # The metric charges a peak kept: a line keeping none scores better than either.
+        assert error(rows, [hd(rows), List.last(rows)]) < error(rows, exact)
       end
     end
 
