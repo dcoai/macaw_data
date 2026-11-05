@@ -1093,11 +1093,11 @@ served holds complete_until, a time or a number, nil by default; any other value
 
 ### 6.1 Budgets: the ceiling and pooling {#sources-budgets}
 
-- **The host ceiling** clamps every slot's budget ([macaw_compose 05](https://github.com/dcoai/macaw/blob/main/spec/05-components.md#components-budget)). A host sets it once; a page may lower it, never raise it. `Finish.ceiling/2` is the rule: `{:ok, {budget, clamped?}}`, a `nil` budget reading at the ceiling; without `host:` it is `{:error, [{[:host], :required}]}` ([00 §5](00-overview.md#data-errors)), and `ceiling!/2` raises.
+- **The host ceiling** clamps every slot's budget ([macaw_compose 05](https://github.com/dcoai/macaw/blob/main/spec/05-components.md#components-budget)). A host sets it once; a page may lower it, never raise it. `Finish.ceiling/2` is the rule: `{:ok, {budget, clamped?}}`, a `nil` budget reading at the ceiling; without `host:` it is `{:error, [{[:host], :required}]}`, and a `host:` or `page:` that is no positive integer is `{[key], {:type, :pos_integer}}`, every fault at once ([00 §5](00-overview.md#data-errors)): a limit that is wrong refuses, never fails open. `ceiling!/2` raises them.
 - **Pooling:** several readers of one source and request cost one fetch, at the largest budget among them (`Finish.pooled/1`, `nil` when any reader wants every row), and each reader is reduced to its own budget (`Finish.reduce/4`, `reduced_by: :runtime`), an ordered delivery to its own head (§2.4). A pooled fetch is one answer, so each reader keeps that answer's `stale` (§3). Readers pooled share one request, and so one order. (visualize.md C1.)
 
 ```test:finish-ceiling-pool
-the ceiling clamps a budget, reads a nil one at the ceiling and takes a page's lower one, never a higher; a pooled fetch asks the largest, nil when any reader wants every row; each reader is reduced to its own
+the ceiling clamps a budget, reads a nil one at the ceiling and takes a page's lower one, never a higher; a host or page limit that is no positive integer is its fault, every fault at once, and no budget is answered; a pooled fetch asks the largest, nil when any reader wants every row; each reader is reduced to its own
 ```
 
 ### 6.2 On pages {#sources-running-pages}

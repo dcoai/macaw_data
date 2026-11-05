@@ -482,8 +482,9 @@ defmodule Macaw.Data.Source.Finish do
   A budget clamped to the host's ceiling (spec/01 §6, macaw_compose 05 §1.2): `{:ok,
   {budget, clamped?}}`. A `nil` budget reads at the ceiling; a page's ceiling, given as
   `page:`, may lower the host's, never raise it. `host:` is required: without it,
-  `{:error, [{[:host], :required}]}`; an option it does not take is `{[key],
-  :unknown_key}` (spec/00 §5). `ceiling!/2` answers the pair or raises.
+  `{:error, [{[:host], :required}]}`. A `host:` or `page:` that is no positive integer is
+  `{[key], {:type, :pos_integer}}`, every fault at once, and an option it does not take is
+  `{[key], :unknown_key}` (spec/00 §5). `ceiling!/2` answers the pair or raises.
 
       iex> Macaw.Data.Source.Finish.ceiling(50_000, host: 10_000)
       {:ok, {10_000, true}}
@@ -491,26 +492,34 @@ defmodule Macaw.Data.Source.Finish do
       {2_000, false}
       iex> Macaw.Data.Source.Finish.ceiling(5, page: 2_000)
       {:error, [{[:host], :required}]}
+      iex> Macaw.Data.Source.Finish.ceiling(50_000, host: :nope, page: 0)
+      {:error, [{[:host], {:type, :pos_integer}}, {[:page], {:type, :pos_integer}}]}
   """
   @spec ceiling(pos_integer() | nil, keyword()) ::
           {:ok, {pos_integer(), boolean()}} | {:error, [{list(), term()}, ...]}
   def ceiling(budget, opts) do
-    with {:ok, opts} <- Macaw.Data.Options.known(opts, host: nil, page: nil) do
-      case opts[:host] do
-        nil ->
-          {:error, [{[:host], :required}]}
+    with {:ok, opts} <- Macaw.Data.Options.known(opts, host: nil, page: nil),
+         [] <- limit_fault(:host, opts[:host]) ++ limit_fault(:page, opts[:page]) do
+      limit = min(opts[:host], opts[:page] || opts[:host])
 
-        host ->
-          limit = min(host, opts[:page] || host)
-
-          case budget do
-            nil -> {:ok, {limit, false}}
-            n when n > limit -> {:ok, {limit, true}}
-            n -> {:ok, {n, false}}
-          end
+      case budget do
+        nil -> {:ok, {limit, false}}
+        n when n > limit -> {:ok, {limit, true}}
+        n -> {:ok, {n, false}}
       end
+    else
+      {:error, _faults} = error -> error
+      faults -> {:error, faults}
     end
   end
+
+  # A term that isn't a number orders above every number, so an unchecked limit applies
+  # no limit at all (macaw_data#195). A safety limit that is wrong refuses, it doesn't
+  # fail open.
+  defp limit_fault(:host, nil), do: [{[:host], :required}]
+  defp limit_fault(:page, nil), do: []
+  defp limit_fault(_key, limit) when is_integer(limit) and limit > 0, do: []
+  defp limit_fault(key, _limit), do: [{[key], {:type, :pos_integer}}]
 
   @doc "As `ceiling/2`, the pair alone, raising `Macaw.Data.Error` naming the faults."
   @spec ceiling!(pos_integer() | nil, keyword()) :: {pos_integer(), boolean()}

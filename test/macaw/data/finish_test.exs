@@ -351,6 +351,47 @@ defmodule Macaw.Data.FinishTest do
     assert Table.size(Finish.reduce!(pooled, @numbers, 15) |> Delivery.table!()) == 15
   end
 
+  @tag verifies: "finish-ceiling-pool"
+  test "a limit that is no positive integer refuses, it never fails open" do
+    fault = {:type, :pos_integer}
+
+    for limit <- [:nope, "10", 10.5, 0, -1, false, true, %{}, [], {10}] do
+      assert Finish.ceiling(50_000, host: limit) == {:error, [{[:host], fault}]}
+      assert Finish.ceiling(nil, host: limit) == {:error, [{[:host], fault}]}
+      assert Finish.ceiling(5, host: 10, page: limit) == {:error, [{[:page], fault}]}
+      assert_raise Macaw.Data.Error, fn -> Finish.ceiling!(50_000, host: limit) end
+    end
+
+    # Every fault at once.
+    assert Finish.ceiling(5, host: :nope, page: 0) ==
+             {:error, [{[:host], fault}, {[:page], fault}]}
+
+    assert Finish.ceiling(5, page: 0) == {:error, [{[:host], :required}, {[:page], fault}]}
+
+    # A nil page is no page limit, and a nil host is still required.
+    assert Finish.ceiling(5, host: 10, page: nil) == {:ok, {5, false}}
+    assert Finish.ceiling(5, host: nil) == {:error, [{[:host], :required}]}
+  end
+
+  @tag verifies: "finish-ceiling-pool"
+  property "a budget is answered only under limits that are positive integers" do
+    limit = one_of([integer(), float(), atom(:alphanumeric), string(:printable), constant(nil)])
+
+    check all(host <- limit, page <- limit, budget <- one_of([constant(nil), integer(1..100)])) do
+      good? = &(is_integer(&1) and &1 > 0)
+
+      case Finish.ceiling(budget, host: host, page: page) do
+        {:ok, {answer, _clamped?}} ->
+          assert good?.(host) and (is_nil(page) or good?.(page))
+          assert answer <= min(host, page || host)
+
+        {:error, faults} ->
+          refute good?.(host) and (is_nil(page) or good?.(page))
+          assert faults != []
+      end
+    end
+  end
+
   @hosts Schema.new!(%{
            "t" => %{type: :number, window: true},
            "host" => %{type: :category, identity: true},
