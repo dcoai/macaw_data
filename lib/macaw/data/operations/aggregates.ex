@@ -110,6 +110,13 @@ defmodule Macaw.Data.Operations.Aggregates do
       )
 
   @doc false
+  # A statistic's value from `Macaw.Data.Checked`: the number, or the fault no float holds
+  # (spec/04 §5, macaw_data#181).
+  @spec checked(Macaw.Data.Checked.t()) :: number() | {:error, :overflow}
+  def checked(:overflow), do: {:error, :overflow}
+  def checked(value), do: value
+
+  @doc false
   # The sorted readings median and quantile interpolate between, as a tuple.
   @spec sorted(String.t(), [term()]) :: tuple()
   def sorted(name, values), do: name |> numbers!(values) |> Enum.sort() |> List.to_tuple()
@@ -367,7 +374,7 @@ defmodule Macaw.Data.Operations.Aggregates do
 
     def finish({sum, n}, _options) do
       case Exact.value(sum) do
-        {:ok, value} -> value / n
+        {:ok, value} -> Aggregates.checked(Macaw.Data.Checked.divide(value, n))
         {:error, :overflow} = beyond -> beyond
       end
     end
@@ -379,6 +386,7 @@ defmodule Macaw.Data.Operations.Aggregates do
   defmodule Median do
     @moduledoc "`median`: the middle reading, or the mean of the two middles (spec/04 §5)."
     @behaviour Macaw.Data.Aggregate
+    alias Macaw.Data.Checked
     alias Macaw.Data.Operations.Aggregates
 
     @impl true
@@ -401,9 +409,14 @@ defmodule Macaw.Data.Operations.Aggregates do
       n = tuple_size(sorted)
       mid = div(n, 2)
 
-      if rem(n, 2) == 0,
-        do: (elem(sorted, mid - 1) + elem(sorted, mid)) / 2,
-        else: elem(sorted, mid)
+      if rem(n, 2) == 0 do
+        elem(sorted, mid - 1)
+        |> Checked.add(elem(sorted, mid))
+        |> Checked.divide(2)
+        |> Aggregates.checked()
+      else
+        elem(sorted, mid)
+      end
     end
   end
 
@@ -413,6 +426,7 @@ defmodule Macaw.Data.Operations.Aggregates do
     `i = (n − 1) · p`, the last index clamped (spec/04 §5).
     """
     @behaviour Macaw.Data.Aggregate
+    alias Macaw.Data.Checked
     alias Macaw.Data.Operations.Aggregates
     alias Macaw.Data.Operations.Option
 
@@ -441,13 +455,19 @@ defmodule Macaw.Data.Operations.Aggregates do
       i0 = trunc(i)
       v0 = elem(sorted, i0)
       v1 = elem(sorted, min(i0 + 1, n - 1))
-      v0 + (v1 - v0) * (i - i0)
+
+      v1
+      |> Checked.subtract(v0)
+      |> Checked.multiply(i - i0)
+      |> Checked.add(v0)
+      |> Aggregates.checked()
     end
   end
 
   defmodule Variance do
     @moduledoc "`variance`: the sample variance, `Σ(v − mean)² / (n − 1)` (spec/04 §5)."
     @behaviour Macaw.Data.Aggregate
+    alias Macaw.Data.Checked
     alias Macaw.Data.Operations.Aggregates
 
     @impl true
@@ -469,17 +489,37 @@ defmodule Macaw.Data.Operations.Aggregates do
     def init(_options), do: {0, 0.0, 0.0}
 
     @impl true
+    def step(:overflow, value, _options) do
+      Aggregates.number!(name(), value)
+      :overflow
+    end
+
     def step({n, mean, m2}, value, _options) do
       value = Aggregates.number!(name(), value)
+
+      # Below these no term can pass a float's range: the update as it is, at its own cost.
+      if abs(value) < 1.0e150 and abs(mean) < 1.0e150 and m2 < 1.0e307 do
+        n = n + 1
+        delta = value - mean
+        mean = mean + delta / n
+        {n, mean, m2 + delta * (value - mean)}
+      else
+        checked_step(n, mean, m2, value)
+      end
+    end
+
+    defp checked_step(n, mean, m2, value) do
       n = n + 1
-      delta = value - mean
-      mean = mean + delta / n
-      {n, mean, m2 + delta * (value - mean)}
+      delta = Checked.subtract(value, mean)
+      mean = Checked.add(mean, Checked.divide(delta, n))
+      m2 = Checked.add(m2, Checked.multiply(delta, Checked.subtract(value, mean)))
+      if mean == :overflow or m2 == :overflow, do: :overflow, else: {n, mean, m2}
     end
 
     @impl true
+    def finish(:overflow, _options), do: {:error, :overflow}
     def finish({n, _mean, _m2}, _options) when n < 2, do: nil
-    def finish({n, _mean, m2}, _options), do: m2 / (n - 1)
+    def finish({n, _mean, m2}, _options), do: Aggregates.checked(Checked.divide(m2, n - 1))
   end
 
   defmodule Deviation do
@@ -514,6 +554,7 @@ defmodule Macaw.Data.Operations.Aggregates do
     def finish(state, options) do
       case Variance.finish(state, options) do
         nil -> nil
+        {:error, :overflow} = beyond -> beyond
         variance -> :math.sqrt(variance)
       end
     end
@@ -526,6 +567,7 @@ defmodule Macaw.Data.Operations.Aggregates do
     itself. `nil` for fewer than two points, or when every `x` is equal.
     """
     @behaviour Macaw.Data.Aggregate
+    alias Macaw.Data.Checked
     alias Macaw.Data.Operations.Aggregates
 
     @impl true
@@ -548,19 +590,47 @@ defmodule Macaw.Data.Operations.Aggregates do
     def init(_options), do: {0, 0, 0.0, 0.0, 0.0, 0.0}
 
     @impl true
+    def step(:overflow, value, _options) do
+      point(value, 0)
+      :overflow
+    end
+
     def step({place, n, mx, my, c, m2x}, value, _options) do
       {x, y} = point(value, place)
+
+      # Below these no term can pass a float's range: the update as it is, at its own cost.
+      if abs(x) < 1.0e150 and abs(y) < 1.0e150 and abs(mx) < 1.0e150 and abs(my) < 1.0e150 and
+           abs(c) < 1.0e307 and m2x < 1.0e307 do
+        n = n + 1
+        dx = x - mx
+        mx = mx + dx / n
+        my = my + (y - my) / n
+        {place + 1, n, mx, my, c + dx * (y - my), m2x + dx * (x - mx)}
+      else
+        checked_step(place, n, {x, y}, {mx, my, c, m2x})
+      end
+    end
+
+    defp checked_step(place, n, {x, y}, {mx, my, c, m2x}) do
       n = n + 1
-      dx = x - mx
-      mx = mx + dx / n
-      my = my + (y - my) / n
-      {place + 1, n, mx, my, c + dx * (y - my), m2x + dx * (x - mx)}
+      dx = Checked.subtract(x, mx)
+      mx = Checked.add(mx, Checked.divide(dx, n))
+      my = Checked.add(my, Checked.divide(Checked.subtract(y, my), n))
+      c = Checked.add(c, Checked.multiply(dx, Checked.subtract(y, my)))
+      m2x = Checked.add(m2x, Checked.multiply(dx, Checked.subtract(x, mx)))
+
+      if :overflow in [mx, my, c, m2x],
+        do: :overflow,
+        else: {place + 1, n, mx, my, c, m2x}
     end
 
     @impl true
+    def finish(:overflow, _options), do: {:error, :overflow}
     def finish({_place, n, _mx, _my, _c, _m2x}, _options) when n < 2, do: nil
     def finish({_place, _n, _mx, _my, _c, m2x}, _options) when m2x == 0, do: nil
-    def finish({_place, _n, _mx, _my, c, m2x}, _options), do: c / m2x
+
+    def finish({_place, _n, _mx, _my, c, m2x}, _options),
+      do: Aggregates.checked(Checked.divide(c, m2x))
 
     defp point(v, place) when is_number(v), do: {place, v}
     defp point([x, y], _place) when is_number(x) and is_number(y), do: {x, y}
@@ -593,6 +663,8 @@ defmodule Macaw.Data.Operations.Aggregates do
     def step({first, _last}, value, _options), do: {first, Aggregates.number!(name(), value)}
     @impl true
     def finish(nil, _options), do: nil
-    def finish({first, last}, _options), do: last - first
+
+    def finish({first, last}, _options),
+      do: Aggregates.checked(Macaw.Data.Checked.subtract(last, first))
   end
 end

@@ -8,7 +8,7 @@ defmodule Macaw.Data.Operations.Transforms.Bin do
   """
   @behaviour Macaw.Data.Transform
 
-  alias Macaw.Data.{Operations, Table}
+  alias Macaw.Data.{Checked, Operations, Table}
   alias Macaw.Data.Operations.{Option, Step, Transforms}
   alias Macaw.Data.Operations.Transforms.Aggregate
 
@@ -84,7 +84,10 @@ defmodule Macaw.Data.Operations.Transforms.Bin do
         end)
       end)
 
-    %{name: name, field: field, edges: edges(extent, thresholds)}
+    case edges(extent, thresholds) do
+      :overflow -> {:error, {"field", :overflow}}
+      edges -> %{name: name, field: field, edges: edges}
+    end
   end
 
   @impl true
@@ -214,20 +217,30 @@ defmodule Macaw.Data.Operations.Transforms.Bin do
   end
 
   # The bins over the extent `{d0, d1}`: `n` equal-width ones, or at the inner thresholds
-  # given, as a tuple of `{x0, x1}`; none without readings.
+  # given, as a tuple of `{x0, x1}`; none without readings. `:overflow` when an edge is past
+  # a float's range, which the extent's width alone may be (spec/04 §5, macaw_data#181).
   defp edges(nil, _thresholds), do: {}
 
   defp edges({d0, d1}, thresholds) do
     inner =
       case thresholds do
-        n when is_integer(n) -> for i <- 1..(n - 1)//1, do: d0 + i * (d1 - d0) / n
+        n when is_integer(n) -> for i <- 1..(n - 1)//1, do: edge(d0, d1, i, n)
         list -> list
       end
 
-    ([d0] ++ inner ++ [d1])
-    |> Enum.chunk_every(2, 1, :discard)
-    |> Enum.map(fn [x0, x1] -> {x0, x1} end)
-    |> List.to_tuple()
+    if :overflow in inner do
+      :overflow
+    else
+      ([d0] ++ inner ++ [d1])
+      |> Enum.chunk_every(2, 1, :discard)
+      |> Enum.map(fn [x0, x1] -> {x0, x1} end)
+      |> List.to_tuple()
+    end
+  end
+
+  # `d0 + i * (d1 - d0) / n`.
+  defp edge(d0, d1, i, n) do
+    d1 |> Checked.subtract(d0) |> Checked.multiply(i) |> Checked.divide(n) |> Checked.add(d0)
   end
 
   # The first bin `[x0, x1)` holding the value, or the last when it is the last bin's x1.
@@ -451,7 +464,7 @@ defmodule Macaw.Data.Operations.Transforms.Spectrum do
   """
   @behaviour Macaw.Data.Transform
 
-  alias Macaw.Data.{FFT, Table}
+  alias Macaw.Data.{Checked, FFT, Table}
   alias Macaw.Data.Operations.{Option, Step, Transforms}
 
   @impl true
@@ -532,13 +545,30 @@ defmodule Macaw.Data.Operations.Transforms.Spectrum do
         fn {_key, value} -> value == nil end
       )
 
-    lines = sampled |> Enum.map(&elem(&1, 0)) |> FFT.spectrum!(every, options)
+    with {:ok, every} <- interval(every),
+         {:ok, lines} <- lines(Enum.map(sampled, &elem(&1, 0)), every, options) do
+      columns =
+        [
+          {frequency, Enum.map(lines, & &1.frequency)},
+          {magnitude, Enum.map(lines, & &1.magnitude)}
+        ] ++ if(phase, do: [{phase, Enum.map(lines, & &1.phase)}], else: [])
 
-    columns =
-      [{frequency, Enum.map(lines, & &1.frequency)}, {magnitude, Enum.map(lines, & &1.magnitude)}] ++
-        if(phase, do: [{phase, Enum.map(lines, & &1.phase)}], else: [])
+      Step.output(input, key, for({name, values} <- columns, do: {name, :number, values}))
+    end
+  end
 
-    Step.output(input, key, for({name, values} <- columns, do: {name, :number, values}))
+  # A gap between two readings past a float's range is the time column's fault.
+  defp interval(:overflow), do: {:error, {"time", :overflow}}
+  defp interval(every), do: {:ok, every}
+
+  # The spectrum's lines. What `bind/3` and the node's check prove leaves it only what no
+  # float holds: the readings' sum, or the interval's frequencies (spec/04 §4.11).
+  defp lines(values, every, options) do
+    case FFT.spectrum(values, every, options) do
+      {:ok, _lines} = ok -> ok
+      {:error, {:values, :overflow}} -> {:error, {"field", :overflow}}
+      {:error, {:every, :overflow}} -> {:error, {"every", :overflow}}
+    end
   end
 
   defp names([frequency, magnitude]), do: {frequency, magnitude, nil}
@@ -558,13 +588,14 @@ defmodule Macaw.Data.Operations.Transforms.Spectrum do
       |> Enum.reject(&(is_nil(&1) or &1 <= 0))
       |> Enum.sort()
 
-    case gaps do
-      [] -> nil
-      gaps -> Enum.at(gaps, div(length(gaps), 2))
+    cond do
+      gaps == [] -> nil
+      :overflow in gaps -> :overflow
+      true -> Enum.at(gaps, div(length(gaps), 2))
     end
   end
 
   defp gap(%DateTime{} = a, %DateTime{} = b), do: DateTime.diff(b, a, :microsecond) / 1_000_000
-  defp gap(a, b) when is_number(a) and is_number(b), do: b - a
+  defp gap(a, b) when is_number(a) and is_number(b), do: Checked.subtract(b, a)
   defp gap(_a, _b), do: nil
 end

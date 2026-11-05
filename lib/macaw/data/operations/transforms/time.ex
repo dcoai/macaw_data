@@ -8,7 +8,7 @@ defmodule Macaw.Data.Operations.Transforms.Window do
   """
   @behaviour Macaw.Data.Transform
 
-  alias Macaw.Data.{Schema, Table}
+  alias Macaw.Data.{Checked, Schema, Table}
   alias Macaw.Data.Operations.{Option, Step, Transforms}
   alias Macaw.Data.Table.Chunk
 
@@ -79,9 +79,19 @@ defmodule Macaw.Data.Operations.Transforms.Window do
           end
 
         if now do
-          lo = if from, do: now - seconds(from), else: :open
-          hi = if to, do: {:below, now - seconds(to)}, else: {:through, now}
-          %{bounds: {lo, hi}, name: name, field: field, sorted?: sorted?}
+          lo = if from, do: Checked.subtract(now, seconds(from)), else: :open
+          hi = if to, do: Checked.subtract(now, seconds(to)), else: now
+
+          cond do
+            lo == :overflow ->
+              {:error, {"from", :overflow}}
+
+            hi == :overflow ->
+              {:error, {"to", :overflow}}
+
+            true ->
+              %{bounds: {lo, bound_above(hi, to)}, name: name, field: field, sorted?: sorted?}
+          end
         else
           %{bounds: nil}
         end
@@ -213,7 +223,11 @@ defmodule Macaw.Data.Operations.Transforms.Window do
   defp within?(at, {:through, hi}), do: at <= hi
   defp within?(at, {:below, hi}), do: at < hi
 
-  defp seconds([n, unit]), do: n * Keyword.fetch!(Option.units(), unit)
+  defp seconds([n, unit]), do: Checked.multiply(n, Keyword.fetch!(Option.units(), unit))
+
+  # The new end: exclusive at `to`, else through `now`.
+  defp bound_above(hi, nil), do: {:through, hi}
+  defp bound_above(hi, _to), do: {:below, hi}
 
   # `latest`'s two runs merged, the first's chunks before the second's: each identity's
   # newest row, the later on a tie, as `Macaw.Data.Window.latest_rows/3` keeps it.

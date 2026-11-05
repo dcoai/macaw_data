@@ -472,7 +472,7 @@ defmodule Macaw.Data.Operations do
   defp to_text(part), do: inspect(part)
 
   defp why(:not_a_table), do: "is not a table"
-  defp why(:overflow), do: "sums beyond a float's range"
+  defp why(:overflow), do: "is beyond a float's range"
   defp why(:not_a_package), do: "is not a package: it has no __members__/0"
   defp why(:no_behavior), do: "implements no behavior"
 

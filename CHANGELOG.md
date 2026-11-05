@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **A step's arithmetic past a float's range is `:overflow`, never `ArithmeticError`** (#181). `mean`, `median`, `quantile`, `variance`, `deviation`, `slope` and `delta` answer it as `sum` did, `bin`'s edges at `field`, `window`'s bounds at `from` and `to`, and `spectrum` at `field`, `every` and `time`. What a float holds is the BEAM's answer, to the bit, except in one case below. A fault of `:overflow` reads "is beyond a float's range" where it read "sums beyond a float's range".
+- **`Macaw.Data.FFT.spectrum/3` refuses readings whose absolute sum reaches 1.0e152** (#181), `{:error, {:values, :overflow}}`, and an interval whose frequencies are past a float's range, `{:error, {:every, :overflow}}`. Past that sum a term's square could pass the range, and one check over the readings replaces one at every butterfly. So a spectrum whose terms happened to stay small enough, and which worked, is now refused.
 - **An improper list answers its position's fault at every reader** (#184, #169). One guard judges a list, and a test makes each list of a valid input of each reader improper on every run. `Macaw.Data.Table.new/2` has `{[], {:type, :columns}}` and `Macaw.Data.Operations.validate/3` `{["nodes"], {:type, :nodes}}`.
 - **A step's `:term` option refuses what is no data** (#187). A function, a PID, a reference, a port or an improper list in `filter`'s `value` is `{[i, "value"], {:type, :term}}` from `validate/3` and `apply/4`, where `apply/4` raised `ArgumentError` from the step's digest. `validate/3` accepted them before, so a test that only validated such a node changes.
 

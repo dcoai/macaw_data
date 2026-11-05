@@ -83,7 +83,7 @@ defmodule Macaw.Data.Fault do
   def words(:not_data),
     do: "is not data: a function, a PID, a reference or a port has no table form"
 
-  def words(:overflow), do: "sums beyond a float's range"
+  def words(:overflow), do: "is beyond a float's range"
   def words({:reads, :number}), do: "must read a number"
 
   def words({:length, n}), do: "must hold #{n} values, as the first column does"

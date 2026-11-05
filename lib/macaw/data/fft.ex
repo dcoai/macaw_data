@@ -12,6 +12,11 @@ defmodule Macaw.Data.FFT do
       [{1.0, 0.0}, {1.0, 0.0}, {1.0, 0.0}, {1.0, 0.0}]
   """
 
+  alias Macaw.Data.Checked
+
+  # A spectrum's readings hold to this absolute sum (`within?/1`).
+  @most 1.0e152
+
   @typedoc "A complex number as `{re, im}`."
   @type complex :: {float(), float()}
 
@@ -60,7 +65,10 @@ defmodule Macaw.Data.FFT do
 
   @typedoc "Why a transform or a spectrum is refused (`format_error/1`)."
   @type reason ::
-          {:samples, term()} | {:window, term()} | {:every, term()} | {:values, :number}
+          {:samples, term()}
+          | {:window, term()}
+          | {:every, term()}
+          | {:values, :number | :overflow}
 
   @doc """
   A refusal's words.
@@ -74,6 +82,12 @@ defmodule Macaw.Data.FFT do
 
   def format_error({:window, kind}),
     do: "window is one of #{inspect(@windows)}, not #{inspect(kind)}"
+
+  def format_error({:every, :overflow}),
+    do: "every is so far from a second that the lines' frequencies are past a float's range"
+
+  def format_error({:values, :overflow}),
+    do: "the values sum beyond what the transform's arithmetic holds, 1.0e152"
 
   def format_error({:every, every}),
     do: "every is the seconds between samples, above zero, not #{inspect(every)}"
@@ -152,7 +166,7 @@ defmodule Macaw.Data.FFT do
       not (is_number(every) and every > 0) -> {:error, {:every, every}}
       not (samples == nil or power_of_two?(samples)) -> {:error, {:samples, samples}}
       kind not in @windows -> {:error, {:window, kind}}
-      true -> {:ok, lines(values, every, samples, kind, opts)}
+      true -> lines(values, every, samples, kind, opts)
     end
   end
 
@@ -169,28 +183,61 @@ defmodule Macaw.Data.FFT do
     count = length(values)
 
     if samples == nil or samples < 2 or count < samples do
-      []
+      {:ok, []}
     else
-      taken = values |> Enum.take(-samples) |> Enum.map(&(&1 * 1.0))
-      taken = if Keyword.get(opts, :detrend, false), do: detrended(taken), else: taken
-      gain = window_gain(samples, kind)
+      taken = Enum.take(values, -samples)
+      frequencies = frequencies(samples, every)
 
-      taken
-      |> window(kind)
-      |> Enum.map(&complex/1)
-      |> transform(samples)
-      |> Enum.take(div(samples, 2))
-      |> Enum.with_index()
-      |> Enum.map(fn {{re, im}, k} ->
-        scale = if k == 0, do: 1 / (samples * gain), else: 2 / (samples * gain)
+      cond do
+        not within?(taken) ->
+          {:error, {:values, :overflow}}
 
-        %{
-          frequency: k / (samples * every),
-          magnitude: :math.sqrt(re * re + im * im) * scale,
-          phase: :math.atan2(im, re)
-        }
-      end)
+        :overflow in frequencies ->
+          {:error, {:every, :overflow}}
+
+        true ->
+          {:ok, spectrum_lines(taken, frequencies, samples, kind, opts)}
+      end
     end
+  end
+
+  # The readings' absolute sum below `@most`: no term of the transform passes it, nor a
+  # detrended one twice it, so no square and no sum of two of them passes a float's range
+  # (spec/04 §4.11, macaw_data#181). A check over the readings, once, in place of one at
+  # every butterfly.
+  defp within?(values) do
+    case Enum.reduce(values, 0, &Checked.add(&2, abs(&1))) do
+      :overflow -> false
+      sum -> sum < @most
+    end
+  end
+
+  defp frequencies(samples, every) do
+    over = Checked.multiply(samples, every)
+    for k <- 0..(div(samples, 2) - 1)//1, do: Checked.divide(k, over)
+  end
+
+  defp spectrum_lines(taken, frequencies, samples, kind, opts) do
+    taken = Enum.map(taken, &(&1 * 1.0))
+    taken = if Keyword.get(opts, :detrend, false), do: detrended(taken), else: taken
+    gain = window_gain(samples, kind)
+
+    taken
+    |> window(kind)
+    |> Enum.map(&complex/1)
+    |> transform(samples)
+    |> Enum.take(div(samples, 2))
+    |> Enum.zip(frequencies)
+    |> Enum.with_index()
+    |> Enum.map(fn {{{re, im}, frequency}, k} ->
+      scale = if k == 0, do: 1 / (samples * gain), else: 2 / (samples * gain)
+
+      %{
+        frequency: frequency,
+        magnitude: :math.sqrt(re * re + im * im) * scale,
+        phase: :math.atan2(im, re)
+      }
+    end)
   end
 
   # -- the transform ----------------------------------------------------------------------

@@ -219,7 +219,7 @@ defmodule Macaw.Data.Operations.AggregatesTest do
       assert Macaw.Data.Derived.Columns.mean(table, "v") == {:error, {:overflow, "v"}}
 
       assert Operations.format_error({["values"], :overflow}) ==
-               "values: sums beyond a float's range"
+               "values: is beyond a float's range"
     end
 
     @tag verifies: "operations-statistics-values"

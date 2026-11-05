@@ -7,7 +7,7 @@ defmodule Macaw.Data.StackValuesTest do
   use ExUnitProperties
 
   alias Macaw.Data.{Error, Fault, Operations, Stack, Table}
-  alias Macaw.Data.Stack.Checked
+  alias Macaw.Data.Checked
 
   @orders [:none, :reverse, :ascending, :descending, :insideout, {:keys, [:b]}]
   @offsets [:none, :expand, :diverging, :silhouette, :wiggle]
@@ -152,7 +152,7 @@ defmodule Macaw.Data.StackValuesTest do
       error =
         assert_raise Error, fn -> Stack.generate!(stack([:a, :b], :ascending), rows) end
 
-      assert Exception.message(error) =~ "order: sums beyond a float's range"
+      assert Exception.message(error) =~ "order: is beyond a float's range"
     end
 
     @tag verifies: "operations-stack-values"

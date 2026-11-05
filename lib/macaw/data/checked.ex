@@ -1,9 +1,9 @@
-defmodule Macaw.Data.Stack.Checked do
+defmodule Macaw.Data.Checked do
   @moduledoc false
-  # Stacking's arithmetic, total: the BEAM's answer, or `:overflow` exactly where the BEAM
-  # would raise (spec/04 §4.8, macaw_data#178). A float has no infinity here, so a result
-  # past the largest float is `ArithmeticError`, and so is an integer past it beside a
-  # float or under a division. `:overflow` passes through every operation, so a stack can
+  # A step's arithmetic, total: the BEAM's answer, or `:overflow` exactly where the BEAM
+  # would raise (spec/04 §4.8, §5, macaw_data#178, #181). A float has no infinity here,
+  # so a result past the largest float is `ArithmeticError`, and so is an integer past it beside a
+  # float or under a division. `:overflow` passes through every operation, so a sum can
   # run to its end and be read for it once.
   #
   # Below the screens no result can pass the largest float, and the operation runs as it
@@ -42,6 +42,10 @@ defmodule Macaw.Data.Stack.Checked do
   @spec negate(t()) :: t()
   def negate(a) when is_number(a), do: -a
   def negate(:overflow), do: :overflow
+
+  @doc false
+  @spec subtract(t(), t()) :: t()
+  def subtract(a, b), do: add(a, negate(b))
 
   @doc false
   @spec multiply(t(), t()) :: t()

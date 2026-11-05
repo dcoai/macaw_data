@@ -21,7 +21,7 @@ defmodule Macaw.Data.Stack do
 
   """
 
-  alias Macaw.Data.Stack.Checked
+  alias Macaw.Data.Checked
 
   defstruct keys: [],
             value: nil,
