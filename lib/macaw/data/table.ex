@@ -363,6 +363,15 @@ defmodule Macaw.Data.Table do
          do: from_rows(rows, opts)
   end
 
+  @doc "As `from/2`, raising `Macaw.Data.Error` naming every fault."
+  @spec from!(source() | t(), keyword()) :: t()
+  def from!(source, opts \\ []) do
+    case from(source, opts) do
+      {:ok, table} -> table
+      {:error, faults} -> raise Macaw.Data.Error, reason: faults, what: "not a table"
+    end
+  end
+
   # `types:` is a map from a name to a type, `new/1` judging each type.
   @doc false
   @spec types_map(term()) :: :ok | {:error, [{[:types], {:type, :map}}, ...]}

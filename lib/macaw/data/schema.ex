@@ -880,7 +880,21 @@ defmodule Macaw.Data.Schema do
   A struct as a description or a value entry stays too, for `new/1` to refuse at its path.
   """
   @spec from_map(term()) :: {:ok, t()} | {:error, [error(), ...]}
-  defdelegate from_map(pairs), to: Form
+  def from_map(pairs), do: Form.from_map(pairs)
+
+  @doc "As `from_map/1`, raising `Macaw.Data.Error` naming every fault."
+  @spec from_map!(term()) :: t()
+  def from_map!(pairs) do
+    case from_map(pairs) do
+      {:ok, schema} ->
+        schema
+
+      {:error, errors} ->
+        raise Macaw.Data.Error,
+          reason: errors,
+          message: "not a schema:\n" <> Enum.map_join(errors, "\n", &("  " <> format_error(&1)))
+    end
+  end
 
   @doc """
   The schema a JSON document holds: read through the kernel's gates
@@ -892,7 +906,21 @@ defmodule Macaw.Data.Schema do
   gates, it is lifted to version 1, the version whose content it is, and read from there.
   """
   @spec from_json(binary(), keyword()) :: {:ok, t()} | {:error, [error(), ...]}
-  defdelegate from_json(json, opts \\ []), to: Form
+  def from_json(json, opts \\ []), do: Form.from_json(json, opts)
+
+  @doc "As `from_json/2`, raising `Macaw.Data.Error` naming every fault."
+  @spec from_json!(binary(), keyword()) :: t()
+  def from_json!(json, opts \\ []) do
+    case from_json(json, opts) do
+      {:ok, schema} ->
+        schema
+
+      {:error, errors} ->
+        raise Macaw.Data.Error,
+          reason: errors,
+          message: "not a schema:\n" <> Enum.map_join(errors, "\n", &("  " <> format_error(&1)))
+    end
+  end
 
   # -- formatting -----------------------------------------------------------------------
 

@@ -140,7 +140,9 @@ defmodule Macaw.Data.ReadersImproperListsTest do
     for source <- sources() do
       input = {source, [types: %{"a" => :number}]}
 
-      assert raised(improper(input), fn {source, opts} -> answered(Table.from(source, opts)) end) ==
+      assert raised(improper(input), fn {source, opts} ->
+               answers(fn -> Table.from(source, opts) end, fn -> Table.from!(source, opts) end)
+             end) ==
                []
     end
   end
@@ -204,7 +206,9 @@ defmodule Macaw.Data.ReadersImproperListsTest do
 
     assert length(improper(map)) >= 8
 
-    assert raised(improper(map), fn pairs -> answered(Schema.from_map(pairs)) end) == []
+    assert raised(improper(map), fn pairs ->
+             answers(fn -> Schema.from_map(pairs) end, fn -> Schema.from_map!(pairs) end)
+           end) == []
   end
 
   @tag verifies: "data-errors-readers"

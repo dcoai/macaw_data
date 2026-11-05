@@ -1161,6 +1161,22 @@ defmodule Macaw.Data.Derived do
   @spec from_map(map(), keyword()) :: {:ok, t()} | {:error, [error(), ...]}
   def from_map(map, opts \\ []) when is_map(map), do: read(map, opts)
 
+  @doc "As `from_map/2`, raising `Macaw.Data.Error` naming every fault."
+  @spec from_map!(map(), keyword()) :: t()
+  def from_map!(map, opts \\ []) do
+    case from_map(map, opts) do
+      {:ok, source} ->
+        source
+
+      {:error, errors} ->
+        raise Macaw.Data.Error,
+          reason: errors,
+          message:
+            "not a derived source:\n" <>
+              Enum.map_join(errors, "\n", &("  " <> format_error(&1)))
+    end
+  end
+
   @doc """
   The derived source a JSON document holds: as `from_map/2`, its bytes and nesting held to
   the limits before it is decoded.

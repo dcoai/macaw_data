@@ -132,10 +132,7 @@ defmodule Macaw.Data.ReadersNeverRaiseTest do
               ]),
             opts <- options([:types])
           ) do
-      case Table.from(source, opts) do
-        {:ok, %Table{}} -> :ok
-        {:error, [_ | _] = faults} -> assert is_binary(Fault.sentence(faults))
-      end
+      answers(fn -> Table.from(source, opts) end, fn -> Table.from!(source, opts) end)
     end
   end
 
@@ -255,11 +252,8 @@ defmodule Macaw.Data.ReadersNeverRaiseTest do
 
       answers(fn -> Schema.new(fields) end, fn -> Schema.new!(fields) end)
 
-      assert match?({:ok, %Schema{}}, Schema.from_map(pairs)) or
-               match?({:error, [_ | _]}, Schema.from_map(pairs))
-
-      assert match?({:ok, %Schema{}}, Schema.from_json(json)) or
-               match?({:error, [_ | _]}, Schema.from_json(json))
+      answers(fn -> Schema.from_map(pairs) end, fn -> Schema.from_map!(pairs) end)
+      answers(fn -> Schema.from_json(json) end, fn -> Schema.from_json!(json) end)
     end
   end
 
@@ -317,10 +311,7 @@ defmodule Macaw.Data.ReadersNeverRaiseTest do
           ) do
       answers(fn -> Derived.new(source) end, fn -> Derived.new!(source) end)
 
-      case Derived.from_map(document) do
-        {:ok, %Derived{}} -> :ok
-        {:error, [_ | _]} -> :ok
-      end
+      answers(fn -> Derived.from_map(document) end, fn -> Derived.from_map!(document) end)
     end
   end
 
@@ -365,6 +356,58 @@ defmodule Macaw.Data.ReadersNeverRaiseTest do
         Finish.ceiling!(budget, ceiling)
       end)
     end
+  end
+
+  # The readers spec/00 §5 names, from the sentence itself, so neither can move alone
+  # (#185): one that answers values has a twin at its arity, raising exactly its faults.
+  defp named_readers do
+    {:ok, spec} = File.read("spec/00-overview.md")
+    [_before, rest] = String.split(spec, "**No reader of untrusted input raises**", parts: 2)
+    [sentence, _after] = String.split(rest, "Each answers `{:ok, value}`", parts: 2)
+
+    for [_all, module, name, arity] <- Regex.scan(~r/`([A-Z][\w.]*)\.(\w+)\/(\d)`/, sentence) do
+      {Module.concat(Macaw.Data, module), String.to_atom(name), String.to_integer(arity)}
+    end
+  end
+
+  @tag verifies: "data-errors-readers"
+  test "every reader spec/00 §5 names exports its ! twin at its arity" do
+    readers = named_readers()
+    assert length(readers) == 16
+
+    for {module, name, arity} <- readers do
+      assert Code.ensure_loaded?(module), inspect(module)
+      assert function_exported?(module, name, arity), inspect({module, name, arity})
+
+      assert function_exported?(module, :"#{name}!", arity),
+             "#{inspect(module)}.#{name}!/#{arity} is named by spec/00 §5 and is not exported"
+    end
+  end
+
+  @tag verifies: "data-errors-readers"
+  test "the four twins added raise the faults their readers answer" do
+    bad = [[1 | 2]]
+
+    assert_twin(Schema.from_map(bad), fn -> Schema.from_map!(bad) end)
+    assert_twin(Schema.from_json("[1, {"), fn -> Schema.from_json!("[1, {") end)
+    assert_twin(Table.from(:nope), fn -> Table.from!(:nope) end)
+    assert_twin(Derived.from_map(%{"id" => 3}), fn -> Derived.from_map!(%{"id" => 3}) end)
+
+    assert %Schema{} = Schema.from_map!([["a", %{"type" => "number"}]])
+
+    assert %Schema{} =
+             Schema.from_json!(~s({"$version": 1, "fields": [["a", {"type": "number"}]]}))
+
+    assert %Table{} = Table.from!([%{"a" => 1}])
+    assert %Table{} = table = Table.from!(%{"a" => [1, 2]}, types: %{"a" => :number})
+    assert Table.size(table) == 2
+    assert Table.from!(table) == table
+  end
+
+  defp assert_twin({:error, [_ | _] = faults}, bang) do
+    error = assert_raise Error, bang
+    assert error.reason == faults
+    refute Exception.message(error) =~ "{:"
   end
 
   @tag verifies: "data-errors-readers"

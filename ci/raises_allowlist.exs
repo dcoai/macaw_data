@@ -12,6 +12,26 @@
 # Bad input is never a class: a function answers it with {:error, reason}.
 [
   %{
+    at: {Macaw.Data.Derived, :from_map!, 2},
+    class: :bang,
+    reason: "from_map/2's twin: raises the faults from_map/2 answers, as Macaw.Data.Error"
+  },
+  %{
+    at: {Macaw.Data.Schema, :from_map!, 1},
+    class: :bang,
+    reason: "from_map/1's twin: raises the faults from_map/1 answers, as Macaw.Data.Error"
+  },
+  %{
+    at: {Macaw.Data.Schema, :from_json!, 2},
+    class: :bang,
+    reason: "from_json/2's twin: raises the faults from_json/2 answers, as Macaw.Data.Error"
+  },
+  %{
+    at: {Macaw.Data.Table, :from!, 2},
+    class: :bang,
+    reason: "from/2's twin: raises the faults from/2 answers, as Macaw.Data.Error"
+  },
+  %{
     at: {Macaw.Data.Delivery, :named_rows!, 1},
     class: :bang,
     reason: "named_rows/1's twin: raises the faults named_rows/1 answers, as Macaw.Data.Error"
