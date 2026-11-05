@@ -254,6 +254,26 @@
     reason: "spectrum/3's twin: raises the faults spectrum/3 answers, as Macaw.Data.Error"
   },
   %{
+    at: {Macaw.Data.FFT, :magnitudes!, 1},
+    class: :bang,
+    reason: "magnitudes/1's twin: raises the faults magnitudes/1 answers, as Macaw.Data.Error"
+  },
+  %{
+    at: {Macaw.Data.FFT, :window!, 2},
+    class: :bang,
+    reason: "window/2's twin: raises the faults window/2 answers, as Macaw.Data.Error"
+  },
+  %{
+    at: {Macaw.Data.Reduce, :lttb!, 3},
+    class: :bang,
+    reason: "lttb/3's twin: raises the faults lttb/3 answers, as Macaw.Data.Error"
+  },
+  %{
+    at: {Macaw.Data.Reduce, :m4!, 3},
+    class: :bang,
+    reason: "m4/3's twin: raises the faults m4/3 answers, as Macaw.Data.Error"
+  },
+  %{
     at: {Macaw.Data.Native.Kernels, nil, nil},
     class: :compile,
     reason: "native: :required without a toolchain fails the build (spec/04 §1.7)"

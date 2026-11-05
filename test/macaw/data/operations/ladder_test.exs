@@ -200,7 +200,7 @@ defmodule Macaw.Data.Operations.LadderTest do
       expected =
         rows
         |> Enum.with_index()
-        |> Reduce.m4(32, fn {{t, v}, _i} -> {t, v} end)
+        |> Reduce.m4!(32, fn {{t, v}, _i} -> {t, v} end)
         |> Enum.map(&elem(&1, 1))
 
       for size <- [1, 7, 100, :one] do
@@ -279,7 +279,7 @@ defmodule Macaw.Data.Operations.LadderTest do
         input = table(rows)
         kept = run(input, %{op: "lttb", fields: ["t", "v"], n: n})
         picked = Enum.map(Table.column(kept, "i"), &Enum.at(rows, &1))
-        exact = Reduce.lttb(rows, n)
+        exact = Reduce.lttb!(rows, n)
 
         assert error(rows, picked) <= bound(rows, picked, exact, n)
         assert Table.size(kept) <= n
@@ -300,7 +300,7 @@ defmodule Macaw.Data.Operations.LadderTest do
       for {seed, count} <- [{4007, 762}, {6901, 730}] do
         rows = series(:spikes, seed, count)
         picked = lttb_picked(rows, 20)
-        exact = Reduce.lttb(rows, 20)
+        exact = Reduce.lttb!(rows, 20)
 
         assert peaks(picked) > peaks(exact)
         assert error(rows, picked) > 2 * error(rows, exact) + 0.005

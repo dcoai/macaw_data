@@ -577,7 +577,7 @@ defmodule Macaw.Data.Operations.TransformsTest do
 
       kept = run(%{op: "lttb", fields: [:t, :v], n: 10}, rows)
       assert Enum.filter(kept, &(&1.v == nil)) == [Enum.at(rows, 15)]
-      assert kept == Reduce.lttb(rows, 10, &{&1.t, &1.v})
+      assert kept == Reduce.lttb!(rows, 10, &{&1.t, &1.v})
     end
 
     @tag verifies: "operations-m4-columns"
@@ -585,7 +585,7 @@ defmodule Macaw.Data.Operations.TransformsTest do
       # t over [0, 960] in 30 columns: a pixel is 32 wide, a bucket 8, so their edges meet.
       rows = wave(961)
       kept = run(%{op: "m4", fields: [:t, :v], width: 30}, rows)
-      assert kept == Reduce.m4(rows, 30, &{&1.t, &1.v})
+      assert kept == Reduce.m4!(rows, 30, &{&1.t, &1.v})
 
       column = fn row -> min(29, floor(row.t / 32)) end
       by_column = Enum.group_by(kept, column)

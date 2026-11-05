@@ -373,7 +373,7 @@ defmodule Macaw.Data.ReadersNeverRaiseTest do
   @tag verifies: "data-errors-readers"
   test "every reader spec/00 §5 names exports its ! twin at its arity" do
     readers = named_readers()
-    assert length(readers) == 16
+    assert length(readers) == 23
 
     for {module, name, arity} <- readers do
       assert Code.ensure_loaded?(module), inspect(module)

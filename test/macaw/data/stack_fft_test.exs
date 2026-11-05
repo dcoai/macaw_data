@@ -252,7 +252,7 @@ defmodule Macaw.Data.StackFFTTest do
         k = min(k, div(n, 2) - 1)
         samples = for i <- 0..(n - 1), do: amplitude * :math.sin(2 * :math.pi() * k * i / n)
         terms = FFT.fft!(samples)
-        magnitudes = FFT.magnitudes(terms)
+        magnitudes = FFT.magnitudes!(terms)
 
         assert length(terms) == n
         half = Enum.take(magnitudes, div(n, 2))
@@ -275,7 +275,7 @@ defmodule Macaw.Data.StackFFTTest do
       assert_raise Macaw.Data.Error, ~r/power of two/, fn -> FFT.fft!([1, 2, 3]) end
 
       # The tapers: hann and hamming over five ones, and a sequence under four untapered.
-      assert Enum.map(FFT.window([1, 1, 1, 1, 1], :hann), &Float.round(&1, 3)) == [
+      assert Enum.map(FFT.window!([1, 1, 1, 1, 1], :hann), &Float.round(&1, 3)) == [
                0.0,
                0.5,
                1.0,
@@ -283,7 +283,7 @@ defmodule Macaw.Data.StackFFTTest do
                0.0
              ]
 
-      assert Enum.map(FFT.window([1, 1, 1, 1, 1], :hamming), &Float.round(&1, 3)) == [
+      assert Enum.map(FFT.window!([1, 1, 1, 1, 1], :hamming), &Float.round(&1, 3)) == [
                0.08,
                0.54,
                1.0,
@@ -291,7 +291,7 @@ defmodule Macaw.Data.StackFFTTest do
                0.08
              ]
 
-      assert FFT.window([2, 2, 2], :hann) == [2.0, 2.0, 2.0]
+      assert FFT.window!([2, 2, 2], :hann) == [2.0, 2.0, 2.0]
     end
   end
 

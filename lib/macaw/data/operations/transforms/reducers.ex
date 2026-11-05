@@ -117,9 +117,14 @@ defmodule Macaw.Data.Operations.Transforms.Lttb do
     merged
     |> Ladder.runs()
     |> Enum.flat_map(&candidates/1)
-    |> Reduce.lttb(n, fn {_ref, s, y} -> {s, y} end)
+    |> Enum.map(&candidate/1)
+    |> Reduce.candidates_lttb(n)
     |> Enum.map(&elem(&1, 0))
   end
+
+  # A candidate as `Reduce` reads one: a defined point with its `s` and `y`, else a gap.
+  defp candidate({_ref, s, y} = point) when is_number(s) and is_number(y), do: {point, s, y}
+  defp candidate(point), do: {:gap, point}
 
   # A segment's candidates in input order, each once: a gap as itself; a run's first and
   # last points and each bucket's least and greatest. One pass over the ascending buckets;

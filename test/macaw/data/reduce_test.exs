@@ -29,7 +29,7 @@ defmodule Macaw.Data.ReduceTest do
     # 3..5 against a = (2, 0) and the last point (6, 0): areas 4|y| are 20, 0, 4, so 3.
     test "a seven-point vector worked by hand" do
       points = indexed([0, 1, 0, 5, 0, 1, 0])
-      assert points |> Data.lttb(4) |> xs() == [0, 2, 3, 6]
+      assert points |> Data.lttb!(4) |> xs() == [0, 2, 3, 6]
     end
 
     # x = 0..9, n = 5: every = 8/3.
@@ -38,20 +38,20 @@ defmodule Macaw.Data.ReduceTest do
     #   bucket 2 = 6..8,  a = (4, 9), last point (9, 5):         27, 7, 29                → 8
     test "a ten-point vector worked by hand" do
       points = indexed([0, 4, 1, 3, 9, 2, 2, 8, 0, 5])
-      assert points |> Data.lttb(5) |> xs() == [0, 1, 4, 8, 9]
+      assert points |> Data.lttb!(5) |> xs() == [0, 1, 4, 8, 9]
     end
 
     test "a tie keeps the earliest point of the bucket" do
       # Bucket 0 is 1..3 with the last point (4, 0) after it: 1 and 2 both stand 1 above
       # the base line, so their triangles tie.
       points = [{0, 0}, {1, 1}, {2, 1}, {3, 0}, {4, 0}]
-      assert points |> Data.lttb(3) |> xs() |> Enum.take(2) == [0, 1]
+      assert points |> Data.lttb!(3) |> xs() |> Enum.take(2) == [0, 1]
     end
 
     test "without gaps: exactly n, the ends kept, one point per bucket, in order" do
       points = series(5_000, 1)
       n = 137
-      kept = Data.lttb(points, n)
+      kept = Data.lttb!(points, n)
       indices = xs(kept)
 
       assert length(kept) == n
@@ -67,7 +67,7 @@ defmodule Macaw.Data.ReduceTest do
 
     test "keeps whole elements through the accessor" do
       rows = for i <- 0..99, do: %{t: i, v: rem(i * 37, 11), tag: "r#{i}"}
-      kept = Data.lttb(rows, 10, &{&1.t, &1.v})
+      kept = Data.lttb!(rows, 10, &{&1.t, &1.v})
 
       assert length(kept) == 10
       assert Enum.all?(kept, &(&1 in rows))
@@ -77,13 +77,17 @@ defmodule Macaw.Data.ReduceTest do
   describe "lttb/3 — edges" do
     test "n at or above the length is the input unchanged, gaps and all" do
       points = [{0, 1}, {1, nil}, {2, 3}]
-      assert Data.lttb(points, 3) == points
-      assert Data.lttb(points, 50) == points
-      assert Data.lttb([], 3) == []
+      assert Data.lttb!(points, 3) == points
+      assert Data.lttb!(points, 50) == points
+      assert Data.lttb!([], 3) == []
     end
 
     test "n below 3 is refused" do
-      assert_raise FunctionClauseError, fn -> Data.lttb(indexed([1, 2, 3, 4]), 2) end
+      assert Data.lttb(indexed([1, 2, 3, 4]), 2) == {:error, {:n, 2}}
+
+      assert_raise Macaw.Data.Error, ~r/at least 3/, fn ->
+        Data.lttb!(indexed([1, 2, 3, 4]), 2)
+      end
     end
   end
 
@@ -91,7 +95,7 @@ defmodule Macaw.Data.ReduceTest do
     test "every column keeps its first, last, least and greatest element" do
       points = series(20_000, 2)
       width = 173
-      kept = Data.m4(points, width)
+      kept = Data.m4!(points, width)
 
       assert Enum.all?(kept, &(&1 in points))
       assert xs(kept) == Enum.sort(xs(kept))
@@ -117,17 +121,18 @@ defmodule Macaw.Data.ReduceTest do
     end
 
     test "a column of four or fewer is kept whole, and ties keep the earliest" do
-      assert Data.m4([{0, 1}, {1, 1}, {2, 1}], 1) == [{0, 1}, {2, 1}]
-      assert Data.m4([{0, 3}, {1, 1}, {2, 1}, {3, 3}, {4, 2}], 1) == [{0, 3}, {1, 1}, {4, 2}]
-      assert Data.m4([{0, 1}, {1, 2}], 600) == [{0, 1}, {1, 2}]
+      assert Data.m4!([{0, 1}, {1, 1}, {2, 1}], 1) == [{0, 1}, {2, 1}]
+      assert Data.m4!([{0, 3}, {1, 1}, {2, 1}, {3, 3}, {4, 2}], 1) == [{0, 3}, {1, 1}, {4, 2}]
+      assert Data.m4!([{0, 1}, {1, 2}], 600) == [{0, 1}, {1, 2}]
     end
 
     test "one x everywhere is one column, and width below 1 is refused" do
-      assert Data.m4([{5, 1}, {5, 9}, {5, 0}, {5, 4}, {5, 7}], 10) ==
+      assert Data.m4!([{5, 1}, {5, 9}, {5, 0}, {5, 4}, {5, 7}], 10) ==
                [{5, 1}, {5, 9}, {5, 0}, {5, 7}]
 
-      assert Data.m4([], 4) == []
-      assert_raise FunctionClauseError, fn -> Data.m4([{0, 1}], 0) end
+      assert Data.m4!([], 4) == []
+      assert Data.m4([{0, 1}], 0) == {:error, {:width, 0}}
+      assert_raise Macaw.Data.Error, ~r/at least 1/, fn -> Data.m4!([{0, 1}], 0) end
     end
   end
 
@@ -140,7 +145,7 @@ defmodule Macaw.Data.ReduceTest do
     end
 
     test "lttb keeps each run of gaps as its first element, in place, and both run ends" do
-      kept = Data.lttb(gapped(), 100)
+      kept = Data.lttb!(gapped(), 100)
 
       assert Enum.filter(kept, &is_nil(elem(&1, 1))) == [{-1, nil}, {500, nil}]
       assert hd(kept) == {-1, nil}
@@ -156,7 +161,7 @@ defmodule Macaw.Data.ReduceTest do
     end
 
     test "m4 keeps each run of gaps as its first element and reduces each run apart" do
-      kept = Data.m4(gapped(), 20)
+      kept = Data.m4!(gapped(), 20)
 
       assert Enum.filter(kept, &is_nil(elem(&1, 1))) == [{-1, nil}, {500, nil}]
       {before, [{500, nil} | after_gap]} = Enum.split_while(tl(kept), &(&1 != {500, nil}))
@@ -165,8 +170,8 @@ defmodule Macaw.Data.ReduceTest do
     end
 
     test "a non-number reading is a gap; nothing but gaps is one element per run" do
-      assert Data.lttb([{0, nil}, {1, :na}, {2, nil}, {3, nil}], 3) == [{0, nil}]
-      assert Data.m4([{nil, 1}, {nil, 2}, {0, 1}, {1, 2}], 1) == [{nil, 1}, {0, 1}, {1, 2}]
+      assert Data.lttb!([{0, nil}, {1, :na}, {2, nil}, {3, nil}], 3) == [{0, nil}]
+      assert Data.m4!([{nil, 1}, {nil, 2}, {0, 1}, {1, 2}], 1) == [{nil, 1}, {0, 1}, {1, 2}]
     end
   end
 
@@ -175,8 +180,8 @@ defmodule Macaw.Data.ReduceTest do
   test "1M points reduce well inside a frame budget on this machine" do
     points = for i <- 0..999_999, do: {i, :math.sin(i / 1_000) + rem(i * 7919, 101) / 100}
 
-    {lttb_us, kept} = :timer.tc(fn -> Data.lttb(points, 1_000) end)
-    {m4_us, columns} = :timer.tc(fn -> Data.m4(points, 1_000) end)
+    {lttb_us, kept} = :timer.tc(fn -> Data.lttb!(points, 1_000) end)
+    {m4_us, columns} = :timer.tc(fn -> Data.m4!(points, 1_000) end)
 
     IO.puts(
       "\n1M points: lttb to 1000 in #{div(lttb_us, 1000)} ms, m4 to 1000 px in #{div(m4_us, 1000)} ms"

@@ -12,10 +12,14 @@ defmodule Macaw.Data.FFT do
       [{1.0, 0.0}, {1.0, 0.0}, {1.0, 0.0}, {1.0, 0.0}]
   """
 
-  alias Macaw.Data.Checked
+  alias Macaw.Data.{Checked, Lists}
 
   # A spectrum's readings hold to this absolute sum (`within?/1`).
   @most 1.0e152
+
+  # A transform takes no square: no term passes the sum of the readings' absolute parts, so
+  # that sum holds below half the largest float.
+  @half 8.0e307
 
   @typedoc "A complex number as `{re, im}`."
   @type complex :: {float(), float()}
@@ -32,8 +36,9 @@ defmodule Macaw.Data.FFT do
   @doc """
   The discrete Fourier transform of a sequence whose length is a power of two: numbers
   are taken as real, `{re, im}` pairs as complex, `{:ok, terms}`. Any other length is
-  `{:error, {:samples, n}}`, and a term that is neither `{:error, {:values, :number}}`
-  (spec/00 §5); `fft!/1` answers the terms or raises.
+  `{:error, {:samples, n}}`, a term that is neither `{:error, {:values, :number}}`, and
+  readings whose absolute parts sum to half the largest float or past it
+  `{:error, {:values, :overflow}}` (spec/00 §5); `fft!/1` answers the terms or raises.
 
       iex> {:ok, terms} = Macaw.Data.FFT.fft([0, 1, 0, -1])
       iex> Enum.map(terms, fn {re, im} -> {Float.round(re, 9) + 0.0, Float.round(im, 9) + 0.0} end)
@@ -43,16 +48,31 @@ defmodule Macaw.Data.FFT do
   """
   @spec fft([number() | complex()]) :: {:ok, [complex()]} | {:error, reason()}
   def fft(sequence) when is_list(sequence) do
+    if Lists.proper?(sequence), do: proper_fft(sequence), else: {:error, {:values, :number}}
+  end
+
+  def fft(_sequence), do: {:error, {:values, :number}}
+
+  defp proper_fft(sequence) do
     n = length(sequence)
 
     cond do
       not power_of_two?(n) -> {:error, {:samples, n}}
       not Enum.all?(sequence, &term?/1) -> {:error, {:values, :number}}
+      not transform_holds?(sequence) -> {:error, {:values, :overflow}}
       true -> {:ok, sequence |> Enum.map(&complex/1) |> transform(n)}
     end
   end
 
-  def fft(_sequence), do: {:error, {:values, :number}}
+  defp transform_holds?(sequence) do
+    sum =
+      Enum.reduce(sequence, 0, fn
+        {re, im}, sum -> sum |> Checked.add(abs(re)) |> Checked.add(abs(im))
+        re, sum -> Checked.add(sum, abs(re))
+      end)
+
+    sum != :overflow and sum < @half
+  end
 
   @doc "As `fft/1`, the terms alone, raising `Macaw.Data.Error` in `format_error/1`'s words."
   @spec fft!([number() | complex()]) :: [complex()]
@@ -69,6 +89,7 @@ defmodule Macaw.Data.FFT do
           | {:window, term()}
           | {:every, term()}
           | {:values, :number | :overflow}
+          | {:opts, :keyword}
 
   @doc """
   A refusal's words.
@@ -93,6 +114,7 @@ defmodule Macaw.Data.FFT do
     do: "every is the seconds between samples, above zero, not #{inspect(every)}"
 
   def format_error({:values, :number}), do: "every value is a number, or a complex {re, im}"
+  def format_error({:opts, :keyword}), do: "the options are a proper keyword list"
 
   defp term?(n) when is_number(n), do: true
   defp term?({re, im}) when is_number(re) and is_number(im), do: true
@@ -102,27 +124,95 @@ defmodule Macaw.Data.FFT do
   defp error(reason),
     do: Macaw.Data.Error.exception(reason: reason, message: format_error(reason))
 
-  @doc "The magnitude `sqrt(re² + im²)` of every term."
-  @spec magnitudes([complex()]) :: [float()]
-  def magnitudes(terms), do: Enum.map(terms, fn {re, im} -> :math.sqrt(re * re + im * im) end)
+  @doc """
+  The magnitude `sqrt(re² + im²)` of every term, `{:ok, magnitudes}`. A term that is no
+  `{re, im}` pair of numbers is `{:error, {:values, :number}}`, and one whose square passes a
+  float's range `{:error, {:values, :overflow}}`; `magnitudes!/1` answers them or raises.
+
+      iex> Macaw.Data.FFT.magnitudes([{3.0, 4.0}])
+      {:ok, [5.0]}
+      iex> Macaw.Data.FFT.magnitudes([{1.0e308, 1.0e308}])
+      {:error, {:values, :overflow}}
+  """
+  @spec magnitudes([complex()]) :: {:ok, [float()]} | {:error, reason()}
+  def magnitudes(terms) do
+    if Lists.proper?(terms), do: magnitudes(terms, []), else: {:error, {:values, :number}}
+  end
+
+  defp magnitudes([], read), do: {:ok, :lists.reverse(read)}
+
+  defp magnitudes([{re, im} | rest], read) when is_number(re) and is_number(im) do
+    with {:ok, magnitude} <- magnitude(re, im), do: magnitudes(rest, [magnitude | read])
+  end
+
+  defp magnitudes(_other, _read), do: {:error, {:values, :number}}
+
+  defp magnitude(re, im) when abs(re) < @half and abs(im) < @half do
+    {re, im} = {re * 1.0, im * 1.0}
+
+    case Checked.add(Checked.multiply(re, re), Checked.multiply(im, im)) do
+      :overflow -> {:error, {:values, :overflow}}
+      square -> {:ok, :math.sqrt(square)}
+    end
+  end
+
+  defp magnitude(_re, _im), do: {:error, {:values, :overflow}}
+
+  @doc "As `magnitudes/1`, the magnitudes alone, raising `Macaw.Data.Error` in `format_error/1`'s words."
+  @spec magnitudes!([complex()]) :: [float()]
+  def magnitudes!(terms) do
+    case magnitudes(terms) do
+      {:ok, value} -> value
+      {:error, reason} -> raise error(reason)
+    end
+  end
 
   @doc """
   The sequence tapered by a window: `:hann` (`0.5 − 0.5 cos(2πi/(N−1))`), `:hamming`
-  (`0.54 − 0.46 cos(2πi/(N−1))`) or `:none`; a sequence shorter than four is not tapered.
+  (`0.54 − 0.46 cos(2πi/(N−1))`) or `:none`, `{:ok, tapered}`; a sequence shorter than four
+  is not tapered. A value that is no number is `{:error, {:values, :number}}`, an integer
+  past what a float reads `{:error, {:values, :overflow}}`, and any other window
+  `{:error, {:window, kind}}`; `window!/2` answers them or raises.
 
-      iex> Macaw.Data.FFT.window([1, 1, 1, 1, 1], :hann) |> Enum.map(&Float.round(&1, 3))
+      iex> {:ok, tapered} = Macaw.Data.FFT.window([1, 1, 1, 1, 1], :hann)
+      iex> Enum.map(tapered, &Float.round(&1, 3))
       [0.0, 0.5, 1.0, 0.5, 0.0]
   """
-  @spec window([number()], atom()) :: [float()]
-  def window(values, :none), do: Enum.map(values, &(&1 * 1.0))
+  @spec window([number()], atom()) :: {:ok, [float()]} | {:error, reason()}
+  def window(values, kind) do
+    cond do
+      not (Lists.proper?(values) and Enum.all?(values, &is_number/1)) ->
+        {:error, {:values, :number}}
 
-  def window(values, kind) when kind in @windows do
+      kind not in @windows ->
+        {:error, {:window, kind}}
+
+      not Enum.all?(values, &(is_float(&1) or abs(&1) < @half)) ->
+        {:error, {:values, :overflow}}
+
+      true ->
+        {:ok, taper(values, kind)}
+    end
+  end
+
+  @doc "As `window/2`, the tapered values alone, raising `Macaw.Data.Error` in `format_error/1`'s words."
+  @spec window!([number()], atom()) :: [float()]
+  def window!(values, kind) do
+    case window(values, kind) do
+      {:ok, value} -> value
+      {:error, reason} -> raise error(reason)
+    end
+  end
+
+  defp taper(values, :none), do: Enum.map(values, &(&1 * 1.0))
+
+  defp taper(values, kind) do
     n = length(values)
     {a, b} = if kind == :hann, do: {0.5, 0.5}, else: {0.54, 0.46}
 
     # A sequence shorter than four is not tapered: the Hann of two points is all zeros.
     if n < 4 do
-      window(values, :none)
+      taper(values, :none)
     else
       values
       |> Enum.with_index()
@@ -137,8 +227,9 @@ defmodule Macaw.Data.FFT do
   `k / (samples · every)` hertz, `magnitude` the amplitude `|X_k| · 2 / (samples · gain)`
   with the window's mean gain divided out (the DC line not doubled), `phase` the argument
   of `X_k`, as `{:ok, lines}`. Fewer than two values yield `{:ok, []}`. A refusal is
-  `{:error, reason}` (spec/00 §5): `{:samples, s}`, `{:window, kind}`, `{:every, every}`
-  or `{:values, :number}`; `spectrum!/3` answers the lines or raises.
+  `{:error, reason}` (spec/00 §5): `{:samples, s}`, `{:window, kind}`, `{:every, every}`,
+  `{:values, :number}`, `{:values, :overflow}` or `{:opts, :keyword}`; `spectrum!/3`
+  answers the lines or raises.
 
   ## Options
 
@@ -156,13 +247,23 @@ defmodule Macaw.Data.FFT do
   """
   @spec spectrum([number()], number(), keyword()) :: {:ok, [line()]} | {:error, reason()}
   def spectrum(values, every, opts \\ []) do
-    samples =
-      is_list(values) && (Keyword.get(opts, :samples) || largest_power_of_two(length(values)))
+    cond do
+      not Lists.proper?(opts) ->
+        {:error, {:opts, :keyword}}
 
+      not (Lists.proper?(values) and Enum.all?(values, &is_number/1)) ->
+        {:error, {:values, :number}}
+
+      true ->
+        numbers_spectrum(values, every, opts)
+    end
+  end
+
+  defp numbers_spectrum(values, every, opts) do
+    samples = Keyword.get(opts, :samples) || largest_power_of_two(length(values))
     kind = Keyword.get(opts, :window, :hann)
 
     cond do
-      not (is_list(values) and Enum.all?(values, &is_number/1)) -> {:error, {:values, :number}}
       not (is_number(every) and every > 0) -> {:error, {:every, every}}
       not (samples == nil or power_of_two?(samples)) -> {:error, {:samples, samples}}
       kind not in @windows -> {:error, {:window, kind}}
@@ -223,7 +324,7 @@ defmodule Macaw.Data.FFT do
     gain = window_gain(samples, kind)
 
     taken
-    |> window(kind)
+    |> taper(kind)
     |> Enum.map(&complex/1)
     |> transform(samples)
     |> Enum.take(div(samples, 2))
@@ -290,5 +391,5 @@ defmodule Macaw.Data.FFT do
   defp window_gain(_samples, :none), do: 1.0
 
   defp window_gain(samples, kind),
-    do: Enum.sum(window(List.duplicate(1.0, samples), kind)) / samples
+    do: Enum.sum(taper(List.duplicate(1.0, samples), kind)) / samples
 end
