@@ -94,13 +94,17 @@ defmodule Macaw.Data.Operations.Transforms.Lttb do
         {_k, views, _pieces} =
           merged = Ladder.coarsen(merged, max(elem(merged, 0), bound.level))
 
-        refs =
-          case Ladder.lttb_native(merged, n) do
-            :fallback -> refs(merged, n)
-            refs -> refs
-          end
+        if Ladder.lttb_holds?(merged, bound.extent) do
+          refs =
+            case Ladder.lttb_native(merged, n) do
+              :fallback -> refs(merged, n)
+              refs -> refs
+            end
 
-        Ladder.gather(views, refs, input, key)
+          Ladder.gather(views, refs, input, key)
+        else
+          {:error, {"fields", :overflow}}
+        end
     end
   end
 
@@ -176,6 +180,7 @@ defmodule Macaw.Data.Operations.Transforms.M4 do
 
   alias Macaw.Data.Table
   alias Macaw.Data.Operations.{Option, Step}
+  alias Macaw.Data.Checked
   alias Macaw.Data.Operations.Transforms.Ladder
 
   @impl true
@@ -290,6 +295,24 @@ defmodule Macaw.Data.Operations.Transforms.M4 do
 
   # The pixel column a bucket folds into: the one its start lies in, over the extent split
   # into `width` columns; every bucket column 0 when the extent is a point.
+  # An extent so small its bucket width underflowed to none leaves level 0's bucket far
+  # wider than it, so a start's distance over it can pass a float's range: there the column
+  # is the clamp it would reach (spec/04 §5, macaw_data#181).
+  defp column_of({lo, hi}, width, k) when hi > lo and hi - lo < 1.0e-300 do
+    w = Ladder.pow2(k)
+    span = hi - lo
+
+    fn b ->
+      at = b * w - lo
+
+      case at |> Checked.divide(span) |> Checked.multiply(width) do
+        :overflow when at < 0 -> 0
+        :overflow -> width - 1
+        column -> column |> floor() |> max(0) |> min(width - 1)
+      end
+    end
+  end
+
   defp column_of({lo, hi}, width, k) when hi > lo do
     w = Ladder.pow2(k)
 

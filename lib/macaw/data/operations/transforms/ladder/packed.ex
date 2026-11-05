@@ -31,6 +31,62 @@ defmodule Macaw.Data.Operations.Transforms.Ladder.Packed do
   @typedoc "A piece's segments, as `Ladder` reads them."
   @type segments :: [{:run, [{integer(), tuple()}]} | {:gap, non_neg_integer()}]
 
+  @doc false
+  # A piece's count of buckets and the least and greatest of its points' `y`, read off its
+  # bytes and decoding no point: `{buckets, least, greatest}`, `{0, nil, nil}` with none. A
+  # bucket's least and greatest points bound its first and last.
+  @spec y_range(binary()) :: {non_neg_integer(), number() | nil, number() | nil}
+  def y_range(<<@packed, _st, yt, 0, n::little-32, rest::binary>>) do
+    skip = 8 * n
+    <<_heads::binary-size(^skip), body::binary>> = rest
+    if yt == 1, do: float_range(body, 0, nil, nil), else: integer_range(body, 0, nil, nil)
+  end
+
+  def y_range(<<@term, etf::binary>>) do
+    etf
+    |> :erlang.binary_to_term()
+    |> Enum.flat_map(fn
+      {:run, run} -> run
+      {:gap, _row} -> []
+    end)
+    |> Enum.reduce({0, nil, nil}, fn {_b, {_first, _last, {_, _, low}, {_, _, high}}},
+                                     {n, lo, hi} ->
+      {n + 1, least(lo, low), greatest(hi, high)}
+    end)
+  end
+
+  # A bucket: its number, its first and last points, its least's row and s, its y, its
+  # greatest's row and s, its y.
+  defp float_range(<<>>, n, lo, hi), do: {n, lo, hi}
+
+  defp float_range(
+         <<_::binary-size(60), low::little-float-64, _::binary-size(12), high::little-float-64,
+           rest::binary>>,
+         n,
+         lo,
+         hi
+       ),
+       do: float_range(rest, n + 1, least(lo, low), greatest(hi, high))
+
+  defp integer_range(<<>>, n, lo, hi), do: {n, lo, hi}
+
+  defp integer_range(
+         <<_::binary-size(60), low::little-signed-64, _::binary-size(12), high::little-signed-64,
+           rest::binary>>,
+         n,
+         lo,
+         hi
+       ),
+       do: integer_range(rest, n + 1, least(lo, low), greatest(hi, high))
+
+  defp least(nil, v), do: v
+  defp least(lo, v) when v < lo, do: v
+  defp least(lo, _v), do: lo
+
+  defp greatest(nil, v), do: v
+  defp greatest(hi, v) when v > hi, do: v
+  defp greatest(hi, _v), do: hi
+
   @doc "A piece's segments as one binary: packed where its points share their types, else as a term."
   @spec pack(segments()) :: binary()
   def pack(segments) do

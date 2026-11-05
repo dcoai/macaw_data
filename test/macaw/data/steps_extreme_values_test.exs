@@ -197,6 +197,127 @@ defmodule Macaw.Data.StepsExtremeValuesTest do
     each_answers("window")
   end
 
+  @tag verifies: "operations-extreme-values"
+  property "lttb answers any number column, on every scale" do
+    each_answers_on_scales("lttb")
+  end
+
+  @tag verifies: "operations-extreme-values"
+  property "m4 answers any number column, on every scale" do
+    each_answers_on_scales("m4")
+  end
+
+  defp each_answers_on_scales(op) do
+    registry = Operations.registry()
+
+    check all(
+            columns <- columns(),
+            node <- nodes()[op],
+            scale <- member_of([nil, :linear, :time, :log])
+          ) do
+      nodes = [Map.put(node, "op", op)]
+      source = table(columns)
+      context = if scale, do: %{scale: scale}, else: %{}
+
+      answer = Operations.apply(registry, nodes, source, context)
+
+      # The kernel and the Elixir path answer alike, a fault or the rows.
+      on_elixir =
+        Macaw.Data.Native.elixir(fn -> Operations.apply(registry, nodes, source, context) end)
+
+      assert rows_of(answer) == rows_of(on_elixir)
+
+      case answer do
+        {:ok, %Table{}} ->
+          :ok
+
+        {:error, [_ | _] = faults} ->
+          assert is_binary(Fault.sentence(faults))
+
+          error =
+            assert_raise Error, fn -> Operations.apply!(registry, nodes, source, context) end
+
+          assert error.reason == faults
+      end
+    end
+  end
+
+  defp rows_of({:ok, table}), do: {:ok, Table.rows!(table)}
+  defp rows_of(fault), do: fault
+
+  @tag verifies: "operations-extreme-values"
+  test "lttb and m4 past what their arithmetic holds are faults at fields" do
+    wide = Table.new!([{"x", :number, [-1.0e308, 0.0, 1.0e308]}, {"y", :number, [1, 2, 3]}])
+
+    for node <- [
+          %{"op" => "lttb", "fields" => ["x", "y"], "n" => 3},
+          %{"op" => "m4", "fields" => ["x", "y"], "width" => 2}
+        ] do
+      assert Operations.apply(Operations.registry(), [node], wide) ==
+               {:error, [{[0, "fields"], :overflow}]}
+    end
+
+    tall =
+      Table.new!([
+        {"x", :number, Enum.to_list(1..20)},
+        {"y", :number, for(i <- 1..20, do: if(rem(i, 2) == 0, do: 1.0e307, else: -1.0e307))}
+      ])
+
+    assert Operations.apply(
+             Operations.registry(),
+             [%{"op" => "lttb", "fields" => ["x", "y"], "n" => 3}],
+             tall
+           ) == {:error, [{[0, "fields"], :overflow}]}
+
+    assert Operations.apply(
+             Operations.registry(),
+             [%{"op" => "m4", "fields" => ["x", "y"], "width" => 2}],
+             Table.new!([{"x", :number, [1.0e302, 2.0e302]}, {"y", :number, [1, 2]}]),
+             %{scale: :time}
+           ) == {:error, [{[0, "fields"], :overflow}]}
+
+    assert Operations.apply(
+             Operations.registry(),
+             [%{"op" => "m4", "fields" => ["x", "y"], "width" => 2}],
+             Table.new!([{"x", :number, [1, 10 ** 400]}, {"y", :number, [1, 2]}]),
+             %{scale: :log}
+           ) == {:error, [{[0, "fields"], :overflow}]}
+  end
+
+  @tag verifies: "operations-extreme-values"
+  test "m4 over an extent whose bucket underflows answers, the kernel and the Elixir path alike" do
+    table = Table.new!([{"x", :number, [5.0e-324, -5.0e-324]}, {"y", :number, [1, 2]}])
+    node = %{"op" => "m4", "fields" => ["x", "y"], "width" => 1}
+    registry = Operations.registry()
+
+    assert {:ok, kept} = Operations.apply(registry, [node], table)
+    assert Table.size(kept) == 2
+
+    assert {:ok, same} =
+             Macaw.Data.Native.elixir(fn -> Operations.apply(registry, [node], table) end)
+
+    assert Table.rows!(same) == Table.rows!(kept)
+  end
+
+  @tag verifies: "operations-extreme-values"
+  test "a line well inside a float's range is reduced, not refused" do
+    n = 2_000
+    x = Enum.to_list(1..n)
+    y = for i <- x, do: :math.sin(i / 25) * 1.0e140
+    table = Table.new!([{"x", :number, x}, {"y", :number, y}])
+    points = Enum.zip(x, y)
+
+    assert {:ok, kept} =
+             Operations.apply(
+               Operations.registry(),
+               [%{"op" => "lttb", "fields" => ["x", "y"], "n" => 50}],
+               table
+             )
+
+    assert Table.size(kept) <= 50
+    assert Table.rows!(kept) |> Enum.all?(&({&1["x"], &1["y"]} in points))
+  end
+
   defp each_answers(op) do
     registry = Operations.registry()
 

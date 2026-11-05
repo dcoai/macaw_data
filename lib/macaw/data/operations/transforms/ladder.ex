@@ -29,6 +29,7 @@ defmodule Macaw.Data.Operations.Transforms.Ladder do
 
   import Bitwise
 
+  alias Macaw.Data.Checked
   alias Macaw.Data.Native
   alias Macaw.Data.Native.Kernels
   alias Macaw.Data.Table
@@ -81,7 +82,8 @@ defmodule Macaw.Data.Operations.Transforms.Ladder do
   A sorted x column is read at its ends, any other scanned. A context's scale that is not
   one of linear, time or log is `{"op", {:unknown, :scale, scale}}`; an x reading the
   scale cannot place, or a y reading that is no number, `{"fields", {:reads, kind}}`
-  (spec/04 §3.1), answered before any row is read.
+  (spec/04 §3.1), answered before any row is read. An x past what the arithmetic over it
+  holds is `{"fields", :overflow}` (spec/04 §5, macaw_data#181).
   """
   @spec bind([Table.name()], Table.t(), map(), String.t()) ::
           map() | {:error, {String.t(), term()}}
@@ -93,15 +95,89 @@ defmodule Macaw.Data.Operations.Transforms.Ladder do
 
     with {:ok, kind} <- kind(scale, x_name && Table.column_type(table, x_name)),
          :ok <- Transforms.readings(table, x_name, if(kind == :log, do: :positive, else: :time)),
-         :ok <- Transforms.readings(table, y_name, :number) do
+         :ok <- Transforms.readings(table, y_name, :number),
+         :ok <- on_scale(table, x_name, kind) do
       sorted? = x_name != nil and Table.sorted(table) == x_name
       bound = %{x: x, y: y, x_name: x_name, y_name: y_name, kind: kind}
-      Map.put(bound, :extent, extent(Table.chunks(table), bound, sorted?, op))
+      extent = extent(Table.chunks(table), bound, sorted?, op)
+
+      if within?(extent),
+        do: Map.put(bound, :extent, extent),
+        else: {:error, {"fields", :overflow}}
     else
       :error -> {:error, {"op", {:unknown, :scale, scale}}}
       {:error, reason} -> {:error, {"fields", reason}}
     end
   end
+
+  # What a bucket's start and the extent's width are read over: below half the largest
+  # float, the difference of any two and a bucket's start past either end hold.
+  @half 8.0e307
+
+  defp within?(nil), do: true
+  defp within?({lo, hi}), do: abs(lo) < @half and abs(hi) < @half
+
+  # A number on a scale that isn't its own: read as seconds, in microseconds, on a time
+  # scale, and through `log2` on a log one, where each could pass a float's range before
+  # the extent is known. A time column's own readings can't, so only these are scanned.
+  defp on_scale(_table, nil, _kind), do: :ok
+  defp on_scale(_table, _name, :linear), do: :ok
+
+  defp on_scale(table, name, kind) do
+    if Table.column_type(table, name) == :time do
+      :ok
+    else
+      most = if kind == :time, do: 1.0e301, else: 1.0e308
+
+      table
+      |> Table.chunks()
+      |> Enum.all?(fn view ->
+        view
+        |> Transforms.view_values(name)
+        |> Enum.all?(&(not is_number(&1) or abs(&1) < most))
+      end)
+      |> if(do: :ok, else: {:error, :overflow})
+    end
+  end
+
+  @doc false
+  # Whether `Macaw.Data.Reduce.lttb/3`'s arithmetic over a merged partial's candidates holds
+  # (spec/04 §4.4, macaw_data#181): a bucket's sum of x and of y, and twice the largest
+  # triangle over the x extent and the y range, each below half the largest float. Read once
+  # off the pieces, so neither the Elixir path nor the kernel checks a point, and both answer
+  # alike: past it the kernel's infinities would choose where the Elixir path raised.
+  @spec lttb_holds?(partial(), {number(), number()} | nil) :: boolean()
+  def lttb_holds?(_merged, nil), do: true
+
+  def lttb_holds?({_k, _views, pieces}, {x_lo, x_hi}) do
+    {buckets, y_lo, y_hi} =
+      Enum.reduce(pieces, {0, nil, nil}, fn {_v, piece}, {n, lo, hi} ->
+        case Packed.y_range(piece) do
+          {0, _, _} -> {n, lo, hi}
+          {m, low, high} -> {n + m, low_of(lo, low), high_of(hi, high)}
+        end
+      end)
+
+    if buckets == 0 do
+      true
+    else
+      points = 4 * buckets
+      x_most = max(abs(x_lo), abs(x_hi))
+      y_most = max(abs(y_lo), abs(y_hi))
+
+      below_half?(Checked.multiply(points, x_most)) and
+        below_half?(Checked.multiply(points, y_most)) and
+        below_half?(Checked.multiply(4, Checked.multiply(x_hi - x_lo, y_hi - y_lo)))
+    end
+  end
+
+  defp below_half?(:overflow), do: false
+  defp below_half?(value), do: value < @half
+
+  defp low_of(nil, v), do: v
+  defp low_of(lo, v), do: min(lo, v)
+  defp high_of(nil, v), do: v
+  defp high_of(hi, v), do: max(hi, v)
 
   defp kind(nil, :time), do: {:ok, :time}
   defp kind(nil, _type), do: {:ok, :linear}
