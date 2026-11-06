@@ -553,7 +553,7 @@ defmodule Macaw.Data.Source.Push do
       table
       |> Table.chunks()
       |> Enum.reduce_while(0, fn {chunk, first, count}, n ->
-        if before?(Chunk.values(chunk, name, first, count), from),
+        if wholly_before?(chunk, name, first, count, from),
           do: {:cont, n + count},
           else: {:halt, n}
       end)
@@ -571,9 +571,15 @@ defmodule Macaw.Data.Source.Push do
     %{push | held: held, trimmed: Window.latest(push.trimmed, from)}
   end
 
-  # Every value before `from`: a value with none (a row of no window value) is not.
-  defp before?(values, from),
-    do: Enum.all?(values, &(&1 != nil and Window.compare(&1, from) == :lt))
+  # Every value of the run before `from`. The held rows are in the window field's order,
+  # a row of no window value last (spec/01 §4), so the run's last value decides: nil keeps
+  # the run, and one before `from` has every other before it. A table holds no empty run.
+  defp wholly_before?(chunk, name, first, count, from) do
+    case Chunk.values(chunk, name, first + count - 1, 1) do
+      [nil] -> false
+      [last] -> Window.compare(last, from) == :lt
+    end
+  end
 
   # A replace range wholly before the trimmed start (its `to`, exclusive, at or before
   # it) is data the holder dropped: counted, not applied.

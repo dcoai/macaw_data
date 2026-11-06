@@ -901,12 +901,17 @@ The subscriber holds a `Macaw.Data.Source.Push`, a value, not a process: `receiv
 
 **A holder whose window slides trims its holding** (macaw_data#123): `trim(push, from)` answers `{:ok, push}` without the held chunks wholly before `from` in the window field's order, or `{:error, [{[:from], {:type, type}}]}` for a `from` not of the window field's type (a time of any kind for a `:time` field, compared on the instant scale, §2.4; a number for a `:number` one); `trim!/2` raises.
 - **Only whole chunks are dropped:** each chunk whose every window value is before `from`, through `Table.trim/2` over those chunks' rows (§1.1.1), so nothing is copied or cut and every chunk kept is the same chunk, by id and version (§1.1.3). A chunk straddling `from` is kept whole, since finishing trims its rows (§2.4). The held rows are in the window field's order (a row of no window value last), so what is kept is a suffix holding every row at or after `from`.
+- **A chunk's last value decides** (macaw_data#201): since the held rows are in that order, a run is wholly before `from` exactly when its last value is before `from`, and a last value of none keeps it. So a trim reads one value of each chunk it walks, costing the chunks and never the rows in them. A trim that drops one chunk and reads another of 8,192 rows is under 5,000 reductions.
 - **The served window is narrowed, never widened:** it starts at `from`, or at the held start where that is later. Its upper end and `complete_until` (§4.4) are unchanged. A box (§3) has no start to narrow, so it stays as it is, while the chunks still drop (macaw_data#177).
 - **It is a no-op** when nothing is held, when the schema has no window field, for a `:point` window field, which has no order, and for a `nil` `from`, an open start.
 - **The trimmed start is kept,** and a change before it is counted rather than refused (§4.2).
 
 ```test:push-trim
 a trim drops the chunks wholly before from and keeps every other by id and version, a straddling chunk whole; the served window starts at from or the held start, its upper end and complete_until unchanged, never widened by an earlier from or a second trim; a time window trims by instant whatever kind from is; nothing held, no window field, a point window field and a nil from are no-ops, a from of the wrong type a fault; for generated holdings, spans and froms the kept rows are a suffix of the held holding every row at or after from, its chunks the held chunks
+```
+
+```test:push-trim-last-value
+for generated holdings of number and time window fields, every kind of time and mixed kinds, through insertions, late insertions, retractions, range replacements, settled deltas, earlier trims, rows of no window value and runs that are views of a chunk, a trim keeps exactly what reading every value would; a settled chunk's delta is read through, its last row retracted or placed; a trim dropping one chunk and reading another of 8,192 rows is under 5,000 reductions
 ```
 
 ```test:push-trim-box

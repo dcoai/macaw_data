@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **`Macaw.Data.Source.Push.trim/2` reads each chunk's last value** (#201, spec/01 §4). It decoded every chunk it walked and compared each value until one wasn't before `from`, so its cost followed the rows. On a 50,000-row holding a sliding trim costs about 290 reductions where it cost about 437,000, and it keeps what it kept.
+
 ## v0.13.0 (2026-11-05)
 
 **Errors are values past the readers: every reader has a `!` twin, an improper list and arithmetic past a float's range answer faults, and `Macaw.Data.Reduce`, `Macaw.Data.FFT` and `Macaw.Data.Source`'s dispatch answer values** (#184, #169, #181, #185, #193, #192, #191, #195). A breaking change for a direct caller of `Macaw.Data.Reduce` or `Macaw.Data.FFT`, and new `!` twins.

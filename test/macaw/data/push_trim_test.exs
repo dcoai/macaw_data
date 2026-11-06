@@ -7,7 +7,7 @@ defmodule Macaw.Data.PushTrimTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
-  alias Macaw.Data.{Delivery, Schema, Table}
+  alias Macaw.Data.{Delivery, Schema, Table, Window}
   alias Macaw.Data.Schema.Cache
   alias Macaw.Data.Source.Push
   alias Macaw.Data.Table.Chunk
@@ -18,6 +18,9 @@ defmodule Macaw.Data.PushTrimTest do
             "v" => %{type: :number}
           })
   @version Schema.version(@schema)
+
+  # Reductions for a trim that drops one chunk and reads another of 8,192 rows.
+  @trim_budget 5_000
 
   defp push(schema \\ @schema),
     do: Push.new!(:ticks, make_ref(), cache: Cache.new([{:ticks, schema}]), chunk_span: 10)
@@ -214,4 +217,240 @@ defmodule Macaw.Data.PushTrimTest do
       assert dropped in Enum.scan([0 | Enum.map(chunks(push), &elem(&1, 3))], &(&1 + &2))
     end
   end
+
+  # -- the last value decides (macaw_data#201) ---------------------------------------------
+
+  # What reading every value drops, the decision the last value stands in for.
+  defp every_value_dropped(table, name, from) do
+    table
+    |> Table.chunks()
+    |> Enum.reduce_while(0, fn {chunk, first, count}, n ->
+      if Enum.all?(
+           Chunk.values(chunk, name, first, count),
+           &(&1 != nil and Window.compare(&1, from) == :lt)
+         ),
+         do: {:cont, n + count},
+         else: {:halt, n}
+    end)
+  end
+
+  defp assert_same_decision(push, from) do
+    table = Push.held(push).rows
+    held = Table.column(table, "t")
+
+    # The held order the decision stands on, in the form the failure should name.
+    positions = Enum.map(held, &Window.position/1)
+    {present, absent} = Enum.split_while(positions, &(&1 != nil))
+    assert present == Enum.sort(present)
+    assert Enum.all?(absent, &is_nil/1)
+
+    dropped = every_value_dropped(table, "t", from)
+    assert {:ok, trimmed} = Push.trim(push, from)
+    assert Table.column(Push.held(trimmed).rows, "t") == Enum.drop(held, dropped)
+    trimmed
+  end
+
+  @time_schema Schema.new!(%{
+                 "id" => %{type: :category, identity: true},
+                 "t" => %{type: :time, window: true},
+                 "v" => %{type: :number}
+               })
+
+  # A generated position as a value of the kind: days from a fixed date, and a fixed
+  # offset for a zoned time, so each kind's order is its positions' order.
+  defp at(_kind, nil), do: nil
+  defp at(:integer, i), do: i
+  defp at(:float, i), do: i * 1.0
+  defp at(:utc, i), do: DateTime.add(~U[2026-01-01 00:00:00Z], i * 86_400)
+  defp at(:naive, i), do: NaiveDateTime.add(~N[2026-01-01 00:00:00], i * 86_400)
+  defp at(:date, i), do: Date.add(~D[2026-01-01], i)
+
+  defp at(:zoned, i),
+    do: %{at(:utc, i) | utc_offset: 3600, time_zone: "Etc/GMT-1", zone_abbr: "+01"}
+
+  defp at(:mixed, i), do: at(Enum.at([:utc, :naive, :date, :zoned], Integer.mod(i, 4)), i)
+
+  defp span(kind, n) when kind in [:integer, :float], do: n
+  defp span(_kind, nil), do: nil
+  defp span(_kind, n), do: Duration.new!(second: n * 86_400)
+
+  defp schema_of(kind) when kind in [:integer, :float], do: @schema
+  defp schema_of(_kind), do: @time_schema
+
+  defp step(kind, push, seq, {:rows, is}),
+    do: send_change(kind, push, seq, rows: Enum.map(is, &at_row(kind, &1)))
+
+  defp step(kind, push, seq, {:retract, i}),
+    do: send_change(kind, push, seq, retracted: [at_row(kind, i)])
+
+  defp step(kind, push, seq, {:replace, from, to, is}) do
+    range = %{from: at(kind, from), to: at(kind, to), rows: Enum.map(is, &at_row(kind, &1))}
+    send_change(kind, push, seq, replace: [range])
+  end
+
+  defp step(kind, push, seq, {:settle, i}),
+    do: send_change(kind, push, seq, served: [complete_until: at(kind, i)])
+
+  defp at_row(kind, i), do: %{"id" => "a", "t" => at(kind, i), "v" => 1}
+
+  defp send_change(kind, push, seq, opts) do
+    {rows, opts} = Keyword.pop(opts, :rows, [])
+    d = Delivery.new!(rows, [schema: Schema.version(schema_of(kind))] ++ opts)
+    {:ok, push} = Push.receive(push, Push.increment_message(push.ref, seq, d))
+    drain(push)
+  end
+
+  # A step of a holding's life, a position nil now and then.
+  defp life_step do
+    position = integer(-30..30)
+    maybe = frequency([{9, position}, {1, constant(nil)}])
+
+    one_of([
+      map(list_of(maybe, max_length: 6), &{:rows, &1}),
+      map(position, &{:retract, &1}),
+      map(
+        tuple({position, integer(0..12), list_of(position, max_length: 3)}),
+        fn {from, width, is} -> {:replace, from, from + width, is} end
+      ),
+      map(position, &{:settle, &1}),
+      map(position, &{:trim, &1})
+    ])
+  end
+
+  @tag verifies: "push-trim-last-value"
+  property "a chunk's last value decides as reading every value does, on every holding" do
+    check all(
+            kind <- member_of([:integer, :float, :utc, :naive, :date, :zoned, :mixed]),
+            start <-
+              list_of(frequency([{9, integer(-30..30)}, {1, constant(nil)}]), max_length: 40),
+            span <- member_of([nil, 1, 5, 10, 25]),
+            settled <- one_of([constant(nil), integer(0..30)]),
+            steps <- list_of(life_step(), max_length: 8),
+            view <- one_of([constant(nil), tuple({integer(0..60), integer(0..60)})]),
+            from <- integer(-40..40),
+            from_kind <- member_of([:same, :other])
+          ) do
+      schema = schema_of(kind)
+
+      push =
+        Push.new!(:ticks, make_ref(),
+          cache: Cache.new([{:ticks, schema}]),
+          chunk_span: span(kind, span)
+        )
+        |> Push.snapshot(
+          Delivery.new!(Enum.map(start, &at_row(kind, &1)),
+            schema: Schema.version(schema),
+            served: [position: 0, complete_until: at(kind, settled)]
+          )
+        )
+        |> drain()
+
+      {push, _seq} =
+        Enum.reduce(steps, {push, 1}, fn
+          {:trim, i}, {push, seq} ->
+            {assert_same_decision(push, at(kind, i)), seq}
+
+          other, {push, seq} ->
+            {step(kind, push, seq, other), seq + 1}
+        end)
+
+      push = viewed(push, view)
+
+      from =
+        case {kind, from_kind} do
+          {kind, :other} when kind in [:integer, :float] -> at(:float, from)
+          {_kind, :other} -> at(:naive, from)
+          {kind, :same} -> at(kind, from)
+        end
+
+      assert_same_decision(push, from)
+    end
+  end
+
+  # The holding as a run of its rows, so a chunk's view starts and ends inside it.
+  defp viewed(push, nil), do: push
+
+  defp viewed(push, {a, b}) do
+    held = Push.held(push)
+    size = Table.size(held.rows)
+    start = rem(a, size + 1)
+    count = rem(b, size - start + 1)
+    %{push | held: %{held | rows: Table.slice(held.rows, start, count)}}
+  end
+
+  @tag verifies: "push-trim-last-value"
+  test "a settled chunk's delta is read through: its last row retracted, placed, or all of them" do
+    push =
+      holding(0..14, position: 0, complete_until: 10)
+      |> change(1, retracted: [row(9)])
+
+    assert [{settled, _, 9}, {_open, _, 5} | _] = Table.chunks(Push.held(push).rows)
+    assert Chunk.delta?(settled)
+
+    # 8 is the chunk's last now, so 9 drops it where the row retracted would have kept it.
+    assert {:ok, kept} = Push.trim(push, 8)
+    assert ts(kept) == ts(push)
+    assert {:ok, gone} = Push.trim(push, 9)
+    assert ts(gone) == Enum.to_list(10..14)
+    assert_same_decision(push, 8)
+    assert_same_decision(push, 9)
+
+    # A late row placed in the settled chunk becomes its last, and keeps it.
+    placed = change(push, 2, rows: [row(9)])
+    assert {:ok, again} = Push.trim(placed, 9)
+    assert ts(again) == ts(placed)
+
+    # A settled chunk with no rows left isn't a run of the table, so no run is empty.
+    empty = change(push, 2, replace: [%{from: 0, to: 10, rows: []}])
+    assert [{_open, 0, 5} | _] = Table.chunks(Push.held(empty).rows)
+    assert_same_decision(empty, -100)
+    assert_same_decision(empty, 12)
+  end
+
+  @tag verifies: "push-trim-last-value"
+  test "a row of no window value keeps its chunk, whatever the values before it" do
+    d = Delivery.new!(Enum.map([0, 1, 2, nil], &row/1), schema: @version, served: [position: 0])
+    push = @schema |> push_without_span() |> Push.snapshot(d) |> drain()
+
+    assert [{_chunk, 0, 4}] = Table.chunks(Push.held(push).rows)
+    assert {:ok, kept} = Push.trim(push, 100)
+    assert ts(kept) == [0, 1, 2, nil]
+    assert_same_decision(push, 100)
+
+    # On a span a row of no window value lies in no slot, so it is a chunk of its own.
+    spanned = holding([0, 1, 2, nil])
+    assert {:ok, trimmed} = Push.trim(spanned, 100)
+    assert ts(trimmed) == [nil]
+    assert_same_decision(spanned, 100)
+  end
+
+  @tag verifies: "push-trim-last-value"
+  test "a trim costs the chunks it walks, never the rows in them" do
+    start = ~U[2026-01-01 00:00:00Z]
+    rows = for i <- 0..49_999, do: %{"id" => "a", "t" => DateTime.add(start, i), "v" => 1}
+
+    snapshot =
+      Delivery.new!(rows,
+        schema: Schema.version(@time_schema),
+        served: [position: 0, resolution: 1]
+      )
+
+    push = @time_schema |> push_without_span() |> Push.snapshot(snapshot) |> drain()
+
+    [{_, _, first}, {_, _, second} | _] = chunks = Table.chunks(Push.held(push).rows)
+    assert length(chunks) > 2 and second == Table.chunk_rows()
+
+    # Late in the second chunk: one chunk dropped, and one read and kept.
+    from = DateTime.add(start, first + second - 2)
+
+    {:reductions, before} = Process.info(self(), :reductions)
+    {:ok, trimmed} = Push.trim(push, from)
+    {:reductions, later} = Process.info(self(), :reductions)
+
+    assert length(Table.chunks(Push.held(trimmed).rows)) == length(chunks) - 1
+    assert later - before < @trim_budget
+  end
+
+  defp push_without_span(schema),
+    do: Push.new!(:ticks, make_ref(), cache: Cache.new([{:ticks, schema}]))
 end
