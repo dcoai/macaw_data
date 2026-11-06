@@ -1,6 +1,31 @@
 # Changelog
 
-## Unreleased
+## v0.13.1 (2026-11-06)
+
+**A sliding `Macaw.Data.Source.Push.trim/2` costs almost nothing** (#201). It decides from each chunk's last value and no longer decodes and compares the chunk's rows, so a holder that trims every frame stops paying for it.
+
+### Upgrading from 0.13.0
+
+No working call changes, and there is no new API: `trim/2` answers what it answered. Each cost below is before to after.
+
+- **A whole `trim/2`,** 50,000 `DateTime` rows in 7 chunks (the first 1,792 rows, then 8,192), median of 9:
+
+  | `from` | Reductions | ms |
+  |---|---|---|
+  | at the first row | 25,892 → 139 | 1.228 → 0.003 |
+  | late in the first chunk | 159,711 → 139 | 4.209 → 0.005 |
+  | past three chunks, late in the fourth | 2,173,879 → 467 | 55.142 → 0.011 |
+  | past every chunk | 4,144,984 → 768 | 147.217 → 0.018 |
+
+- **A frame,** `Macaw.Data.Test.LiveLoop` plus a trim each frame, kernels loaded, median of 15 frames from one run per version, 0.13.0 to 0.13.1. The ms are noisy between runs, so read the reductions.
+
+  | Setup | Reductions | ms |
+  |---|---|---|
+  | no budget | 2,005,232 → 1,555,543 | 60.74 → 44.63 |
+  | budget 2,000, `lttb` | 2,665,483 → 2,196,671 | 75.64 → 66.46 |
+  | budget 2,000, `m4` | 2,552,940 → 2,139,423 | 68.09 → 60.83 |
+
+### Changes
 
 - **`Macaw.Data.Source.Push.trim/2` reads each chunk's last value** (#201, spec/01 §4). It decoded every chunk it walked and compared each value until one wasn't before `from`, so its cost followed the rows. On a 50,000-row holding a sliding trim costs about 290 reductions where it cost about 437,000, and it keeps what it kept.
 
