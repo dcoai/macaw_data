@@ -7,8 +7,8 @@ defmodule Macaw.Data.Table.Column.Append do
   # from it is the chunk a full rewrite builds; `:repack` wherever it might not be, and
   # the caller packs every value again.
   #
-  # Each piece must be packed from its own values (`Column.pack/3`) or be a slice from
-  # the start of such a column (`Column.slice/3`). A form is joined only where packing
+  # Each piece must be packed from its own values (`Column.pack/3`) or be `head/2` of
+  # such a column. A form is joined only where packing
   # the values together picks the same form:
   #
   # - int64 and int64, float64 and float64, date and date: their buffers and validity
@@ -22,11 +22,10 @@ defmodule Macaw.Data.Table.Column.Append do
   # - text and text, binary and binary: the data joined, offsets moved, while the whole
   #   fits int32 offsets. A string's validity as UTF-8 is its own, so the pair keeps its
   #   form; text beside binary is repacked.
-  # - dictionary and dictionary, only when the first piece is a whole column
-  #   (`whole?`): its dictionary is then its strings in first-appearance order, and
-  #   joining it with the second's in order is the order packing every value gives. A
-  #   slice keeps its column's whole dictionary, strings its rows may lack, so it is
-  #   repacked.
+  # - dictionary and dictionary: the first piece's dictionary is its strings in
+  #   first-appearance order, and joining it with the second's in order is the order
+  #   packing every value gives. A slice keeps its column's whole dictionary, strings its
+  #   rows may lack, so the kept rows are cut by `head/2` to the strings they hold.
   #
   # Every other form (integral, union, zoned, bool, list) is repacked.
 
@@ -35,9 +34,9 @@ defmodule Macaw.Data.Table.Column.Append do
   alias Macaw.Data.Table.Column
 
   @doc false
-  @spec append({Column.t(), non_neg_integer()}, {Column.t(), non_neg_integer()}, boolean()) ::
+  @spec append({Column.t(), non_neg_integer()}, {Column.t(), non_neg_integer()}) ::
           {:ok, Column.t()} | :repack
-  def append({head, n}, {tail, m}, whole?) do
+  def append({head, n}, {tail, m}) do
     case {head, tail} do
       {{form, _, _}, {form, _, _}} when form in [:int64, :float64, :date] ->
         concat(head, n, tail, m)
@@ -52,12 +51,53 @@ defmodule Macaw.Data.Table.Column.Append do
       when form in [:text, :binary] and is_binary(data) ->
         concat(head, n, tail, m)
 
-      {{:dictionary, _, _, _, _}, {:dictionary, _, _, _, _}} when whole? ->
+      {{:dictionary, _, _, _, _}, {:dictionary, _, _, _, _}} ->
         concat(head, n, tail, m)
 
       _other ->
         :repack
     end
+  end
+
+  @doc false
+  # The first `at` values of a column packed from its own values, as `append/2` takes
+  # them: a slice (`Column.slice/3`), a dictionary's cut to the strings those values
+  # hold. Codes number strings in first-appearance order, so the kept values hold codes
+  # 0 to k - 1 and their strings are the dictionary's first k: the dictionary packing
+  # them alone gives.
+  @spec head(Column.t(), non_neg_integer()) :: Column.t()
+  def head({:dictionary, _codes, _validity, _dictionary, _booleans} = column, at) do
+    {:dictionary, codes, validity, {offsets, data}, booleans} = Column.slice(column, 0, at)
+    k = held_strings(codes, validity, booleans, at)
+    <<_::binary-size(^k * 4), last::signed-little-32, _::binary>> = offsets
+
+    {:dictionary, codes, validity,
+     {binary_part(offsets, 0, (k + 1) * 4), binary_part(data, 0, last)}, booleans}
+  end
+
+  def head(column, at), do: Column.slice(column, 0, at)
+
+  # How many strings the first `n` slots hold: one past the largest code, or none where
+  # no slot holds a string (a missing or boolean slot holds code 0).
+  defp held_strings(codes, validity, booleans, n) do
+    case Enum.reduce(for(<<c::little-32 <- codes>>, do: c), 0, &max/2) do
+      0 -> if holds_string?(validity, booleans, n), do: 1, else: 0
+      top -> top + 1
+    end
+  end
+
+  defp holds_string?(_validity, _booleans, 0), do: false
+
+  defp holds_string?(validity, booleans, n) do
+    mask = (1 <<< n) - 1
+    kinds = if booleans, do: int(elem(booleans, 0)), else: 0
+    (int(validity) &&& bnot(kinds) &&& mask) != 0
+  end
+
+  defp int(bitmap) do
+    size = byte_size(bitmap)
+    <<x::little-size(^size * 8)>> = bitmap
+    x
   end
 
   defp concat(head, n, tail, m) do
@@ -87,9 +127,5 @@ defmodule Macaw.Data.Table.Column.Append do
   # Whether any of the first `n` bits of a validity bitmap is set.
   defp present?(_validity, 0), do: false
 
-  defp present?(validity, n) do
-    size = byte_size(validity)
-    <<x::little-size(^size * 8)>> = validity
-    (x &&& (1 <<< n) - 1) != 0
-  end
+  defp present?(validity, n), do: (int(validity) &&& (1 <<< n) - 1) != 0
 end

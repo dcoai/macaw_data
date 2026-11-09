@@ -108,6 +108,8 @@ defmodule Macaw.Data.TableOpenWriteTest do
   defp case_gen do
     gen all(
           window_type <- member_of([:number, :time]),
+          # Columns a holding lacks, so a late group often meets only columns that join.
+          dropped <- member_of([[], [], ["c"], ["c", "s"]]),
           kind <- kinds(window_type),
           held_at <-
             list_of(one_of([integer(0..60), integer(0..60), constant(nil)]), max_length: 40),
@@ -128,7 +130,16 @@ defmodule Macaw.Data.TableOpenWriteTest do
               end)
             )
         ) do
-      %{window_type: window_type, kind: kind, held: held, steps: steps}
+      drop = &Map.drop(&1, dropped)
+      steps = for {rows, r, s} <- steps, do: {Enum.map(rows, drop), r, s}
+
+      %{
+        window_type: window_type,
+        kind: kind,
+        held: Enum.map(held, drop),
+        steps: steps,
+        dropped: dropped
+      }
     end
   end
 
@@ -142,10 +153,11 @@ defmodule Macaw.Data.TableOpenWriteTest do
   defp order_key(nil), do: {1, 0}
   defp order_key(p), do: {0, p}
 
-  defp table(%{window_type: w, held: held}) do
+  defp table(%{window_type: w, held: held} = c) do
     rows = sorted(held)
+    header = Enum.reject(header(w), fn {name, _} -> name in Map.get(c, :dropped, []) end)
 
-    Table.new!(for({name, type} <- header(w), do: {name, type, Enum.map(rows, & &1[name])}),
+    Table.new!(for({name, type} <- header, do: {name, type, Enum.map(rows, & &1[name])}),
       origin: origin(w)
     )
   end
@@ -155,8 +167,10 @@ defmodule Macaw.Data.TableOpenWriteTest do
   defp settled(p, :naive), do: NaiveDateTime.add(@n0, p)
   defp settled(p, _utc), do: DateTime.add(@t0, p)
 
-  defp state(%Table{} = table, w),
-    do: %{header: header(w), origin: Table.origin(table), chunks: chunks(table), next: table.next}
+  defp state(%Table{} = table) do
+    header = for name <- Table.names(table), do: {name, Table.column_type(table, name)}
+    %{header: header, origin: Table.origin(table), chunks: chunks(table), next: table.next}
+  end
 
   defp chunks(table), do: for({chunk, 0, _n} <- Table.chunks(table), do: chunk)
 
@@ -174,7 +188,7 @@ defmodule Macaw.Data.TableOpenWriteTest do
         thinned: false
       }
 
-      assert same?(table, w, change)
+      assert same?(table, change)
       {table, _faults, _unheld} = Table.apply(table, change)
       table
     end)
@@ -183,9 +197,9 @@ defmodule Macaw.Data.TableOpenWriteTest do
   # `Table.apply/2` against the full rewrite from the same chunks: the same chunks, a chunk
   # left with no row being none, as `Table.apply/2` holds them; the same next position,
   # faults and unheld count.
-  defp same?(table, w, change) do
+  defp same?(table, change) do
     {applied, faults, unheld} = Table.apply(table, change)
-    {chunks, next, ref_faults, ref_unheld} = ApplyReference.run(state(table, w), change)
+    {chunks, next, ref_faults, ref_unheld} = ApplyReference.run(state(table), change)
 
     assert chunks(applied) == Enum.reject(chunks, &(Chunk.size(&1) == 0))
     {applied.next, faults, unheld} == {next, ref_faults, ref_unheld}
@@ -229,7 +243,7 @@ defmodule Macaw.Data.TableOpenWriteTest do
         thinned: false
       }
 
-      assert same?(table, :time, change)
+      assert same?(table, change)
     end
   end
 end

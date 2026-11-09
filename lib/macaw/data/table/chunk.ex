@@ -230,42 +230,72 @@ defmodule Macaw.Data.Table.Chunk do
     end
   end
 
-  # The chunk with `rows` after its own, the same id, hashed once more (macaw_data#204):
-  # `rows` packed by themselves and each column joined after the chunk's as it lies
-  # (`Column.Append`), so the held rows are neither read nor packed again. `{:ok, chunk}`
-  # only where every join is exactly what packing all the rows gives, so the chunk is the
-  # one `of_rows/3` builds of its rows and then `rows`; `:repack` for any other, and for a
-  # chunk not packed from its own rows here (a delta, a cold base, a step's output).
-  # `packed`, where given, is `rows` already packed as `of_rows/3` packs them.
+  # The chunk written again from row `at` (macaw_data#204): its first `at` rows kept as
+  # they lie, `rows` after them, the same id, hashed once more. `rows` are packed by
+  # themselves and each column joined after the kept rows' (`Column.Append`), so the kept
+  # rows are neither read nor packed again; at `at` = its size the rows are appended. `{:ok,
+  # chunk}` only where every join is exactly what packing all the rows gives, so the chunk
+  # is the one `of_rows/3` builds of its kept rows and then `rows`; `:repack` for any
+  # other, and for a chunk not packed from its own rows here (a delta, a cold base, a
+  # step's output). `packed`, where given, is `rows` already packed as `of_rows/3` packs
+  # them.
   @doc false
-  @spec append(t(), [map()], %{term() => Column.t()} | nil) :: {:ok, t()} | :repack
-  def append(chunk, rows, packed \\ nil)
+  @spec written_from(t(), non_neg_integer(), [map()], %{term() => Column.t()} | nil) ::
+          {:ok, t()} | :repack
+  def written_from(chunk, at, rows, packed \\ nil)
 
-  def append(
-        %__MODULE__{delta: nil, fetch: nil, derivation: nil, digest: d} = chunk,
+  def written_from(
+        %__MODULE__{delta: nil, fetch: nil, derivation: nil, digest: d, size: size} = chunk,
+        at,
         rows,
         packed
       )
-      when is_binary(d) do
+      when is_binary(d) and is_integer(at) and at >= 0 and at <= size do
     m = length(rows)
 
     with {:ok, added} <- if(packed, do: {:ok, packed}, else: pack(chunk.header, rows)),
-         {:ok, columns} <- joined(chunk, added, m) do
-      {:ok, build(chunk.header, columns, chunk.size + m, chunk.id)}
+         {:ok, columns} <- joined(chunk, at, added, m) do
+      {:ok, build(chunk.header, columns, at + m, chunk.id)}
     else
       _repack -> :repack
     end
   end
 
-  def append(%__MODULE__{}, _rows, _packed), do: :repack
+  def written_from(%__MODULE__{}, _at, _rows, _packed), do: :repack
 
-  defp joined(chunk, added, m) do
+  # Nothing kept: the rows are the whole chunk, as packed.
+  defp joined(_chunk, 0, added, _m), do: {:ok, added}
+
+  defp joined(chunk, at, added, m) do
     Enum.reduce_while(chunk.header, {:ok, %{}}, fn {name, _type}, {:ok, columns} ->
-      case Append.append({chunk.columns[name], chunk.size}, {added[name], m}, true) do
+      kept =
+        if at == chunk.size, do: chunk.columns[name], else: Append.head(chunk.columns[name], at)
+
+      case Append.append({kept, at}, {added[name], m}) do
         {:ok, column} -> {:cont, {:ok, Map.put(columns, name, column)}}
         :repack -> {:halt, :repack}
       end
     end)
+  end
+
+  # The run of `count` rows from `first`, as row maps keyed by column name, as read: each
+  # column of the run decoded once (macaw_data#204, the rows a late insertion moves).
+  @doc false
+  @spec rows(t(), non_neg_integer(), non_neg_integer()) :: [map()]
+  def rows(%__MODULE__{}, _first, 0), do: []
+
+  def rows(%__MODULE__{header: header} = chunk, first, count) do
+    names = for {name, _type} <- header, do: name
+
+    case names do
+      [] ->
+        List.duplicate(%{}, count)
+
+      _ ->
+        names
+        |> Enum.map(&values(chunk, &1, first, count))
+        |> Enum.zip_with(&Map.new(Enum.zip(names, &1)))
+    end
   end
 
   defp pack(header, rows) do

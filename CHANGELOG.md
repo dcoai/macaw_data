@@ -14,6 +14,13 @@
   | half (4,056) | 1,098,685 → 422,709 | 23.5 → 6.0 |
   | nearly full (7,056) | 1,551,511 → 439,513 | 33.1 → 5.7 |
   | first after the snapshot | 10,266,302 → 785,865 | 171.7 → 7.4 |
+- **A late increment rewrites only the held rows after the first it moves** (#204, #214, spec/01 §1.1.4). The first held row later than the increment's earliest is found by binary search over the open chunk's packed window column; the rows before it are kept as they lie, and only those after it are read, merged with the increment and packed. A dictionary column now joins at any split, its kept rows' dictionary cut to the strings they hold. No answer changes. A late 1,000-row increment into the nearly full open chunk (7,056 rows), starting before its last row by:
+
+  | Starts | Reductions | ms |
+  |---|---|---|
+  | 500 s | 1,567,584 → 611,530 | 43.8 → 8.3 |
+  | 3,000 s | 1,571,582 → 911,552 | 43.4 → 19.6 |
+  | 7,000 s | 1,575,583 → 1,243,565 | 39.3 → 33.2 |
 
 ## v0.13.1 (2026-11-06)
 

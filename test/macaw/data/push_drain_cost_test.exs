@@ -22,13 +22,17 @@ defmodule Macaw.Data.PushDrainCostTest do
   # How much more a drain into a nearly full open chunk may cost than into a nearly empty
   # one: measured 36,891 (1,054,975 before).
   @growth_budget 80_000
+  # A late 1,000-row increment, from 500 seconds before the open chunk's last row, into
+  # the nearly full chunk: measured 611,530 (1,567,584 before macaw_data#214).
+  @late_budget 800_000
 
   defp describe(_name), do: {:error, :pushed}
 
-  # The loop with its next increment received, not yet drained.
-  defp received(loop) do
+  # The loop with its next increment received, not yet drained: from `back` seconds
+  # before the next reading.
+  defp received(loop, back \\ 0) do
     increment =
-      Delivery.new!(LiveLoop.readings(loop.next, LiveLoop.step()),
+      Delivery.new!(LiveLoop.readings(loop.next - back, LiveLoop.step()),
         schema: Schema.version(LiveLoop.schema()),
         served: [resolution: 1]
       )
@@ -72,6 +76,15 @@ defmodule Macaw.Data.PushDrainCostTest do
 
     assert nearly_full < @drain_budget, "drain into a nearly full open chunk: #{nearly_full}"
     assert nearly_full - nearly_empty < @growth_budget, "#{nearly_empty} to #{nearly_full}"
+  end
+
+  @tag verifies: "push-drain-cost"
+  test "a late 1,000-row drain costs the rows after the first it moves, not every row held" do
+    full = frames(LiveLoop.start(nil), 8)
+    assert open_rows(received(full)) == 7_056
+
+    late = full |> received(500) |> drain_work()
+    assert late < @late_budget, "late drain into a nearly full open chunk: #{late}"
   end
 
   # -- the served window's ends -----------------------------------------------------------

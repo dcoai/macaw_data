@@ -330,16 +330,18 @@ defmodule Macaw.Data.Table.Apply do
 
   # An open chunk with `group` inserted, kept in the window field's order, a held row
   # first among equal values (spec/01 §1.1.4) (macaw_data#204). Only the group is sorted.
-  # A group starting at or after the chunk's last row is packed and joined after the held
-  # columns as they lie (`Chunk.append/2`); any other, and any column the join can't keep
-  # exact, writes the chunk again from all its rows. Either way the chunk is the one
-  # packing its rows in order gives.
+  # The held rows up to the first one later than the group's earliest are kept as they
+  # lie; only those after it are read, merged with the group and packed, and joined after
+  # them (`Chunk.written_from/4`): a group starting at or after the last row is appended,
+  # nothing read. A chunk the split can't be found in (a delta, a window column of
+  # another form) and any column the join can't keep exact is written again from all its
+  # rows. Either way the chunk is the one packing its rows in order gives.
   defp written(chunk, group, rows, ctx) do
     group = ordered(group, ctx)
 
     with false <- Chunk.delta?(chunk) or Chunk.size(chunk) == 0,
-         true <- held_key(chunk, ctx) <= key(hd(group), ctx),
-         {:ok, chunk} <- Chunk.append(chunk, group, packed(group, rows, ctx)) do
+         at when is_integer(at) <- split(chunk, key(hd(group), ctx), ctx),
+         {:ok, chunk} <- moved(chunk, at, group, rows, ctx) do
       chunk
     else
       _rewrite ->
@@ -367,6 +369,92 @@ defmodule Macaw.Data.Table.Apply do
     case chunks do
       [] -> {-1, 0}
       _ -> chunks |> List.last() |> Chunk.read() |> List.last() |> elem(0) |> key(ctx)
+    end
+  end
+
+  # The held rows from `at` merged with the group, packed and joined after the rest.
+  defp moved(chunk, at, group, rows, ctx) do
+    case Chunk.size(chunk) - at do
+      0 ->
+        Chunk.written_from(chunk, at, group, packed(group, rows, ctx))
+
+      n ->
+        tail = Chunk.rows(chunk, at, n)
+        Chunk.written_from(chunk, at, merged(tail, group, ctx), nil)
+    end
+  end
+
+  # Two runs in the window field's order merged, the held row first among equals: the
+  # order a stable sort of the held rows and then the group gives.
+  defp merged(held, group, ctx), do: merged(held, group, ctx, [])
+
+  defp merged([], group, _ctx, acc), do: :lists.reverse(acc, group)
+  defp merged(held, [], _ctx, acc), do: :lists.reverse(acc, held)
+
+  defp merged([h | held] = hs, [g | group] = gs, ctx, acc) do
+    if key(h, ctx) <= key(g, ctx),
+      do: merged(held, gs, ctx, [h | acc]),
+      else: merged(hs, group, ctx, [g | acc])
+  end
+
+  # Where the group goes: the index of the first held row later than its earliest
+  # (`first`, an order key), so every row before it stays where it lies; the chunk's size
+  # when none is, read from its last row alone. Found by binary search over the window
+  # column's packed positions, which are in its order (spec/01 §1.5); `nil` for a column
+  # whose form holds no position to search.
+  defp split(chunk, first, ctx) do
+    size = Chunk.size(chunk)
+
+    cond do
+      held_key(chunk, ctx) <= first ->
+        size
+
+      probe = probe(Chunk.packed(chunk, ctx.time)) ->
+        search(probe, first, 0, size)
+
+      true ->
+        nil
+    end
+  end
+
+  # The first index in [lo, hi) whose key is after `first`, every key before it not.
+  defp search(_probe, _first, lo, lo), do: lo
+
+  defp search(probe, first, lo, hi) do
+    mid = div(lo + hi, 2)
+
+    if probe.(mid) > first,
+      do: search(probe, first, lo, mid),
+      else: search(probe, first, mid + 1, hi)
+  end
+
+  # The order key of row i, read from the window column's buffer as it lies: a time's
+  # instant (`Origin.position/1`'s microseconds), a number itself. A chunk of a slot holds
+  # a value in every row, so validity is not read.
+  defp probe({form, us, _validity, _precision}) when form in [:utc, :naive], do: int64(us)
+  defp probe({:zoned, us, _validity, _precision, _zones, _codes}), do: int64(us)
+  defp probe({:int64, data, _validity}), do: int64(data)
+
+  defp probe({:date, days, _validity}) do
+    fn i ->
+      <<d::signed-little-32>> = binary_part(days, i * 4, 4)
+      {0, d * 86_400_000_000}
+    end
+  end
+
+  defp probe({:float64, data, _validity}) do
+    fn i ->
+      <<v::float-little-64>> = binary_part(data, i * 8, 8)
+      {0, v}
+    end
+  end
+
+  defp probe(_column), do: nil
+
+  defp int64(data) do
+    fn i ->
+      <<v::signed-little-64>> = binary_part(data, i * 8, 8)
+      {0, v}
     end
   end
 
