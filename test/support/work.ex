@@ -79,16 +79,23 @@ defmodule Macaw.Data.Test.Work do
   The result comes back as a message, so a function that raises raises again in the
   caller, with its stack trace.
 
+  `native: :elixir` or `native: :normal_schedulers` runs it in that scope of
+  `Macaw.Data.Native`, set in the counted process itself (`Native.enter/1`), which ends
+  with the run. `Native.elixir/1` and `normal_schedulers/1` run their function in a process
+  of their own, so one called inside `fun` would do its work out of the counted process,
+  its collections and dirty calls untraced (macaw_data#101).
+
       iex> {work, 6} = Macaw.Data.Test.Work.reductions(fn -> Enum.sum([1, 2, 3]) end)
       iex> work > 0
       true
   """
-  @spec reductions((-> result)) :: {pos_integer(), result} when result: term()
-  def reductions(fun) when is_function(fun, 0) do
-    %{words: words} = run(fun, [])
+  @spec reductions((-> result), keyword()) :: {pos_integer(), result} when result: term()
+  def reductions(fun, opts \\ []) when is_function(fun, 0) do
+    scope = Keyword.get(opts, :native)
+    %{words: words} = run(fun, scope, [])
     heap = words + div(words, @margin) + @floor
 
-    case run(fun, min_heap_size: heap, min_bin_vheap_size: @bin_vheap) do
+    case run(fun, scope, min_heap_size: heap, min_bin_vheap_size: @bin_vheap) do
       %{collections: 0, dirty: 0, work: work, result: result} ->
         {work, result}
 
@@ -112,7 +119,7 @@ defmodule Macaw.Data.Test.Work do
   # dirty scheduler. The process knows its callers as a task does, so a log it writes is
   # captured with the test's. Every wait is on a message, with no `after`: the test's own
   # timeout bounds a run that never ends (spec/12 §6).
-  defp run(fun, options) do
+  defp run(fun, scope, options) do
     parent = self()
     callers = [parent | Process.get(:"$callers", [])]
     tag = make_ref()
@@ -121,6 +128,7 @@ defmodule Macaw.Data.Test.Work do
       :erlang.spawn_opt(
         fn ->
           Process.put(:"$callers", callers)
+          if scope, do: Macaw.Data.Native.enter(scope)
           receive do: (^tag -> :ok)
           {:reductions, before} = Process.info(self(), :reductions)
           result = fun.()

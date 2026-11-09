@@ -166,13 +166,13 @@ defmodule Macaw.Data.FinishColumnsCostTest do
 
     run = fn -> Finish.reduce(Delivery.new!(table), schema, 4_000) end
 
-    {elixir, {:ok, reduced}} = Work.reductions(fn -> Native.elixir(run) end)
+    {elixir, {:ok, reduced}} = Work.reductions(run, native: :elixir)
     assert Table.size(reduced.rows) <= 4_000
     assert reduced.served.reduced_by == :runtime
     assert elixir < 3_200_000, "Elixir path #{elixir}"
 
     if Native.loaded?() do
-      {kernels, {:ok, ^reduced}} = Work.reductions(fn -> Native.normal_schedulers(run) end)
+      {kernels, {:ok, ^reduced}} = Work.reductions(run, native: :normal_schedulers)
       assert kernels < 1_500_000, "kernels #{kernels}"
     end
   end
@@ -223,24 +223,20 @@ defmodule Macaw.Data.FinishColumnsCostTest do
     shuffled = Enum.shuffle(0..(n - 1))
 
     {gather, taken} =
-      Work.reductions(fn -> Native.elixir(fn -> Subset.at(fixed, shuffled) end) end)
+      Work.reductions(fn -> Subset.at(fixed, shuffled) end, native: :elixir)
 
     assert Table.column(taken, :a) == Enum.map(shuffled, &(&1 + 1))
     assert gather < 700_000
 
     {order, {:ok, ordered}} =
-      Work.reductions(fn ->
-        Native.elixir(fn -> finish(table, order: [{:cpu, :desc}]) end)
-      end)
+      Work.reductions(fn -> finish(table, order: [{:cpu, :desc}]) end, native: :elixir)
 
     assert Table.size(ordered.rows) == n
     assert order < 1_650_000
     assert order < transpose
 
     {by_time, {:ok, latest_first}} =
-      Work.reductions(fn ->
-        Native.elixir(fn -> finish(table, order: [{:t, :desc}]) end)
-      end)
+      Work.reductions(fn -> finish(table, order: [{:t, :desc}]) end, native: :elixir)
 
     assert hd(Table.column(latest_first.rows, :t)) == List.last(Table.column(table, :t))
     assert by_time < 1_400_000
@@ -253,7 +249,7 @@ defmodule Macaw.Data.FinishColumnsCostTest do
       ])
 
     {strings, taken} =
-      Work.reductions(fn -> Native.elixir(fn -> Subset.at(named, shuffled) end) end)
+      Work.reductions(fn -> Subset.at(named, shuffled) end, native: :elixir)
 
     assert Table.column(taken, :s) == Enum.map(shuffled, &"row-#{&1 + 1}")
     assert strings < 1_100_000

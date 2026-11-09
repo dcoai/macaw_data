@@ -335,8 +335,8 @@ defmodule Macaw.Data.Derived.EngineColumnsTest do
 
     assert Engine.faults(done) == %{}
     argument = Derived.argument(source, [%{name: "in", rows: input.(second), schema: @wide}])
-    {kernels, _} = Work.reductions(fn -> Native.normal_schedulers(fn -> fun.(argument) end) end)
-    {elixir, _} = Work.reductions(fn -> Native.elixir(fn -> fun.(argument) end) end)
+    {kernels, _} = Work.reductions(fn -> fun.(argument) end, native: :normal_schedulers)
+    {elixir, _} = Work.reductions(fn -> fun.(argument) end, native: :elixir)
     {engine_work + kernels, engine_work + elixir}
   end
 

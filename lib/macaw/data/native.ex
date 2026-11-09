@@ -46,39 +46,120 @@ defmodule Macaw.Data.Native do
   def active?, do: loaded?() and Process.get(@elixir) == nil
 
   @doc """
-  `fun`'s result, every step in this process run on its Elixir path while it runs, kernels
-  loaded or not. Reductions count no kernel's work, so a statement of work in reductions
-  is measured here; and the Elixir path is the reference a kernel is held equal to. Not
-  nested: the flag is cleared when `fun` returns.
+  `fun`'s result, every step in it run on its Elixir path, kernels loaded or not. The
+  Elixir path is the reference a kernel is held equal to, and with no kernel in it a run's
+  reductions count all its work.
+
+  `fun` runs in a process of its own (`scope!/2`), which holds the scope's flag and ends
+  with it, so no exit from `fun` leaves the caller's process on the Elixir path
+  (macaw_data#101). Its reductions are that process's: a count of them is taken inside it,
+  as `Macaw.Data.Test.Work.reductions(fun, native: :elixir)` takes it.
   """
   @spec elixir((-> result)) :: result when result: term()
-  def elixir(fun) when is_function(fun, 0) do
-    Process.put(@elixir, true)
-    result = fun.()
-    Process.delete(@elixir)
-    result
-  end
+  def elixir(fun) when is_function(fun, 0), do: scope!(:elixir, fun)
 
   @doc """
-  `fun`'s result, every kernel call in this process made on a normal scheduler while it
-  runs, whatever its size: `scheduler/1` and `finish_scheduler/1` answer `:normal`, and
-  `entry_limit/0` lifts the limit past which a normal `group_sum` call hands itself to a
-  dirty one. The same kernel runs either way; only the scheduler changes.
+  `fun`'s result, every kernel call in it made on a normal scheduler, whatever its size:
+  `scheduler/1` and `finish_scheduler/1` answer `:normal`, and `entry_limit/0` lifts the
+  limit past which a normal `group_sum` call hands itself to a dirty one. The same kernel
+  runs either way; only the scheduler changes.
 
   A kernel call on a normal scheduler is charged a fixed few reductions, whatever its
   time; one on a dirty CPU scheduler is charged by its time, about four a microsecond on
   the box #60 measured, so it counts more on a loaded host. A statement of work in
-  reductions with the kernels, such as the frame's (spec/04 §1.5.1), is measured here, and
-  `Macaw.Data.Test.Work` refuses a count with a dirty call in it. A call past the 1 ms rule
-  then holds its scheduler longer than the rule allows, so this is for measuring, never
-  for serving. Not nested: the flag is cleared when `fun` returns.
+  reductions with the kernels, such as the frame's (spec/04 §1.5.1), is counted inside
+  this scope, and `Macaw.Data.Test.Work` refuses a count with a dirty call in it. A call
+  past the 1 ms rule then holds its scheduler longer than the rule allows, so this is for
+  measuring, never for serving.
+
+  `fun` runs in a process of its own (`scope!/2`), as in `elixir/1`, so no exit from it
+  leaves the caller's process on normal schedulers; a count is taken inside that process,
+  as `Macaw.Data.Test.Work.reductions(fun, native: :normal_schedulers)` takes it.
   """
   @spec normal_schedulers((-> result)) :: result when result: term()
-  def normal_schedulers(fun) when is_function(fun, 0) do
-    Process.put(@normal, true)
-    result = fun.()
-    Process.delete(@normal)
-    result
+  def normal_schedulers(fun) when is_function(fun, 0), do: scope!(:normal_schedulers, fun)
+
+  @typedoc "A scope a function runs in: on the Elixir path, or with every kernel call normal."
+  @type scope :: :elixir | :normal_schedulers
+
+  @doc """
+  `fun` run in a process spawned for it alone, holding `scope`'s flag and the caller's
+  other one, its `$callers` and its minimum heap sizes: `{:ok, result}`, or `{:error,
+  {:down, reason}}` when it raised, threw or exited, `reason` its exit reason (`{exception,
+  stacktrace}` for a raise). The flag lives and ends with that process, so no exit from
+  `fun` can leave it set in the caller (spec/04 §1.7, macaw_data#101): a flag put in the
+  caller's dictionary and cleared after `fun` stayed set when a raise in `fun` was caught.
+  `fun` must not depend on the caller's mailbox or `self()`. Nothing outlives it but a
+  caller killed while it runs, which leaves it to finish alone.
+  """
+  @spec scope(scope(), (-> result)) :: {:ok, result} | {:error, {:down, term()}}
+        when result: term()
+  def scope(scope, fun) when scope in [:elixir, :normal_schedulers] and is_function(fun, 0) do
+    parent = self()
+    tag = make_ref()
+    flags = flags(scope)
+    callers = [parent | Process.get(:"$callers", [])]
+
+    heaps =
+      for key <- [:min_heap_size, :min_bin_vheap_size],
+          do: {key, elem(Process.info(parent, key), 1)}
+
+    {pid, monitor} =
+      :proc_lib.spawn_opt(
+        fn ->
+          Process.put(:"$callers", callers)
+          Enum.each(flags, fn {key, value} -> Process.put(key, value) end)
+          send(parent, {tag, fun.()})
+        end,
+        [:monitor | heaps]
+      )
+
+    receive do
+      {^tag, result} ->
+        Process.demonitor(monitor, [:flush])
+        {:ok, result}
+
+      {:DOWN, ^monitor, :process, ^pid, reason} ->
+        {:error, {:down, reason}}
+    end
+  end
+
+  @doc """
+  As `scope/2`, `fun`'s result alone; a raise, throw or exit in `fun` is passed on to the
+  caller as it ended `fun`'s process: the exception with its stack trace, the thrown value,
+  or the exit reason.
+  """
+  @spec scope!(scope(), (-> result)) :: result when result: term()
+  def scope!(scope, fun) do
+    case scope(scope, fun) do
+      {:ok, result} ->
+        result
+
+      {:error, {:down, {exception, stacktrace}}} when is_exception(exception) ->
+        reraise exception, stacktrace
+
+      {:error, {:down, {{:nocatch, value}, stacktrace}}} ->
+        :erlang.raise(:throw, value, stacktrace)
+
+      {:error, {:down, reason}} ->
+        exit(reason)
+    end
+  end
+
+  @doc false
+  # The flags of `scope` for the rest of the calling process: only for a process that ends
+  # with the scope, as `Macaw.Data.Test.Work`'s counted run does; `scope/2` is the scope
+  # for any other caller.
+  @spec enter(scope()) :: :ok
+  def enter(scope) do
+    Enum.each(flags(scope), fn {key, value} -> Process.put(key, value) end)
+  end
+
+  # The scope's flag and whichever of the two the caller already holds, so the scopes nest.
+  defp flags(scope) do
+    own = %{elixir: @elixir, normal_schedulers: @normal}[scope]
+    held = for key <- [@elixir, @normal], Process.get(key) == true, do: {key, true}
+    Enum.uniq([{own, true} | held])
   end
 
   @doc "Whether this build compiled the native kernels (the toolchain was present)."

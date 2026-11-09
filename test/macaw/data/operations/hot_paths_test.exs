@@ -10,7 +10,7 @@ defmodule Macaw.Data.Operations.HotPathsTest do
 
   import Bitwise
 
-  alias Macaw.Data.{Exact, Native, Operations, Table}
+  alias Macaw.Data.{Exact, Operations, Table}
   alias Macaw.Data.Operations.Aggregates
   alias Macaw.Data.Operations.Transforms.{Aggregate, Filter}
   alias Macaw.Data.Test.{Gen, Work}
@@ -93,7 +93,7 @@ defmodule Macaw.Data.Operations.HotPathsTest do
       bound = Filter.bound(node, table)
 
       {reductions, {:rows, kept}} =
-        Work.reductions(fn -> Native.elixir(fn -> Filter.chunk(node, view, bound) end) end)
+        Work.reductions(fn -> Filter.chunk(node, view, bound) end, native: :elixir)
 
       assert length(kept) == Enum.count(Table.column(table, "v"), &(&1 > 0.0))
       assert reductions <= 3 * n, "#{reductions} reductions for #{n} rows"
@@ -120,7 +120,7 @@ defmodule Macaw.Data.Operations.HotPathsTest do
         bound = Filter.bound(node, table)
 
         {reductions, {:rows, kept}} =
-          Work.reductions(fn -> Native.elixir(fn -> Filter.chunk(node, view, bound) end) end)
+          Work.reductions(fn -> Filter.chunk(node, view, bound) end, native: :elixir)
 
         june = DateTime.new!(~D[2026-06-01], ~T[00:00:00])
 
@@ -229,9 +229,9 @@ defmodule Macaw.Data.Operations.HotPathsTest do
       bound = Aggregate.group_bind(node, Macaw.Data.Operations.Aggregates.Sum, table)
 
       {reductions, {order, _groups, _rows}} =
-        Work.reductions(fn ->
-          Native.elixir(fn -> Aggregate.group_chunk(node, Aggregates.Sum, view, bound, "sum") end)
-        end)
+        Work.reductions(fn -> Aggregate.group_chunk(node, Aggregates.Sum, view, bound, "sum") end,
+          native: :elixir
+        )
 
       assert order == [["b"], ["c"], ["d"], ["a"]]
       assert reductions <= 16 * n, "#{reductions} reductions for #{n} rows"

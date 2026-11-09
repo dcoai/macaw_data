@@ -8,7 +8,7 @@ defmodule Macaw.Data.Operations.LadderTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
-  alias Macaw.Data.{Native, Operations, Reduce, Table}
+  alias Macaw.Data.{Operations, Reduce, Table}
   alias Macaw.Data.Operations.Step
   alias Macaw.Data.Operations.Transforms.{Ladder, Lttb, M4}
   alias Macaw.Data.Operations.Transforms.Ladder.Packed
@@ -535,7 +535,7 @@ defmodule Macaw.Data.Operations.LadderTest do
       # its own, the most packing a chunk does.
       for k <- [0, 4, 9] do
         {reductions, {_k, _views, [{0, piece}]}} =
-          Work.reductions(fn -> Native.elixir(fn -> Ladder.partial(view, bound, k, "m4") end) end)
+          Work.reductions(fn -> Ladder.partial(view, bound, k, "m4") end, native: :elixir)
 
         buckets = for {:run, run} <- Packed.unpack(piece), reduce: 0, do: (b -> b + length(run))
         budget = 12 * n + div(3 * buckets, 2)
@@ -560,7 +560,7 @@ defmodule Macaw.Data.Operations.LadderTest do
         bound = %{x: "t", y: "v", x_name: "t", y_name: "v", kind: kind}
 
         {reductions, {_k, _views, [{0, piece}]}} =
-          Work.reductions(fn -> Native.elixir(fn -> Ladder.partial(view, bound, k, "m4") end) end)
+          Work.reductions(fn -> Ladder.partial(view, bound, k, "m4") end, native: :elixir)
 
         buckets = for {:run, run} <- Packed.unpack(piece), reduce: 0, do: (b -> b + length(run))
         budget = 12 * n + div(3 * buckets, 2)

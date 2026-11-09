@@ -280,6 +280,12 @@
       "a native kernel's fault other than out of memory: every buffer, view and piece a kernel reads is packed by this library's own Elixir side and checked there, so a short buffer, a term that is no binary, a malformed piece or an unknown form is a defect in that packing, never an input's (spec/04 §1.7, macaw_data#101)"
   },
   %{
+    at: {Macaw.Data.Native, :scope!, 2},
+    class: :bang,
+    reason:
+      "scope/2's twin: passes on the raise, throw or exit that ended the function's own process, as scope/2 answers it (spec/04 §1.7, macaw_data#101)"
+  },
+  %{
     at: {Macaw.Data.Native.Kernels, nil, nil},
     class: :compile,
     reason: "native: :required without a toolchain fails the build (spec/04 §1.7)"

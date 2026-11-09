@@ -46,18 +46,18 @@ defmodule Macaw.Data.Operations.FrameLoopTest do
       # frame's changed chunks cost at most a full run over one chunk's readings, and the
       # whole frame (merges included) under half the full one.
       {_, warm, _} = FrameLoop.cached(window, cache)
-      {full, _} = Work.reductions(fn -> Native.elixir(fn -> FrameLoop.full(window) end) end)
+      {full, _} = Work.reductions(fn -> FrameLoop.full(window) end, native: :elixir)
 
       {per_chunk, _} =
-        Work.reductions(fn -> Native.elixir(fn -> FrameLoop.cached(window, cache) end) end)
+        Work.reductions(fn -> FrameLoop.cached(window, cache) end, native: :elixir)
 
       {merges, _} =
-        Work.reductions(fn -> Native.elixir(fn -> FrameLoop.cached(window, warm) end) end)
+        Work.reductions(fn -> FrameLoop.cached(window, warm) end, native: :elixir)
 
       {one, _} =
-        Work.reductions(fn ->
-          Native.elixir(fn -> FrameLoop.full(FrameLoop.readings(0, FrameLoop.step())) end)
-        end)
+        Work.reductions(fn -> FrameLoop.full(FrameLoop.readings(0, FrameLoop.step())) end,
+          native: :elixir
+        )
 
       assert per_chunk - merges <= one, "changed chunks #{per_chunk - merges}, one chunk #{one}"
       assert 2 * per_chunk <= full, "per chunk #{per_chunk}, full #{full}"
@@ -69,10 +69,10 @@ defmodule Macaw.Data.Operations.FrameLoopTest do
       {_, warm, _} = FrameLoop.cached(window, cache)
 
       {per_chunk, _} =
-        Work.reductions(fn -> Native.elixir(fn -> FrameLoop.cached(window, cache) end) end)
+        Work.reductions(fn -> FrameLoop.cached(window, cache) end, native: :elixir)
 
       {merges, _} =
-        Work.reductions(fn -> Native.elixir(fn -> FrameLoop.cached(window, warm) end) end)
+        Work.reductions(fn -> FrameLoop.cached(window, warm) end, native: :elixir)
 
       assert per_chunk <= 1_100_000, "per chunk #{per_chunk}"
       assert merges <= 600_000, "merges alone #{merges}"
@@ -86,7 +86,7 @@ defmodule Macaw.Data.Operations.FrameLoopTest do
     test "with the kernels, a per-chunk frame, its merges alone and a full recompute each cost at most 250,000 reductions" do
       {window, cache} = loop(1)
       {_, warm, _} = FrameLoop.cached(window, cache)
-      count = &Work.reductions(fn -> Native.normal_schedulers(&1) end)
+      count = &Work.reductions(&1, native: :normal_schedulers)
       {per_chunk, _} = count.(fn -> FrameLoop.cached(window, cache) end)
       {merges, _} = count.(fn -> FrameLoop.cached(window, warm) end)
       {full, _} = count.(fn -> FrameLoop.full(window) end)

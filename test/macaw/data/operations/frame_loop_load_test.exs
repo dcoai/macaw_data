@@ -15,9 +15,7 @@ defmodule Macaw.Data.Operations.FrameLoopLoadTest do
   # kernel call on a normal scheduler, each the least of three counts (macaw_data#65, #66).
   defp counts(window, cache, warm) do
     count = fn fun ->
-      Enum.min(
-        for _ <- 1..3, do: elem(Work.reductions(fn -> Native.normal_schedulers(fun) end), 0)
-      )
+      Enum.min(for _ <- 1..3, do: elem(Work.reductions(fun, native: :normal_schedulers), 0))
     end
 
     {count.(fn -> FrameLoop.cached(window, cache) end),

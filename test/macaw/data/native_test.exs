@@ -94,7 +94,7 @@ defmodule Macaw.Data.NativeTest do
       bound = %{x: "t", y: "v", x_name: "t", y_name: "v", kind: :linear}
       partial = fn -> Macaw.Data.Operations.Transforms.Ladder.partial(view, bound, 3, "m4") end
 
-      {elixir, walked} = Macaw.Data.Test.Work.reductions(fn -> Native.elixir(partial) end)
+      {elixir, walked} = Macaw.Data.Test.Work.reductions(partial, native: :elixir)
       {native, answered} = Macaw.Data.Test.Work.reductions(partial)
       assert walked == answered
 
@@ -131,7 +131,7 @@ defmodule Macaw.Data.NativeTest do
         end
 
         counted = fn ->
-          Macaw.Data.Test.Work.reductions(fn -> Native.normal_schedulers(take) end)
+          Macaw.Data.Test.Work.reductions(take, native: :normal_schedulers)
         end
 
         {once, bits} = counted.()
@@ -139,6 +139,55 @@ defmodule Macaw.Data.NativeTest do
         assert for(_ <- 1..5, do: elem(counted.(), 0)) == List.duplicate(once, 5)
         assert once < 1_000, "the gather counted #{once}"
       end
+    end
+  end
+
+  describe "a scope's exits" do
+    # macaw_data#101: each scope put its flag in the caller's dictionary and cleared it after
+    # `fun`, so a raise in `fun` that the caller caught left the flag set for the rest of
+    # the process's life.
+    defp flags do
+      big = Native.sync_rows() + 1
+
+      {Native.active?(), Native.scheduler(big),
+       Native.finish_scheduler(Native.finish_buckets() + 1), Native.entry_limit()}
+    end
+
+    @tag verifies: "operations-native-scopes"
+    test "a raise, throw or exit in either scope reaches the caller and leaves its flags as they were" do
+      before = flags()
+
+      for scope <- [&Native.elixir/1, &Native.normal_schedulers/1] do
+        assert_raise ArgumentError, "inside", fn ->
+          scope.(fn -> raise ArgumentError, "inside" end)
+        end
+
+        assert flags() == before
+
+        assert catch_throw(scope.(fn -> throw(:inside) end)) == :inside
+        assert flags() == before
+
+        assert catch_exit(scope.(fn -> exit(:inside) end)) == :inside
+        assert flags() == before
+      end
+
+      assert {:error, {:down, {%ArgumentError{message: "inside"}, [_ | _]}}} =
+               Native.scope(:elixir, fn -> raise ArgumentError, "inside" end)
+
+      assert Native.scope(:normal_schedulers, fn -> :answered end) == {:ok, :answered}
+      assert flags() == before
+    end
+
+    @tag verifies: "operations-native-scopes"
+    test "the scopes nest, each holding the other's flag, and a raise in the inner leaves the outer's" do
+      big = Native.sync_rows() + 1
+
+      assert Native.normal_schedulers(fn ->
+               inner = Native.elixir(fn -> {Native.active?(), Native.scheduler(big)} end)
+
+               assert_raise RuntimeError, fn -> Native.elixir(fn -> raise "inner" end) end
+               {inner, Native.active?() == Native.loaded?(), Native.scheduler(big)}
+             end) == {{false, :normal}, true, :normal}
     end
   end
 
