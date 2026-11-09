@@ -899,6 +899,14 @@ The subscriber holds a `Macaw.Data.Source.Push`, a value, not a process: `receiv
 
 **A holder reads a `Push` through its functions, never its fields** (macaw_data#123): `take_errors/1` answers `{errors, push}`, the errors recorded since they were last taken, in the order recorded (a gap, §4.1; a schema `describe` could not answer; a change's fault, §4.2; rows that don't pack, `{:table, faults}`), and the push holding none, so a subscription that lives long holds only what its holder has not read. Taking them changes nothing else. `pending?/1` is whether `drain/2` has anything buffered to apply: a snapshot or an increment received or handed in since the last drain, or increments held back waiting on a gap, which apply once the numbers before them or a snapshot arrive (§4.1). A schema message is cached as it is received, so it leaves nothing pending.
 
+**Its cache, its position and a drain's count are read the same way** (macaw_data#202). `cache/1` is the `Schema.Cache` the subscription resolves versions through, which a holder describing the source again hands to `new/3`'s `cache:`. `position/1` is the number of the last message taken, a snapshot's position or an increment's number, consumed whether or not its changes applied (§4.1), `0` before any. `drained/1` is how many snapshots and increments the last `drain/2` applied, each taken and merged with no fault recorded for it. Not counted are:
+
+- a repeat and a stale snapshot, which `ignored` counts;
+- a message whose taking recorded a fault in the errors, so an increment with any faulted change among them;
+- increments still waiting behind a gap.
+
+An increment applied once its gap fills counts in the drain that applies it. The count is `0` before any drain, and each drain counts afresh.
+
 **A holder whose window slides trims its holding** (macaw_data#123): `trim(push, from)` answers `{:ok, push}` without the held chunks wholly before `from` in the window field's order, or `{:error, [{[:from], {:type, type}}]}` for a `from` not of the window field's type (a time of any kind for a `:time` field, compared on the instant scale, §2.4; a number for a `:number` one); `trim!/2` raises.
 - **Only whole chunks are dropped:** each chunk whose every window value is before `from`, through `Table.trim/2` over those chunks' rows (§1.1.1), so nothing is copied or cut and every chunk kept is the same chunk, by id and version (§1.1.3). A chunk straddling `from` is kept whole, since finishing trims its rows (§2.4). The held rows are in the window field's order (a row of no window value last), so what is kept is a suffix holding every row at or after `from`.
 - **A chunk's last value decides** (macaw_data#201): since the held rows are in that order, a run is wholly before `from` exactly when its last value is before `from`, and a last value of none keeps it. So a trim reads one value of each chunk it walks, costing the chunks and never the rows in them. A trim that drops one chunk and reads another of 8,192 rows is under 5,000 reductions.
@@ -926,6 +934,10 @@ new/3 refuses a cache, limit, lateness and chunk_span it can't use, by path, eve
 
 ```test:push-accessors
 take_errors/1 after a gap, rows that don't pack and an unresolvable version gives them in that order and leaves none, taking again gives none, and nothing else changes; pending?/1 is false when new, after a schema message and after a drain, and true after a received or handed-in snapshot, a received increment, and while an increment waits on a gap until the snapshot that fills it is drained
+```
+
+```test:push-readers
+cache/1 is the cache new/3 was given and grows with a pushed schema; position/1 is 0 when new and the last number taken after a snapshot, an applied increment and a faulted one; drained/1 is 0 when new, counts a snapshot and in-order increments, does not count a repeat, a stale snapshot, an increment whose rows don't pack, one with a faulted retraction among applied rows, or one waiting behind a gap, counts every increment a filled gap releases in that drain, and starts afresh each drain
 ```
 
 - **The handshake sends the schema first,** so an increment naming its version resolves from the cache without asking the source.

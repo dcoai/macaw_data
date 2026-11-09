@@ -83,7 +83,8 @@ defmodule Macaw.Data.Source.Push do
     refetch: nil,
     lateness: nil,
     chunk_span: nil,
-    trimmed: nil
+    trimmed: nil,
+    drained: 0
   ]
 
   @typedoc "A buffered message: a snapshot, or an increment and its number."
@@ -103,7 +104,8 @@ defmodule Macaw.Data.Source.Push do
           refetch: term(),
           lateness: Duration.t() | number() | nil,
           chunk_span: Duration.t() | number() | nil,
-          trimmed: term()
+          trimmed: term(),
+          drained: non_neg_integer()
         }
 
   @doc """
@@ -240,7 +242,7 @@ defmodule Macaw.Data.Source.Push do
   def drain(%__MODULE__{pending: pending} = push, describe) do
     pending
     |> Enum.reverse()
-    |> Enum.reduce(%{push | pending: []}, &take(&2, &1, describe))
+    |> Enum.reduce(%{push | pending: [], drained: 0}, &take(&2, &1, describe))
     |> gap()
   end
 
@@ -274,6 +276,45 @@ defmodule Macaw.Data.Source.Push do
   """
   @spec take_errors(t()) :: {[term()], t()}
   def take_errors(%__MODULE__{errors: errors} = push), do: {errors, %{push | errors: []}}
+
+  @doc """
+  The schema cache the subscription resolves versions through (macaw_data#202): a holder
+  that describes the source again hands it to `new/3`'s `cache:`, so no version is asked
+  for twice.
+
+      iex> alias Macaw.Data.Source.Push
+      iex> Push.cache(Push.new!(:ticks, make_ref())) == %Macaw.Data.Schema.Cache{}
+      true
+  """
+  @spec cache(t()) :: Cache.t()
+  def cache(%__MODULE__{cache: cache}), do: cache
+
+  @doc """
+  The number of the last message taken (macaw_data#202): a snapshot's position, or an
+  increment's number, consumed whether or not its changes applied (spec/01 §4.1); `0`
+  before any. A holder that fetches a snapshot itself hands it this position.
+
+      iex> alias Macaw.Data.Source.Push
+      iex> Push.position(Push.new!(:ticks, make_ref()))
+      0
+  """
+  @spec position(t()) :: non_neg_integer()
+  def position(%__MODULE__{position: position}), do: position
+
+  @doc """
+  How many snapshots and increments the last `drain/2` applied (macaw_data#202): each taken
+  and merged with no fault recorded for it. Not counted are a repeat and a stale snapshot,
+  which `ignored` counts; a message whose taking recorded a fault in the errors, an
+  increment with any faulted change among them; and increments still waiting behind a gap.
+  An increment applied once its gap fills counts in the drain that applies it. `0` before
+  any drain, and each drain counts afresh.
+
+      iex> alias Macaw.Data.Source.Push
+      iex> Push.drained(Push.new!(:ticks, make_ref()))
+      0
+  """
+  @spec drained(t()) :: non_neg_integer()
+  def drained(%__MODULE__{drained: drained}), do: drained
 
   @doc """
   Whether `drain/2` has anything buffered to apply (macaw_data#123): a message received
@@ -360,7 +401,7 @@ defmodule Macaw.Data.Source.Push do
             {claim, push} = claim(push, held)
             held = put_claim(held, claim)
             push = %{push | held: held, position: p, waiting: waiting, refetch: nil, trimmed: nil}
-            advance(push, describe)
+            advance(applied(push), describe)
 
           {:error, faults} ->
             fault(push, {:table, faults})
@@ -425,7 +466,10 @@ defmodule Macaw.Data.Source.Push do
     with {:ok, schema, push} <- resolve(push, delivery, describe),
          :ok <- resolution(push.held, delivery),
          {:ok, rows} <- Delivery.named_rows(delivery) do
-      merge(push, delivery, rows, schema)
+      merged = merge(push, delivery, rows, schema)
+
+      # Applied when its merge recorded no fault: any faulted change leaves it uncounted.
+      if length(merged.errors) == length(push.errors), do: applied(merged), else: merged
     else
       {:error, reason, push} -> fault(push, reason)
       {:resolution, _held, _given} = mismatch -> %{fault(push, mismatch) | refetch: mismatch}
@@ -440,6 +484,9 @@ defmodule Macaw.Data.Source.Push do
     do: {:resolution, held, given}
 
   defp fault(push, reason), do: %{push | errors: push.errors ++ [reason]}
+
+  # One more message the drain applied (`drained/1`).
+  defp applied(push), do: %{push | drained: push.drained + 1}
 
   defp ignore(push, reason),
     do: %{push | ignored: Map.update(push.ignored, reason, 1, &(&1 + 1))}

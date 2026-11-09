@@ -96,4 +96,63 @@ defmodule Macaw.Data.PushAccessorsTest do
     assert Push.receive(filled, Push.increment_message(make_ref(), 4, delivery(rows([4])))) ==
              :ignore
   end
+
+  @tag verifies: "push-readers"
+  test "cache/1 and position/1 read the subscription's cache and the last number taken" do
+    cache = Cache.new([{:ticks, @schema}])
+    fresh = Push.new!(:ticks, make_ref(), cache: cache)
+    assert Push.cache(fresh) == cache
+    assert Push.position(fresh) == 0
+
+    # A pushed schema is cached at once.
+    bare = Push.new!(:ticks, make_ref())
+    {:ok, schemed} = Push.receive(bare, Push.schema_message(bare.ref, @schema))
+    assert {:ok, @schema} = Cache.fetch(Push.cache(schemed), :ticks, @version)
+
+    assert fresh |> snapshotted(rows([1, 2]), 2) |> drain() |> Push.position() == 2
+    assert fresh |> increment(1, rows([1])) |> drain() |> Push.position() == 1
+
+    # A faulted increment's number is consumed all the same (spec/01 §4.1).
+    faulted = fresh |> increment(1, [%{"t" => 1, "v" => "not a number"}]) |> drain()
+    assert Push.position(faulted) == 1
+  end
+
+  @tag verifies: "push-readers"
+  test "drained/1 counts the snapshots and increments the last drain applied, each without a fault" do
+    assert Push.drained(push()) == 0
+
+    # A snapshot, then two increments in order: three applied.
+    push =
+      push() |> snapshotted(rows([1, 2]), 2) |> increment(3, rows([3])) |> increment(4, rows([4]))
+
+    push = drain(push)
+    assert Push.drained(push) == 3
+
+    # Each drain counts afresh: nothing buffered, nothing applied.
+    assert push |> drain() |> Push.drained() == 0
+
+    # A repeat and a stale snapshot are ignored, not applied.
+    repeated = push |> increment(4, rows([4])) |> snapshotted(rows([1]), 1) |> drain()
+    assert Push.drained(repeated) == 0
+
+    # Rows that don't pack, and a retraction of a row not held beside rows that apply: a
+    # fault recorded for each, so neither counts.
+    unpacked = push |> increment(5, [%{"t" => 5, "v" => "not a number"}]) |> drain()
+    assert Push.drained(unpacked) == 0
+
+    partly =
+      Delivery.new!(rows([6]), schema: @version, retracted: [%{"t" => 99, "v" => 99}])
+
+    partial = unpacked |> send_in(Push.increment_message(push.ref, 6, partly)) |> drain()
+    assert {[{:table, _faults}, {:retract, :not_held, _row}], _push} = Push.take_errors(partial)
+    assert Push.drained(partial) == 0
+
+    # Increments past a gap wait uncounted; the drain that fills the gap counts every
+    # increment it releases.
+    waiting = partial |> increment(8, rows([8])) |> increment(9, rows([9])) |> drain()
+    assert Push.drained(waiting) == 0
+    filled = waiting |> increment(7, rows([7])) |> drain()
+    assert Push.drained(filled) == 3
+    refute Push.pending?(filled)
+  end
 end
