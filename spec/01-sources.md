@@ -263,7 +263,7 @@ two views of one chunk at different first slots that keep the same rows counted 
   2. **Range retractions:** everything held in each replaced range, limited to its identities.
   3. **Insertions:** each row goes to the chunk of its slot, kept in the window field's order. Rows of a slot that has no chunk start one, placed among the chunks in slot order.
 - **Where each change lands:**
-  - **in an open chunk,** directly: the chunk is written again with its new contents, the same id and a new digest;
+  - **in an open chunk,** directly: the chunk is written again with its new contents, the same id and a new digest. **Writing it again keeps what doesn't move** (macaw_data#204): only the increment's rows are sorted, and rows that start at or after the chunk's last row are packed by themselves and joined after the held columns as they lie, the held rows neither read nor packed again. A column is joined only where joining is exactly what packing every value gives: int64, float64, date, UTC and naive buffers of one form (a time's precision the one every present value shares), text or binary data of one form, a dictionary's codes after a whole chunk's; any other column, and a chunk with a delta, is written from all its rows. Either way the chunk is byte for byte the one packing its rows in order builds, so its digest is the same;
   - **in a settled chunk, in its delta,** the chunk's base untouched: a retracted row in its **deleted set**, a range in its **predicate deletes** (the range intersected with the identities named, as Iceberg's equality deletes are), an inserted row in its **side chunk**. A predicate delete reads nothing, so it needs no fetch of a cold chunk;
   - **a chunk wholly inside an unrestricted replacement** (every identity, its whole span) is replaced outright: its slot holds exactly the replacement's rows, a new chunk with no delta;
   - **in a table with no window field, or aligned by row count,** directly: a retraction or replacement writes the chunks it changes again, and insertions are appended to the last chunk, filling its slot before starting new ones. With a window field the rows stay in its order: a row before the last row held is placed in the first chunk whose last row comes after it, which is written again.
@@ -278,6 +278,10 @@ a chunk whose span ends at or before complete_until is settled and one at or aft
 
 ```test:table-apply
 apply/2 writes an open chunk's new contents and a settled chunk's delta, leaving its base; an insertion into a slot with no chunk starts one in slot order; a chunk wholly inside an unrestricted replacement is replaced outright; a table with no window field takes changes directly and appends insertions to its last chunk; retraction faults and unheld counts are §4.2's
+```
+
+```test:table-open-write
+for generated holdings and increments (in order, at the last row's value, late, with no window value, retractions, settled chunks, columns of every form and of values a column refuses), every chunk apply/2 answers is byte for byte the chunk writing it again from all its rows builds, and its faults and unheld counts are the same
 ```
 
 ```test:table-delta
@@ -941,13 +945,18 @@ cache/1 is the cache new/3 was given and grows with a pushed schema; position/1 
 ```
 
 - **The handshake sends the schema first,** so an increment naming its version resolves from the cache without asking the source.
-- **An increment's rows are insertions, merged by the window field.** Its rows after what is held are appended and its late rows placed among the held, every one of them: rows are not deduplicated (§4.1). The rows stay ordered by the window field, and the served window grows to cover them. A schema with no window field keeps the newest `limit` rows (100 000), marking the delivery `capped` when it drops any.
+- **An increment's rows are insertions, merged by the window field.** Its rows after what is held are appended and its late rows placed among the held, every one of them: rows are not deduplicated (§4.1). The rows stay ordered by the window field, and the served window grows to cover them: with none served yet, as after a snapshot, from the earliest value held to the latest held or inserted, the first of equal values (`Window.earliest/2` and `latest/2` over them), read from the window column's positions where they lie (macaw_data#204). A schema with no window field keeps the newest `limit` rows (100 000), marking the delivery `capped` when it drops any.
+- **A drain costs the rows it brings** (macaw_data#204): an increment in the window field's order is joined after the open chunk's rows (§1.1.4), so on the live loop's holding (50,000 readings, two number columns, chunks of 8,192 seconds) a 1,000-row drain is under 550,000 reductions however full the open chunk is, and the first after the snapshot under 950,000.
 - **The holding is as stale as the last answer applied** (macaw_data#148): a snapshot's `served.stale` becomes the holding's, and an applied increment's replaces it, since a source that pushes a change answers as of that change. An increment that is not applied (at another resolution, §4.3) leaves it as it was.
 - **Pushes between two pulses are coalesced:** they buffer, and one `drain/2` applies them all, in their numbers' order (§4.1), whatever the push rate.
 - **`drain/2` answers every delivery `Delivery.new/2` accepts** (macaw_data#166). A delivery checks its rows' shape, not that they can be read by name, and tuple rows without `names:` read fine unnamed; a push reads by name, so `Delivery.named_rows/1`'s faults (`{[:names], :required}`, `{[:names], {:width, n, width}}`, `{[:rows], {:type, :rows}}`) are `{:table, faults}` in `errors`. A snapshot so refused leaves what is held and the position as they were. An increment so refused consumes its number (§4.1) and applies nothing: its rows, its `retracted` and `replace`, its `complete_until` and its `stale` alike. So does an increment under a schema the rows held don't pack under: the held rows keep their schema, as `{:table, faults}`. A value of no kind its field takes is a packing fault; a retraction of one is `{:retract, :not_held, row}`.
 - **An unknown schema version falls back to `describe`,** asked once through `Macaw.Data.Schema.Cache.resolve/4` and cached. An increment whose version can't be resolved is dropped and its reason kept in `errors`.
 
 (visualize.md C1; metresis.md C1. The merge is visualize's `Visualize.Feed.Monitor`'s, whose message tag was `:visualize_feed`.)
+
+```test:push-drain-cost
+on the live loop's holding, a 1,000-row drain into a nearly full open chunk is under 550,000 reductions and at most 80,000 more than into a nearly empty one, and the first after the snapshot is under 950,000; for generated holdings of times of several kinds and precisions, or of integers and floats, the served window after a snapshot and an increment is the fold of every value's ends, the first of equals
+```
 
 ```test:push-unread-rows
 a snapshot of tuple rows without names is {:table, [{[:names], :required}]} in errors, holding nothing and moving no position; an increment of them is the same fault, its number consumed, and nothing of it applied, neither its retractions, its complete_until nor its stale; tuple rows of another width than their names are {[:names], {:width, n, width}}; named tuple rows apply; an increment under a schema the held rows don't pack under is {:table, faults}, the holding unchanged; for generated deliveries of row maps, tuple rows with and without names, column maps, tables and other lists, with values of any kind and extreme numbers and resolutions, drain/2 answers a push and never raises

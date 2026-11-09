@@ -61,7 +61,7 @@ defmodule Macaw.Data.Source.Push do
 
   alias Macaw.Data.{Delivery, Schema, Table, Window}
   alias Macaw.Data.Schema.Cache
-  alias Macaw.Data.Source.Description
+  alias Macaw.Data.Source.{Description, Order}
   alias Macaw.Data.Source.Push.Changes
   alias Macaw.Data.Table.Chunk
   alias Macaw.Data.Table.Origin
@@ -553,7 +553,7 @@ defmodule Macaw.Data.Source.Push do
           %{held | rows: Table.trim(table, cut), schema: version, served: served}
 
         time ->
-          held_to = window_to(held) || newest(Table.column(old, time))
+          held_to = window_to(held) || extreme(old, time, :latest)
 
           to =
             Window.latest(
@@ -561,7 +561,9 @@ defmodule Macaw.Data.Source.Push do
               window_to(delivery) || newest(Enum.map(inserted, &Table.get(&1, time)))
             )
 
-          from = window_from(held) || window_from(delivery) || earliest(Table.column(table, time))
+          from =
+            window_from(held) || window_from(delivery) || extreme(table, time, :earliest)
+
           %{held | rows: table, schema: version, served: %{held.served | window: [from, to]}}
       end
 
@@ -791,6 +793,80 @@ defmodule Macaw.Data.Source.Push do
   defp window_to(%Delivery{served: %{window: [_from, to]}}), do: to
   defp window_to(_delivery), do: nil
 
-  defp newest(values), do: Enum.reduce(values, nil, &Window.latest(&2, &1))
-  defp earliest(values), do: Enum.reduce(values, nil, &Window.earliest(&2, &1))
+  # The fold of `Window.latest/2` (`earliest/2`) over the values, from nil (macaw_data#204):
+  # the first value present, replaced by each later one it shares a scale with
+  # (`Window.comparable?/2`) and is before (after). Each value's place on its scale is
+  # taken once, not at every compare.
+  defp newest(values), do: values |> fold(nil, :latest) |> folded()
+  defp earliest(values), do: values |> fold(nil, :earliest) |> folded()
+
+  defp fold([], acc, _which), do: acc
+  defp fold([nil | rest], acc, which), do: fold(rest, acc, which)
+  defp fold([v | rest], nil, which), do: fold(rest, {v, scale(v)}, which)
+
+  defp fold([v | rest], {_held, {kind, at}} = acc, which) do
+    case scale(v) do
+      {^kind, p} when which == :latest and at < p -> fold(rest, {v, {kind, p}}, which)
+      {^kind, p} when which == :earliest and at > p -> fold(rest, {v, {kind, p}}, which)
+      _other -> fold(rest, acc, which)
+    end
+  end
+
+  defp fold([_v | rest], acc, which), do: fold(rest, acc, which)
+
+  defp folded(nil), do: nil
+  defp folded({value, _scale}), do: value
+
+  # A value's place: a number on the number scale, an instant on the instant scale, which
+  # `Window.compare/2` compares on; anything else shares no scale.
+  defp scale(v) when is_number(v), do: {:number, v}
+
+  defp scale(v) do
+    if Window.instant?(v), do: {:instant, Order.instant(v)}, else: :none
+  end
+
+  # What `newest/1` (`:latest`) or `earliest/1` (`:earliest`) answers over the held
+  # table's window column, read from its positions (macaw_data#204): the first value at
+  # the latest or earliest position. A time column's instants are read where they lie
+  # (`Chunk.instants/4`, on the scale `Window.compare/2` compares on) and a number
+  # column's values as they are, so no row is made and no value is compared twice; the
+  # one value found is read from its chunk. Every value of either column shares one
+  # scale, so the fold compares every pair and keeps the first of equals, as this does.
+  # A column of another type is folded as it was.
+  defp extreme(table, name, which) do
+    case Table.column_type(table, name) do
+      type when type in [:time, :number] ->
+        found =
+          table
+          |> Table.chunks()
+          |> Enum.reduce(nil, fn {chunk, first, count}, found ->
+            chunk |> positions(name, type, first, count) |> best(0, {chunk, first}, found, which)
+          end)
+
+        case found do
+          nil -> nil
+          {_p, {chunk, first}, i} -> Chunk.at(chunk, name, first + i)
+        end
+
+      _other ->
+        values = Table.column(table, name)
+        if which == :latest, do: newest(values), else: earliest(values)
+    end
+  end
+
+  defp positions(chunk, name, :time, first, count), do: Chunk.instants(chunk, name, first, count)
+  defp positions(chunk, name, :number, first, count), do: Chunk.values(chunk, name, first, count)
+
+  # The first position past `found` in a run's positions, with where it lies.
+  defp best([], _i, _run, found, _which), do: found
+  defp best([nil | rest], i, run, found, which), do: best(rest, i + 1, run, found, which)
+  defp best([p | rest], i, run, nil, which), do: best(rest, i + 1, run, {p, run, i}, which)
+
+  defp best([p | rest], i, run, {b, _, _}, :latest) when p > b,
+    do: best(rest, i + 1, run, {p, run, i}, :latest)
+
+  defp best([p | rest], i, run, {b, _, _}, :earliest) when p < b,
+    do: best(rest, i + 1, run, {p, run, i}, :earliest)
+
+  defp best([_p | rest], i, run, found, which), do: best(rest, i + 1, run, found, which)
 end

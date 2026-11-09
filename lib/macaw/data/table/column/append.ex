@@ -1,0 +1,95 @@
+defmodule Macaw.Data.Table.Column.Append do
+  @moduledoc false
+  # Two pieces of one column joined end to end exactly as packing their values together
+  # would pack them (macaw_data#204): the held rows of an open chunk, as they lie, and
+  # the rows an increment adds after them, packed by themselves. `{:ok, column}` only
+  # where the join is byte for byte `Column.pack/3` of every value, so the chunk built
+  # from it is the chunk a full rewrite builds; `:repack` wherever it might not be, and
+  # the caller packs every value again.
+  #
+  # Each piece must be packed from its own values (`Column.pack/3`) or be a slice from
+  # the start of such a column (`Column.slice/3`). A form is joined only where packing
+  # the values together picks the same form:
+  #
+  # - int64 and int64, float64 and float64, date and date: their buffers and validity
+  #   joined. Packing picks int64 for numbers with no float, float64 for floats with no
+  #   integer, so two pieces of one form keep it; any other pair (an all-missing piece
+  #   packs as int64) is repacked.
+  # - utc and utc, naive and naive: the instants and validity joined, the precision the
+  #   one every present value shares (a piece with no value present has none to share),
+  #   or both pieces' per-value bytes joined where both already spell it per value. Two
+  #   uniform precisions that differ, or one uniform and one spelled, are repacked.
+  # - text and text, binary and binary: the data joined, offsets moved, while the whole
+  #   fits int32 offsets. A string's validity as UTF-8 is its own, so the pair keeps its
+  #   form; text beside binary is repacked.
+  # - dictionary and dictionary, only when the first piece is a whole column
+  #   (`whole?`): its dictionary is then its strings in first-appearance order, and
+  #   joining it with the second's in order is the order packing every value gives. A
+  #   slice keeps its column's whole dictionary, strings its rows may lack, so it is
+  #   repacked.
+  #
+  # Every other form (integral, union, zoned, bool, list) is repacked.
+
+  import Bitwise
+
+  alias Macaw.Data.Table.Column
+
+  @doc false
+  @spec append({Column.t(), non_neg_integer()}, {Column.t(), non_neg_integer()}, boolean()) ::
+          {:ok, Column.t()} | :repack
+  def append({head, n}, {tail, m}, whole?) do
+    case {head, tail} do
+      {{form, _, _}, {form, _, _}} when form in [:int64, :float64, :date] ->
+        concat(head, n, tail, m)
+
+      {{form, _, hv, hp}, {form, _, tv, tp}} when form in [:utc, :naive] ->
+        with {:ok, precision} <- precision({hp, hv, n}, {tp, tv, m}),
+             {:ok, {^form, us, validity, _p}} <- concat(head, n, tail, m) do
+          {:ok, {form, us, validity, precision}}
+        end
+
+      {{form, _, data, _}, {form, _, _, _}}
+      when form in [:text, :binary] and is_binary(data) ->
+        concat(head, n, tail, m)
+
+      {{:dictionary, _, _, _, _}, {:dictionary, _, _, _, _}} when whole? ->
+        concat(head, n, tail, m)
+
+      _other ->
+        :repack
+    end
+  end
+
+  defp concat(head, n, tail, m) do
+    case Column.concat([{head, n}, {tail, m}]) do
+      {:ok, column} -> {:ok, column}
+      :general -> :repack
+    end
+  end
+
+  # The precision packing every value gives: the one all present values share, `6` with
+  # none present, or both pieces' bytes where both spell it per value.
+  defp precision({hp, hv, n}, {tp, tv, m}) when is_integer(hp) and is_integer(tp) do
+    case {present?(hv, n), present?(tv, m)} do
+      {false, false} -> {:ok, 6}
+      {true, false} -> {:ok, hp}
+      {false, true} -> {:ok, tp}
+      {true, true} when hp == tp -> {:ok, hp}
+      {true, true} -> :repack
+    end
+  end
+
+  defp precision({hp, _hv, _n}, {tp, _tv, _m}) when is_binary(hp) and is_binary(tp),
+    do: {:ok, hp <> tp}
+
+  defp precision(_head, _tail), do: :repack
+
+  # Whether any of the first `n` bits of a validity bitmap is set.
+  defp present?(_validity, 0), do: false
+
+  defp present?(validity, n) do
+    size = byte_size(validity)
+    <<x::little-size(^size * 8)>> = validity
+    (x &&& (1 <<< n) - 1) != 0
+  end
+end

@@ -19,6 +19,7 @@ defmodule Macaw.Data.Table.Chunk do
   """
 
   alias Macaw.Data.Table.Column
+  alias Macaw.Data.Table.Column.Append
   alias Macaw.Data.Table.Delta
   alias Macaw.Data.Table.Digest
   alias Macaw.Layers.Document
@@ -227,6 +228,44 @@ defmodule Macaw.Data.Table.Chunk do
       {:ok, columns} -> {:ok, build(header, columns, length(rows), id)}
       {:error, faults} -> {:error, faults}
     end
+  end
+
+  # The chunk with `rows` after its own, the same id, hashed once more (macaw_data#204):
+  # `rows` packed by themselves and each column joined after the chunk's as it lies
+  # (`Column.Append`), so the held rows are neither read nor packed again. `{:ok, chunk}`
+  # only where every join is exactly what packing all the rows gives, so the chunk is the
+  # one `of_rows/3` builds of its rows and then `rows`; `:repack` for any other, and for a
+  # chunk not packed from its own rows here (a delta, a cold base, a step's output).
+  # `packed`, where given, is `rows` already packed as `of_rows/3` packs them.
+  @doc false
+  @spec append(t(), [map()], %{term() => Column.t()} | nil) :: {:ok, t()} | :repack
+  def append(chunk, rows, packed \\ nil)
+
+  def append(
+        %__MODULE__{delta: nil, fetch: nil, derivation: nil, digest: d} = chunk,
+        rows,
+        packed
+      )
+      when is_binary(d) do
+    m = length(rows)
+
+    with {:ok, added} <- if(packed, do: {:ok, packed}, else: pack(chunk.header, rows)),
+         {:ok, columns} <- joined(chunk, added, m) do
+      {:ok, build(chunk.header, columns, chunk.size + m, chunk.id)}
+    else
+      _repack -> :repack
+    end
+  end
+
+  def append(%__MODULE__{}, _rows, _packed), do: :repack
+
+  defp joined(chunk, added, m) do
+    Enum.reduce_while(chunk.header, {:ok, %{}}, fn {name, _type}, {:ok, columns} ->
+      case Append.append({chunk.columns[name], chunk.size}, {added[name], m}, true) do
+        {:ok, column} -> {:cont, {:ok, Map.put(columns, name, column)}}
+        :repack -> {:halt, :repack}
+      end
+    end)
   end
 
   defp pack(header, rows) do

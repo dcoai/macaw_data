@@ -8,7 +8,7 @@ defmodule Macaw.Data.Table.Apply do
   # guesses.
 
   alias Macaw.Data.{Schema, Table}
-  alias Macaw.Data.Table.{Chunk, Delta, Origin}
+  alias Macaw.Data.Table.{Chunk, Column, Delta, Origin}
 
   @doc false
   # `{chunks, next, faults, unheld}`: the table's whole chunks after the change, the
@@ -34,15 +34,15 @@ defmodule Macaw.Data.Table.Apply do
     insert = Enum.flat_map(replace, & &1.rows) ++ Enum.map(change.insert, &edge(&1, ctx))
 
     case packs(insert, ctx) do
-      [] ->
+      {:ok, packed} ->
         state = %{chunks: chunks, next: next, faults: [], unheld: 0, touched: MapSet.new()}
         state = Enum.reduce(retract, state, &retract(&1, &2, ctx))
         state = Enum.reduce(replace, state, &range(&1, &2, ctx))
-        state = insert(insert, state, ctx)
+        state = insert(insert, state, Map.put(ctx, :packed, packed))
         chunks = Enum.map(state.chunks, &compacted(&1, state.touched))
         {chunks, state.next, state.faults, state.unheld}
 
-      faults ->
+      {:error, faults} ->
         {chunks, next, [{:table, faults}], 0}
     end
   end
@@ -71,15 +71,34 @@ defmodule Macaw.Data.Table.Apply do
 
   defp key_spelling(key), do: key
 
-  # The faults of packing the rows to be inserted; none applies if any.
-  defp packs([], _ctx), do: []
+  # The rows to be inserted packed, each column a canonical chunk's run of them at a time
+  # as `Table.new/2` packs a table of them, its faults as it answers them; none applies if
+  # any (macaw_data#204). `{:ok, columns}`, the columns by name where the rows are one run
+  # (`nil` where they are none or several), which an insertion of exactly these rows in
+  # this order holds as they are; or `{:error, faults}`.
+  defp packs([], _ctx), do: {:ok, nil}
 
   defp packs(rows, ctx) do
-    columns = for {name, type} <- ctx.header, do: {name, type, Enum.map(rows, &Map.get(&1, name))}
+    runs = Enum.chunk_every(rows, Table.chunk_rows())
 
-    case Table.new(columns) do
-      {:ok, _table} -> []
-      {:error, faults} -> faults
+    {columns, faults} =
+      Enum.reduce(ctx.header, {%{}, []}, fn {name, type}, {columns, faults} ->
+        {pieces, faults, _at} =
+          Enum.reduce(runs, {[], faults, 0}, fn run, {pieces, faults, at} ->
+            case Column.piece(type, Enum.map(run, &Map.get(&1, name)), name, at) do
+              {:ok, column} -> {[column | pieces], faults, at + length(run)}
+              {:error, more} -> {pieces, more ++ faults, at + length(run)}
+            end
+          end)
+
+        {Map.put(columns, name, pieces), faults}
+      end)
+
+    case {faults, runs} do
+      {[], [_one]} -> {:ok, Map.new(columns, fn {name, [column]} -> {name, column} end)}
+      {[], _several} -> {:ok, nil}
+      # Each value's fault is its own path, so the order is Table.new/2's.
+      _faults -> {:error, Enum.sort_by(faults, &elem(&1, 0))}
     end
   end
 
@@ -265,7 +284,17 @@ defmodule Macaw.Data.Table.Apply do
       case Enum.find_index(state.chunks, &(slot_of(&1) == slot)) do
         nil ->
           id = {ctx.origin.source, ctx.origin.resolution, slot}
-          {:ok, chunk} = Chunk.of_rows(ctx.header, ordered(group, ctx), id)
+          group = ordered(group, ctx)
+
+          chunk =
+            case packed(group, rows, ctx) do
+              nil ->
+                {:ok, chunk} = Chunk.of_rows(ctx.header, group, id)
+                chunk
+
+              columns ->
+                Chunk.build(ctx.header, columns, length(group), id)
+            end
 
           at =
             Enum.find_index(state.chunks, &(order(slot_of(&1)) > order(slot))) ||
@@ -280,8 +309,8 @@ defmodule Macaw.Data.Table.Apply do
             delta = chunk.delta || %Delta{window: ctx.time}
             put(state, k, Chunk.with_delta(chunk, %{delta | side: delta.side ++ group}))
           else
-            rows = for({row, _} <- Chunk.read(chunk), do: row) ++ group
-            rewrite(state, k, chunk, ordered(rows, ctx), ctx)
+            written = written(chunk, group, rows, ctx)
+            %{state | chunks: List.replace_at(state.chunks, k, written)}
           end
       end
     end)
@@ -299,6 +328,32 @@ defmodule Macaw.Data.Table.Apply do
 
   defp insert(rows, state, ctx), do: append(rows, state, ctx)
 
+  # An open chunk with `group` inserted, kept in the window field's order, a held row
+  # first among equal values (spec/01 §1.1.4) (macaw_data#204). Only the group is sorted.
+  # A group starting at or after the chunk's last row is packed and joined after the held
+  # columns as they lie (`Chunk.append/2`); any other, and any column the join can't keep
+  # exact, writes the chunk again from all its rows. Either way the chunk is the one
+  # packing its rows in order gives.
+  defp written(chunk, group, rows, ctx) do
+    group = ordered(group, ctx)
+
+    with false <- Chunk.delta?(chunk) or Chunk.size(chunk) == 0,
+         true <- held_key(chunk, ctx) <= key(hd(group), ctx),
+         {:ok, chunk} <- Chunk.append(chunk, group, packed(group, rows, ctx)) do
+      chunk
+    else
+      _rewrite ->
+        rows = for({row, _} <- Chunk.read(chunk), do: row) ++ group
+        {:ok, chunk} = Chunk.of_rows(ctx.header, ordered(rows, ctx), Chunk.id(chunk))
+        chunk
+    end
+  end
+
+  # The increment's packed columns (`packs/2`) where `group`, sorted, is every row it
+  # inserts in the order they came, so they are this group's as packed; else `nil`.
+  defp packed(group, rows, %{packed: packed}) when packed != nil and group == rows, do: packed
+  defp packed(_group, _rows, _ctx), do: nil
+
   # A late row into the first chunk whose last row comes after it.
   defp place(row, state, ctx) do
     k = Enum.find_index(state.chunks, &(last_key([&1], ctx) > key(row, ctx)))
@@ -315,8 +370,14 @@ defmodule Macaw.Data.Table.Apply do
     end
   end
 
-  defp key(row, ctx) do
-    case pos(Table.get(row, ctx.time)) do
+  # The order key of a chunk's last row, read from its window column alone.
+  defp held_key(chunk, ctx),
+    do: value_key(Chunk.at(chunk, ctx.time, Chunk.size(chunk) - 1))
+
+  defp key(row, ctx), do: value_key(Table.get(row, ctx.time))
+
+  defp value_key(value) do
+    case pos(value) do
       p when is_number(p) -> {0, p}
       _none -> {1, 0}
     end
