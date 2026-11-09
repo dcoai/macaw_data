@@ -106,3 +106,48 @@ pub fn take_bits(bitmap: beam.term, indexes: beam.term) beam.term {
 pub fn extremes(form: u8, data: beam.term, validity: beam.term, first: usize, count: usize) beam.term {
     return answer(extremity.extremes(form, data, validity, first, count));
 }
+
+// -- the allocation probes (macaw_data#101) ------------------------------------------------
+//
+// Each kernel that allocates, run with its allocations counted and the `fail_at`th failed
+// (`0`, none): `{answer, allocations, live}`, `live` the blocks still held when it
+// returned, which is 0 on every return. Exported only under `config :macaw_data,
+// native_probes: true` (`kernels.ex`), the suite's.
+
+fn probed(fail_at: usize, comptime kernel: anytype, args: anytype) beam.term {
+    var p = bufs.Probe{ .fail_at = fail_at };
+    bufs.probe = &p;
+    const result = @call(.auto, kernel, args);
+    bufs.probe = null;
+    const env = beam.context.env;
+    var triple = [_]e.ErlNifTerm{ result.v, e.enif_make_uint64(env, p.calls), e.enif_make_int64(env, p.live) };
+    return .{ .v = e.enif_make_tuple_from_array(env, &triple, 3) };
+}
+
+pub fn ladder_probe(fail_at: usize, xform: u8, xdata: beam.term, xvalid: beam.term, yform: u8, ydata: beam.term, yvalid: beam.term, first: usize, count: usize, kind: u8, k: i64) beam.term {
+    return probed(fail_at, ladder, .{ xform, xdata, xvalid, yform, ydata, yvalid, first, count, kind, k });
+}
+
+pub fn m4_finish_probe(fail_at: usize, pieces: beam.term, k: i64, extent: u8, lo: beam.term, hi: beam.term, width: i64) beam.term {
+    return probed(fail_at, m4_finish, .{ pieces, k, extent, lo, hi, width });
+}
+
+pub fn lttb_finish_probe(fail_at: usize, pieces: beam.term, n: i64) beam.term {
+    return probed(fail_at, lttb_finish, .{ pieces, n });
+}
+
+pub fn group_sum_probe(fail_at: usize, vform: u8, vdata: beam.term, vvalid: beam.term, grouped: bool, codes: beam.term, cvalid: beam.term, ncodes: usize, first: usize, count: usize, limit: usize) beam.term {
+    return probed(fail_at, group_sum, .{ vform, vdata, vvalid, grouped, codes, cvalid, ncodes, first, count, limit });
+}
+
+pub fn filter_mask_probe(fail_at: usize, mode: u8, data: beam.term, validity: beam.term, first: usize, count: usize, cmp: u8, value: beam.term, present: bool, missing: bool, pass: beam.term, ncodes: usize) beam.term {
+    return probed(fail_at, filter_mask, .{ mode, data, validity, first, count, cmp, value, present, missing, pass, ncodes });
+}
+
+pub fn take_probe(fail_at: usize, data: beam.term, width: usize, indexes: beam.term) beam.term {
+    return probed(fail_at, take, .{ data, width, indexes });
+}
+
+pub fn take_bits_probe(fail_at: usize, bitmap: beam.term, indexes: beam.term) beam.term {
+    return probed(fail_at, take_bits, .{ bitmap, indexes });
+}

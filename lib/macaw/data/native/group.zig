@@ -51,8 +51,8 @@ pub fn group_sum(vform: u8, vdata: beam.term, vvalid: beam.term, grouped: bool, 
     // A code's group index, `none` until it appears; the last slot is a missing key's.
     const none = std.math.maxInt(u32);
     const slots = if (grouped) ncodes + 1 else 1;
-    const raw = e.enif_alloc(slots * @sizeOf(u32)) orelse return error.OutOfMemory;
-    defer e.enif_free(raw);
+    const raw = bufs.alloc(slots * @sizeOf(u32)) orelse return error.OutOfMemory;
+    defer bufs.free(raw);
     const slot: [*]u32 = @ptrCast(@alignCast(raw));
     @memset(slot[0..slots], none);
 
@@ -121,14 +121,17 @@ const Table = struct {
 
     fn init() error{OutOfMemory}!Table {
         const cap: usize = 64;
-        const raw = e.enif_alloc(cap * @sizeOf(u32)) orelse return error.OutOfMemory;
+        const raw = bufs.alloc(cap * @sizeOf(u32)) orelse return error.OutOfMemory;
+        // The caller's `defer table.deinit()` is registered only once this returns, so the
+        // index is freed here if the sums can't be had (macaw_data#101).
+        errdefer bufs.free(raw);
         const index: [*]u32 = @ptrCast(@alignCast(raw));
         @memset(index[0..cap], empty);
         return .{ .index = index, .cap = cap, .sums = try Grow(Mantissas).init(32) };
     }
 
     fn deinit(self: *Table) void {
-        e.enif_free(@ptrCast(self.index));
+        bufs.free(@ptrCast(self.index));
         self.sums.deinit();
     }
 
@@ -157,7 +160,7 @@ const Table = struct {
 
     fn grow(self: *Table) error{OutOfMemory}!void {
         const cap = self.cap * 2;
-        const raw = e.enif_alloc(cap * @sizeOf(u32)) orelse return error.OutOfMemory;
+        const raw = bufs.alloc(cap * @sizeOf(u32)) orelse return error.OutOfMemory;
         const index: [*]u32 = @ptrCast(@alignCast(raw));
         @memset(index[0..cap], empty);
         const mask = cap - 1;
@@ -166,7 +169,7 @@ const Table = struct {
             while (index[h] != empty) h = (h + 1) & mask;
             index[h] = @intCast(at);
         }
-        e.enif_free(@ptrCast(self.index));
+        bufs.free(@ptrCast(self.index));
         self.index = index;
         self.cap = cap;
     }

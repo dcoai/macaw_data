@@ -27,29 +27,55 @@ case Toolchain.decide(
 
       # Each `_dirty` kernel is its namesake on a dirty CPU scheduler, for a call past what a
       # normal scheduler takes within 1 ms (`Macaw.Data.Native.scheduler/1`, spec/04 §1.7).
-      use Zig,
-        otp_app: :macaw_data,
-        zig_code_path: "kernels.zig",
-        optimize: :safe,
-        nifs: [
-          abi: [],
-          ladder: [],
-          ladder_dirty: [alias: :ladder, concurrency: :dirty_cpu],
-          m4_finish: [],
-          m4_finish_dirty: [alias: :m4_finish, concurrency: :dirty_cpu],
-          lttb_finish: [],
-          lttb_finish_dirty: [alias: :lttb_finish, concurrency: :dirty_cpu],
-          group_sum: [],
-          group_sum_dirty: [alias: :group_sum, concurrency: :dirty_cpu],
-          filter_mask: [],
-          filter_mask_dirty: [alias: :filter_mask, concurrency: :dirty_cpu],
-          take: [],
-          take_dirty: [alias: :take, concurrency: :dirty_cpu],
-          take_bits: [],
-          take_bits_dirty: [alias: :take_bits, concurrency: :dirty_cpu],
-          extremes: [],
-          extremes_dirty: [alias: :extremes, concurrency: :dirty_cpu]
-        ]
+      @kernels [
+        abi: [],
+        ladder: [],
+        ladder_dirty: [alias: :ladder, concurrency: :dirty_cpu],
+        m4_finish: [],
+        m4_finish_dirty: [alias: :m4_finish, concurrency: :dirty_cpu],
+        lttb_finish: [],
+        lttb_finish_dirty: [alias: :lttb_finish, concurrency: :dirty_cpu],
+        group_sum: [],
+        group_sum_dirty: [alias: :group_sum, concurrency: :dirty_cpu],
+        filter_mask: [],
+        filter_mask_dirty: [alias: :filter_mask, concurrency: :dirty_cpu],
+        take: [],
+        take_dirty: [alias: :take, concurrency: :dirty_cpu],
+        take_bits: [],
+        take_bits_dirty: [alias: :take_bits, concurrency: :dirty_cpu],
+        extremes: [],
+        extremes_dirty: [alias: :extremes, concurrency: :dirty_cpu]
+      ]
+
+      # The allocation probes (spec/04 §1.7, macaw_data#101): each kernel that allocates, run
+      # with its allocations counted and the `fail_at`th failed, answering `{answer,
+      # allocations, live}`. Built only under `config :macaw_data, native_probes: true`,
+      # this project's test configuration; an adopter's build exports none.
+      @probes if(Application.compile_env(:macaw_data, :native_probes, false),
+                do: [
+                  ladder_probe: [],
+                  m4_finish_probe: [],
+                  lttb_finish_probe: [],
+                  group_sum_probe: [],
+                  filter_mask_probe: [],
+                  take_probe: [],
+                  take_bits_probe: []
+                ],
+                else: []
+              )
+
+      # Zigler reads `nifs:` as a literal list, so its `use` is evaluated with the list built.
+      Code.eval_quoted(
+        quote do
+          use Zig,
+            otp_app: :macaw_data,
+            zig_code_path: "kernels.zig",
+            optimize: :safe,
+            nifs: unquote(@kernels ++ @probes)
+        end,
+        [],
+        __ENV__
+      )
 
       @doc false
       def built?, do: true

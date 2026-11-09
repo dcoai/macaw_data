@@ -256,6 +256,7 @@ asked for parallel, a run above parallel_rows/0 with two chunks or more works it
 - **A derived function's column reads use them too** (macaw_data#107, [02 §2.2](02-derived.md#derived-input-windows)). `Macaw.Data.Derived.Columns`' `sum`, `count` and `mean` read the exact-sum kernel, `group_sum`, ungrouped. Its `min` and `max` read `extremes`, which answers a view's first least and first greatest present slot of an int64, float64 or int32 buffer by index. The interface version is 8.
 - **A panic is never silent.** The kernels are built ReleaseSafe in every environment, so a bounds or overflow fault panics rather than reading past a buffer. Each kernel checks its buffers' sizes and answers a fault for a malformed input (next). A panic is then a bug, and it takes the node down with its message and stack trace on standard error.
 - **A fault is a term, never a Zig error** (macaw_data#101). Zigler turns a NIF's error return into an `ErlangError` through its error-return trace, whose debug-info globals it initializes on first use without a lock, so two first errors at once in one VM could corrupt them. No kernel returns one: a buffer, piece or form a kernel can't read is `{:fault, reason}` (`:short_buffer`, `:not_a_binary`, `:not_a_piece`, `:unknown_form`), and memory it can't get is `{:fault, :out_of_memory}`. A compile-time check in `kernels.zig` refuses a surface function whose return type is an error union. Every call is made through `Native.kernel/3`, which reads the answer: out of memory is `:fallback`, so the Elixir path answers; any other fault is a defect in this library's own packing, since the Elixir side packs every buffer a kernel reads, and raises naming the kernel and its arguments' shapes. Zigler's race itself is upstream's to fix.
+- **No allocation outlives its call** (macaw_data#101). Every kernel allocation is made through `buffers.zig`'s `alloc`, `realloc` and `free`, and freed by a `defer`, or an `errdefer` where a constructor allocates twice before its caller's `defer` is registered (`group_sum`'s `Table.init`). A probe counts one call's allocations and fails the Nth: it is thread-local and set only inside a probe NIF's own call. The probe NIFs, `<kernel>_probe(fail_at, ...)`, answer `{answer, allocations, live}`, and are built only under `config :macaw_data, native_probes: true`, this project's test configuration, so an adopter's build exports none. The suite fails every allocation of each kernel that allocates in turn.
 
 ```test:operations-native-loaded
 loaded? is a boolean held in persistent_term, decided when the application starts, true exactly when the kernels were built; a build under native: :required has them loaded, and a start whose kernels fail to load is refused under :required and runs the Elixir path under :optional
@@ -287,6 +288,10 @@ inside Native.normal_schedulers/1 every kernel call is on a normal scheduler wha
 
 ```test:operations-native-faults
 every kernel, on either scheduler, answers a buffer, piece or form it can't read as {:fault, reason}, never an ErlangError; Native.kernel/3 answers :out_of_memory as :fallback and raises any other fault naming the kernel and its arguments' shapes
+```
+
+```test:operations-native-allocations
+each kernel that allocates, run with each of its allocations failed in turn, answers {:fault, :out_of_memory} with no block live when it returns, and with none failed answers its own answer with none live
 ```
 
 ```test:operations-native-panic

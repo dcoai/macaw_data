@@ -11,3 +11,8 @@ config :macaw_data,
        "optional" -> :optional
        "required" -> :required
      end)
+
+# The native kernels' allocation probes (spec/04 §1.7, macaw_data#101), exported in this
+# project's test build alone; a library's own config never reaches an adopter, so an
+# adopter's build has none.
+config :macaw_data, native_probes: config_env() == :test

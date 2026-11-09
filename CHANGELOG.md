@@ -3,6 +3,7 @@
 ## Unreleased
 
 - **A native kernel answers a fault as a term, never as a Zig error** (#101, #208, spec/04 §1.7). Zigler turned a kernel's error return into an `ErlangError` through its error-return trace, whose debug-info globals it initializes on first use without a lock. A kernel now answers `{:fault, reason}` (`:short_buffer`, `:not_a_binary`, `:not_a_piece`, `:unknown_form`, `:out_of_memory`), and a compile-time check refuses one that returns an error union. Out of memory is answered by the Elixir path. Any other fault is a defect in this library's own packing and raises a `RuntimeError` naming the kernel and its arguments' shapes, where an `ErlangError` such as `:ShortBuffer` was raised before. The kernels' interface version is 8. Each kernel call counts 2 to 4 reductions more (a ladder partial over 8,192 rows: 39 → 42; the column sum: 215 → 219); its time is within noise.
+- **A native kernel frees what it allocated when an allocation fails** (#101, #209, spec/04 §1.7). `group_sum` leaked its hash index when `Table.init`'s second allocation failed, found by extla's allocation model. Out of memory only, so no working call changes. Every kernel allocation now goes through one counted path, and the suite fails each allocation of each kernel in turn and finds nothing live at any return.
 
 ## v0.13.1 (2026-11-06)
 

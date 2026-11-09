@@ -32,6 +32,39 @@ pub inline fn readI32(data: []const u8, i: usize) i32 {
     return std.mem.readInt(i32, data[i * 4 ..][0..4], .little);
 }
 
+/// A probe of one kernel call's allocations (macaw_data#101): how many were asked for, how
+/// many are live, and which one fails (the `fail_at`th, `0` none). Set only by a probe NIF,
+/// for its own call on its own thread, and cleared before it returns; every other call
+/// finds it null.
+pub const Probe = struct { fail_at: usize, calls: usize = 0, live: isize = 0 };
+pub threadlocal var probe: ?*Probe = null;
+
+/// Every kernel allocation is made here, so a probe counts each and can fail any one.
+pub fn alloc(size: usize) ?*anyopaque {
+    if (probe) |p| {
+        p.calls += 1;
+        if (p.calls == p.fail_at) return null;
+        const raw = e.enif_alloc(size) orelse return null;
+        p.live += 1;
+        return raw;
+    }
+    return e.enif_alloc(size);
+}
+
+/// A reallocation keeps the block live, moved or not; a failed one leaves it as it was.
+pub fn realloc(ptr: ?*anyopaque, size: usize) ?*anyopaque {
+    if (probe) |p| {
+        p.calls += 1;
+        if (p.calls == p.fail_at) return null;
+    }
+    return e.enif_realloc(ptr, size);
+}
+
+pub fn free(ptr: ?*anyopaque) void {
+    if (probe) |p| p.live -= 1;
+    e.enif_free(ptr);
+}
+
 /// A growing list of `T` in the BEAM's memory, doubled as it fills, so its cost follows
 /// what it holds, not the rows read. Raw `enif_realloc`: the `std.mem.Allocator` interface
 /// fills new memory with 0xAA in a safe build, a write per byte that would cost more than
@@ -45,18 +78,18 @@ pub fn Grow(comptime T: type) type {
         const Self = @This();
 
         pub fn init(cap: usize) error{OutOfMemory}!Self {
-            const raw = e.enif_alloc(cap * @sizeOf(T)) orelse return error.OutOfMemory;
+            const raw = alloc(cap * @sizeOf(T)) orelse return error.OutOfMemory;
             return .{ .items = @ptrCast(@alignCast(raw)), .cap = cap };
         }
 
         pub fn deinit(self: *Self) void {
-            e.enif_free(@ptrCast(self.items));
+            free(@ptrCast(self.items));
         }
 
         pub fn push(self: *Self, value: T) error{OutOfMemory}!void {
             if (self.len == self.cap) {
                 const cap = self.cap * 2;
-                const raw = e.enif_realloc(@ptrCast(self.items), cap * @sizeOf(T)) orelse return error.OutOfMemory;
+                const raw = realloc(@ptrCast(self.items), cap * @sizeOf(T)) orelse return error.OutOfMemory;
                 self.items = @ptrCast(@alignCast(raw));
                 self.cap = cap;
             }
