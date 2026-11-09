@@ -26,7 +26,7 @@ defmodule Macaw.Data.Native do
   @elixir {__MODULE__, :elixir}
   @normal {__MODULE__, :normal_schedulers}
   # The interface version kernels.zig answers (`abi/0`), so a stale library is not used.
-  @abi 7
+  @abi 8
   # Which module this build compiled, the kernels or their stub, read when this one compiles:
   # a constant, so the start of a build without the kernels never reaches the probe.
   @built Kernels.built?()
@@ -140,6 +140,44 @@ defmodule Macaw.Data.Native do
   def entry_limit, do: if(normal?(), do: 0, else: @sync_entries)
 
   defp normal?, do: Process.get(@normal) == true
+
+  @doc false
+  # Kernel `name` called with `args` on `scheduler` (`scheduler/1`'s, `finish_scheduler/1`'s),
+  # its answer read through `answer/3`. Every kernel call is made here.
+  @spec kernel(atom(), [term()], :normal | :dirty) :: term()
+  def kernel(name, args, :normal), do: answer(name, apply(Kernels, name, args), args)
+  def kernel(name, args, :dirty), do: answer(name, apply(Kernels, dirty(name), args), args)
+
+  defp dirty(:ladder), do: :ladder_dirty
+  defp dirty(:m4_finish), do: :m4_finish_dirty
+  defp dirty(:lttb_finish), do: :lttb_finish_dirty
+  defp dirty(:group_sum), do: :group_sum_dirty
+  defp dirty(:filter_mask), do: :filter_mask_dirty
+  defp dirty(:take), do: :take_dirty
+  defp dirty(:take_bits), do: :take_bits_dirty
+  defp dirty(:extremes), do: :extremes_dirty
+
+  @doc false
+  # A kernel's answer (spec/04 §1.7, macaw_data#101). A kernel answers a fault as a term,
+  # never as a Zig error: out of memory is `:fallback`, so the Elixir path answers instead;
+  # any other fault, a buffer, piece or form the kernel can't read, is a defect in this
+  # library's own packing, raised with the kernel's name and its arguments' shapes.
+  @spec answer(atom(), term(), [term()]) :: term()
+  def answer(_name, {:fault, :out_of_memory}, _args), do: :fallback
+  def answer(name, {:fault, reason}, args), do: fault!(name, reason, args)
+  def answer(_name, answer, _args), do: answer
+
+  defp fault!(name, reason, args) do
+    raise "native kernel #{name} answered the fault #{inspect(reason)} for arguments " <>
+            "shaped #{inspect(Enum.map(args, &shape/1))}: the Elixir side packs every " <>
+            "buffer it reads, so this is a defect here (spec/04 §1.7, macaw_data#101)"
+  end
+
+  defp shape(binary) when is_binary(binary), do: {:binary, byte_size(binary)}
+  defp shape(list) when is_list(list), do: {:list, length(list)}
+  defp shape(value) when is_number(value) or is_boolean(value) or is_atom(value), do: value
+  defp shape(tuple) when is_tuple(tuple), do: {:tuple, tuple_size(tuple)}
+  defp shape(_other), do: :term
 
   @doc false
   # At the application's start: whether the kernels loaded, held in `:persistent_term`. A

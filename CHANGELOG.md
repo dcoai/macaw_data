@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **A native kernel answers a fault as a term, never as a Zig error** (#101, #208, spec/04 §1.7). Zigler turned a kernel's error return into an `ErlangError` through its error-return trace, whose debug-info globals it initializes on first use without a lock. A kernel now answers `{:fault, reason}` (`:short_buffer`, `:not_a_binary`, `:not_a_piece`, `:unknown_form`, `:out_of_memory`), and a compile-time check refuses one that returns an error union. Out of memory is answered by the Elixir path. Any other fault is a defect in this library's own packing and raises a `RuntimeError` naming the kernel and its arguments' shapes, where an `ErlangError` such as `:ShortBuffer` was raised before. The kernels' interface version is 8. Each kernel call counts 2 to 4 reductions more (a ladder partial over 8,192 rows: 39 → 42; the column sum: 215 → 219); its time is within noise.
+
 ## v0.13.1 (2026-11-06)
 
 **A sliding `Macaw.Data.Source.Push.trim/2` costs almost nothing** (#201). It decides from each chunk's last value and no longer decodes and compares the chunk's rows, so a holder that trims every frame stops paying for it.

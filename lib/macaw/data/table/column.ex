@@ -47,7 +47,6 @@ defmodule Macaw.Data.Table.Column do
   # struct field: `macaw.zoned`'s, or `macaw.precise`'s beside a UTC or naive instant).
 
   alias Macaw.Data.{Native, Schema}
-  alias Macaw.Data.Native.Kernels
   alias Macaw.Data.Table.{Bitmap, Digest}
 
   @typedoc "A column's storage, one of the forms above."
@@ -1041,9 +1040,9 @@ defmodule Macaw.Data.Table.Column do
   # run of consecutive slots at a time.
   defp take(data, width, [_ | _] = indexes) do
     if Native.active?() do
-      case Native.scheduler(length(indexes)) do
-        :normal -> Kernels.take(data, width, indexes)
-        :dirty -> Kernels.take_dirty(data, width, indexes)
+      case Native.kernel(:take, [data, width, indexes], Native.scheduler(length(indexes))) do
+        :fallback -> take_elixir(data, width, indexes)
+        slots -> slots
       end
     else
       take_elixir(data, width, indexes)

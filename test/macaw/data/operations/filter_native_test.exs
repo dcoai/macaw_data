@@ -304,8 +304,8 @@ defmodule Macaw.Data.Operations.FilterNativeTest do
           assert least < 1_000, "a #{n}-row call took #{least} µs"
         end
 
-        # A slot past the buffer is a fault, raised, never read.
-        assert_raise ErlangError, fn -> Kernels.take(data, 8, [3 * n]) end
+        # A slot past the buffer is a fault, answered as a term, never read (macaw_data#101).
+        assert Kernels.take(data, 8, [3 * n]) == {:fault, :short_buffer}
       end
     end
   end

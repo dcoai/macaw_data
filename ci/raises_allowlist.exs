@@ -274,6 +274,12 @@
     reason: "m4/3's twin: raises the faults m4/3 answers, as Macaw.Data.Error"
   },
   %{
+    at: {Macaw.Data.Native, :fault!, 3},
+    class: :invariant,
+    reason:
+      "a native kernel's fault other than out of memory: every buffer, view and piece a kernel reads is packed by this library's own Elixir side and checked there, so a short buffer, a term that is no binary, a malformed piece or an unknown form is a defect in that packing, never an input's (spec/04 §1.7, macaw_data#101)"
+  },
+  %{
     at: {Macaw.Data.Native.Kernels, nil, nil},
     class: :compile,
     reason: "native: :required without a toolchain fails the build (spec/04 §1.7)"

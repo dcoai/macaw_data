@@ -31,7 +31,6 @@ defmodule Macaw.Data.Operations.Transforms.Ladder do
 
   alias Macaw.Data.Checked
   alias Macaw.Data.Native
-  alias Macaw.Data.Native.Kernels
   alias Macaw.Data.Table
   alias Macaw.Data.Table.{Chunk, Column}
   alias Macaw.Data.Operations.Transforms
@@ -371,10 +370,8 @@ defmodule Macaw.Data.Operations.Transforms.Ladder do
          {yf, yd, yv} <- y_buffers(Chunk.packed(chunk, y)) do
       kd = if kind == :time, do: 1, else: 0
 
-      case Native.scheduler(count) do
-        :normal -> Kernels.ladder(xf, xd, xv, yf, yd, yv, first, count, kd, k)
-        :dirty -> Kernels.ladder_dirty(xf, xd, xv, yf, yd, yv, first, count, kd, k)
-      end
+      args = [xf, xd, xv, yf, yd, yv, first, count, kd, k]
+      Native.kernel(:ladder, args, Native.scheduler(count))
     else
       _ -> :fallback
     end
@@ -651,10 +648,8 @@ defmodule Macaw.Data.Operations.Transforms.Ladder do
           _point_or_none -> {0, 0, 0}
         end
 
-      case Native.finish_scheduler(buckets(pieces)) do
-        :normal -> Kernels.m4_finish(pieces, k, at, lo, hi, width)
-        :dirty -> Kernels.m4_finish_dirty(pieces, k, at, lo, hi, width)
-      end
+      args = [pieces, k, at, lo, hi, width]
+      Native.kernel(:m4_finish, args, Native.finish_scheduler(buckets(pieces)))
     else
       :fallback
     end
@@ -665,10 +660,7 @@ defmodule Macaw.Data.Operations.Transforms.Ladder do
   @spec lttb_native(partial(), pos_integer()) :: [ref()] | :fallback
   def lttb_native({_k, _views, pieces}, n) do
     if Native.active?() do
-      case Native.finish_scheduler(buckets(pieces)) do
-        :normal -> Kernels.lttb_finish(pieces, n)
-        :dirty -> Kernels.lttb_finish_dirty(pieces, n)
-      end
+      Native.kernel(:lttb_finish, [pieces, n], Native.finish_scheduler(buckets(pieces)))
     else
       :fallback
     end

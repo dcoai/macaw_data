@@ -12,7 +12,6 @@ defmodule Macaw.Data.Operations.Transforms.Aggregate do
   @behaviour Macaw.Data.Transform
 
   alias Macaw.Data.{Native, Operations, Table}
-  alias Macaw.Data.Native.Kernels
   alias Macaw.Data.Operations.{Aggregates, Option, Step, Transforms}
   alias Macaw.Data.Table.Chunk
 
@@ -255,8 +254,9 @@ defmodule Macaw.Data.Operations.Transforms.Aggregate do
          {grouped, cd, cv, dictionary} <- code_buffers(chunk, by) do
       ncodes = if grouped, do: div(byte_size(elem(dictionary, 0)), 4) - 1, else: 0
 
-      call = &Kernels.group_sum(vf, vd, vv, grouped, cd, cv, ncodes, first, count, &1)
-      dirty = &Kernels.group_sum_dirty(vf, vd, vv, grouped, cd, cv, ncodes, first, count, &1)
+      args = [vf, vd, vv, grouped, cd, cv, ncodes, first, count]
+      call = &Native.kernel(:group_sum, args ++ [&1], :normal)
+      dirty = &Native.kernel(:group_sum, args ++ [&1], :dirty)
 
       # Past `sync_rows/0` rows the call is dirty; past `sync_entries/0` entries the normal
       # call answers `:dirty` before building any term, and is made dirty.

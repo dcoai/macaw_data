@@ -65,7 +65,6 @@ defmodule Macaw.Data.Derived.Columns do
   import Kernel, except: [min: 2, max: 2]
 
   alias Macaw.Data.{Exact, Native, Table}
-  alias Macaw.Data.Native.Kernels
   alias Macaw.Data.Source.Order
   alias Macaw.Data.Table.{Bitmap, Chunk, Column}
   alias Macaw.Layers.Names
@@ -524,8 +523,9 @@ defmodule Macaw.Data.Derived.Columns do
   defp native_sum({chunk, first, n}, name) do
     with true <- Native.active?(),
          {form, data, validity} <- sum_buffers(Chunk.packed(chunk, name)) do
-      call = &Kernels.group_sum(form, data, validity, false, <<>>, <<>>, 0, first, n, &1)
-      dirty = &Kernels.group_sum_dirty(form, data, validity, false, <<>>, <<>>, 0, first, n, &1)
+      args = [form, data, validity, false, <<>>, <<>>, 0, first, n]
+      call = &Native.kernel(:group_sum, args ++ [&1], :normal)
+      dirty = &Native.kernel(:group_sum, args ++ [&1], :dirty)
 
       answer =
         case Native.scheduler(n) do
@@ -628,11 +628,7 @@ defmodule Macaw.Data.Derived.Columns do
     with true <- Native.active?(),
          packed = Chunk.packed(chunk, name),
          {form, data, validity} <- extreme_buffers(packed) do
-      answer =
-        case Native.scheduler(n) do
-          :normal -> Kernels.extremes(form, data, validity, first, n)
-          :dirty -> Kernels.extremes_dirty(form, data, validity, first, n)
-        end
+      answer = Native.kernel(:extremes, [form, data, validity, first, n], Native.scheduler(n))
 
       case answer do
         :fallback ->

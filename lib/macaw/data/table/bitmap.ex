@@ -134,9 +134,11 @@ defmodule Macaw.Data.Table.Bitmap do
   # By the native kernel where the kernels are loaded (spec/04 §4.1.1), the same bits.
   def take(bitmap, [_ | _] = indexes, nil) do
     if Macaw.Data.Native.active?() do
-      case Macaw.Data.Native.scheduler(length(indexes)) do
-        :normal -> Macaw.Data.Native.Kernels.take_bits(bitmap, indexes)
-        :dirty -> Macaw.Data.Native.Kernels.take_bits_dirty(bitmap, indexes)
+      native = Macaw.Data.Native.scheduler(length(indexes))
+
+      case Macaw.Data.Native.kernel(:take_bits, [bitmap, indexes], native) do
+        :fallback -> pack(for(i <- indexes, do: at(bitmap, i)))
+        bits -> bits
       end
     else
       pack(for(i <- indexes, do: at(bitmap, i)))

@@ -14,7 +14,6 @@ defmodule Macaw.Data.Operations.Transforms.Filter do
   @behaviour Macaw.Data.Transform
 
   alias Macaw.Data.{Native, Operations, Table}
-  alias Macaw.Data.Native.Kernels
   alias Macaw.Data.Operations.{Option, Step, Transforms}
   alias Macaw.Data.Source.Order
   alias Macaw.Data.Table.{Bitmap, Chunk, Column}
@@ -121,10 +120,7 @@ defmodule Macaw.Data.Operations.Transforms.Filter do
       x = if is_number(x), do: x, else: 0
       args = [mode, data, validity, first, count, code, x, present, passes?.(nil), pass, ncodes]
 
-      case Native.scheduler(count) do
-        :normal -> apply(Kernels, :filter_mask, args)
-        :dirty -> apply(Kernels, :filter_mask_dirty, args)
-      end
+      Native.kernel(:filter_mask, args, Native.scheduler(count))
     else
       _ -> :fallback
     end
