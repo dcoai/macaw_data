@@ -276,15 +276,23 @@ defmodule Macaw.Data.Table.Apply do
 
   defp insert([], state, _ctx), do: state
 
+  # Each row's window value is read once (macaw_data#215): its slot key groups the rows,
+  # each group's slot term is built once from one of its values, and its position keys the
+  # group's sort. The groups and their order are the ones grouping by `Origin.slot_of/2`
+  # gives, and each group's rows the ones sorting it by `key/2` gives.
   defp insert(rows, state, %{windowed?: true} = ctx) do
     rows
-    |> Enum.group_by(&Origin.slot_of(ctx.origin, Table.get(&1, ctx.time)))
-    |> Enum.sort_by(fn {slot, _rows} -> order(slot) end)
-    |> Enum.reduce(state, fn {slot, group}, state ->
+    |> Enum.map(&keyed(&1, ctx))
+    |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
+    |> Map.new(fn {_key, [{_sort, row} | _] = group} ->
+      {Origin.slot_of(ctx.origin, Table.get(row, ctx.time)), group}
+    end)
+    |> Enum.sort_by(fn {slot, _group} -> order(slot) end)
+    |> Enum.reduce(state, fn {slot, keyed}, state ->
       case Enum.find_index(state.chunks, &(slot_of(&1) == slot)) do
         nil ->
           id = {ctx.origin.source, ctx.origin.resolution, slot}
-          group = ordered(group, ctx)
+          {_keyed, group} = sorted(keyed)
 
           chunk =
             case packed(group, rows, ctx) do
@@ -306,10 +314,13 @@ defmodule Macaw.Data.Table.Apply do
           chunk = Enum.at(state.chunks, k)
 
           if settled?(chunk, ctx) do
+            # A side chunk holds its rows in the order they came; reading sorts them.
+            group = Enum.map(keyed, &elem(&1, 1))
             delta = chunk.delta || %Delta{window: ctx.time}
             put(state, k, Chunk.with_delta(chunk, %{delta | side: delta.side ++ group}))
           else
-            written = written(chunk, group, rows, ctx)
+            {keyed, group} = sorted(keyed)
+            written = written(chunk, keyed, group, rows, ctx)
             %{state | chunks: List.replace_at(state.chunks, k, written)}
           end
       end
@@ -336,12 +347,11 @@ defmodule Macaw.Data.Table.Apply do
   # nothing read. A chunk the split can't be found in (a delta, a window column of
   # another form) and any column the join can't keep exact is written again from all its
   # rows. Either way the chunk is the one packing its rows in order gives.
-  defp written(chunk, group, rows, ctx) do
-    group = ordered(group, ctx)
-
+  # `keyed` is the sorted group beside each row's order key, `group` its rows.
+  defp written(chunk, [{first, _row} | _] = keyed, group, rows, ctx) do
     with false <- Chunk.delta?(chunk) or Chunk.size(chunk) == 0,
-         at when is_integer(at) <- split(chunk, key(hd(group), ctx), ctx),
-         {:ok, chunk} <- moved(chunk, at, group, rows, ctx) do
+         at when is_integer(at) <- split(chunk, first, ctx),
+         {:ok, chunk} <- moved(chunk, at, keyed, group, rows, ctx) do
       chunk
     else
       _rewrite ->
@@ -373,28 +383,27 @@ defmodule Macaw.Data.Table.Apply do
   end
 
   # The held rows from `at` merged with the group, packed and joined after the rest.
-  defp moved(chunk, at, group, rows, ctx) do
+  defp moved(chunk, at, keyed, group, rows, ctx) do
     case Chunk.size(chunk) - at do
       0 ->
         Chunk.written_from(chunk, at, group, packed(group, rows, ctx))
 
       n ->
-        tail = Chunk.rows(chunk, at, n)
-        Chunk.written_from(chunk, at, merged(tail, group, ctx), nil)
+        tail = for row <- Chunk.rows(chunk, at, n), do: {key(row, ctx), row}
+        Chunk.written_from(chunk, at, merged(tail, keyed, []), nil)
     end
   end
 
-  # Two runs in the window field's order merged, the held row first among equals: the
-  # order a stable sort of the held rows and then the group gives.
-  defp merged(held, group, ctx), do: merged(held, group, ctx, [])
+  # Two runs in the window field's order, each row beside its order key, merged into rows,
+  # the held row first among equals: the order a stable sort of the held rows and then
+  # the group gives.
+  defp merged([], group, acc), do: :lists.reverse(acc, Enum.map(group, &elem(&1, 1)))
+  defp merged(held, [], acc), do: :lists.reverse(acc, Enum.map(held, &elem(&1, 1)))
 
-  defp merged([], group, _ctx, acc), do: :lists.reverse(acc, group)
-  defp merged(held, [], _ctx, acc), do: :lists.reverse(acc, held)
-
-  defp merged([h | held] = hs, [g | group] = gs, ctx, acc) do
-    if key(h, ctx) <= key(g, ctx),
-      do: merged(held, gs, ctx, [h | acc]),
-      else: merged(hs, group, ctx, [g | acc])
+  defp merged([{hk, h} | held] = hs, [{gk, g} | group] = gs, acc) do
+    if hk <= gk,
+      do: merged(held, gs, [h | acc]),
+      else: merged(hs, group, [g | acc])
   end
 
   # Where the group goes: the index of the first held row later than its earliest
@@ -464,12 +473,24 @@ defmodule Macaw.Data.Table.Apply do
 
   defp key(row, ctx), do: value_key(Table.get(row, ctx.time))
 
-  defp value_key(value) do
-    case pos(value) do
-      p when is_number(p) -> {0, p}
-      _none -> {1, 0}
-    end
+  # A group's rows beside their order keys, sorted stably by them as `ordered/2` sorts
+  # rows, and the rows alone.
+  defp sorted(keyed) do
+    keyed = List.keysort(keyed, 0)
+    {keyed, Enum.map(keyed, &elem(&1, 1))}
   end
+
+  # A row's slot key and, beside the row, its order key (`key/2`), from one reading of its
+  # window value.
+  defp keyed(row, ctx) do
+    {slot, p} = Origin.slot_key(ctx.origin, Table.get(row, ctx.time))
+    {slot, {position_key(p), row}}
+  end
+
+  defp value_key(value), do: position_key(Origin.position(value))
+
+  defp position_key(p) when is_number(p), do: {0, p}
+  defp position_key(_none), do: {1, 0}
 
   defp append([], state, _ctx), do: state
 

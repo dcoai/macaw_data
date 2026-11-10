@@ -200,6 +200,34 @@ defmodule Macaw.Data.Table.Origin do
   end
 
   @doc false
+  # A window value's slot as a key, with its position (`position/1`), from one reading of
+  # its instant (macaw_data#215). Two values share a key exactly when `slot_of/2` answers
+  # them the same term, so rows keyed alike lie in one slot, whose term is `slot_of/2` of
+  # any one of them, built once. A time's key keeps the kind of its slot, `{:utc, us}` for
+  # a `DateTime` and `{:naive, us}` for a naive time or a date, at the start the term
+  # holds (a `DateTime`'s clamped to the earliest it can hold); a number's is its slot
+  # itself; `nil` and `:invalid` are themselves.
+  @spec slot_key(t(), term()) :: {term(), number() | nil | :invalid}
+  def slot_key(%{span: span}, value) do
+    p = at(value)
+
+    key =
+      cond do
+        p == :invalid or mismatched?(value, span) -> :invalid
+        p == nil -> nil
+        is_number(value) -> slot(value, span)
+        is_struct(value, DateTime) -> {:utc, max(start_us(p, span), @earliest_us)}
+        true -> {:naive, start_us(p, span)}
+      end
+
+    {key, p}
+  end
+
+  # A number under a span that is no number, or a value that is no number under one.
+  defp mismatched?(value, span) when is_number(value), do: not is_number(span)
+  defp mismatched?(value, span), do: is_number(span) and value != nil
+
+  @doc false
   # Whether a slot's span lies wholly before `until`: its end at or before it
   # (spec/01 §1.1.4). The slot `nil`, and no `until`, never.
   @spec settled?(t(), term(), term()) :: boolean()
