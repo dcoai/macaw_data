@@ -263,7 +263,7 @@ defmodule Macaw.Data.OperationsTest do
     test "the digest is the kernel's term digest of every name and its module" do
       %Registry{transforms: transforms, aggregates: aggregates} = registry = registry()
 
-      assert Operations.digest(registry) ==
+      assert {:ok, Operations.digest(registry)} ==
                Macaw.Layers.Document.digest(%{
                  "transforms" => transforms,
                  "aggregates" => aggregates
@@ -299,13 +299,24 @@ defmodule Macaw.Data.OperationsTest do
       assert Operations.step_digest!(registry, a) != Operations.step_digest!(registry, c)
 
       # The same name and options under another module are another step.
-      assert Operations.step_digest!(registry, a) !=
+      assert Operations.step_digest(registry, a) !=
                Macaw.Layers.Document.digest(%{"module" => Macaw.Data.Test.Ops.Twin, "node" => a})
 
       assert Operations.step_digest(registry, %{"op" => "nope"}) ==
                {:error, {["op"], {:unknown, :transform, "nope"}}}
 
       assert Operations.step_digest(registry, %{"field" => "v"}) == {:error, {["op"], :required}}
+
+      # A term that is not data has no digest: a fault at its path in the node, where
+      # macaw_layers 0.4.0's digest raised.
+      for not_data <- [self(), make_ref(), fn -> 1 end, [1 | 2]] do
+        assert Operations.step_digest(registry, %{a | "value" => not_data}) ==
+                 {:error, {["value"], :not_data}}
+      end
+
+      assert Operations.format_error({["value"], :not_data}) ==
+               "value: is not data: a function, a PID, a reference, a port or an improper list has no digest"
+
       assert {:ok, digest} = Operations.step_digest(registry, a)
       assert digest == Operations.step_digest!(registry, a)
 

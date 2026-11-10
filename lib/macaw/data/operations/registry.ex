@@ -8,7 +8,6 @@ defmodule Macaw.Data.Operations.Registry do
   """
 
   alias Macaw.Data.{Aggregate, Transform}
-  alias Macaw.Layers.Document
 
   @enforce_keys [:packages, :transforms, :aggregates, :digest]
   defstruct [:packages, :transforms, :aggregates, :digest]
@@ -110,7 +109,7 @@ defmodule Macaw.Data.Operations.Registry do
   # across OTP releases. Maps are canonical in it, so the order members were registered in
   # never moves it.
   defp digest(transforms, aggregates),
-    do: Document.digest(%{"transforms" => transforms, "aggregates" => aggregates})
+    do: Macaw.Data.Table.Digest.term(%{"transforms" => transforms, "aggregates" => aggregates})
 
   @doc "The transform module named `name`, by spelling, or `:error`."
   @spec transform(t(), String.t() | atom()) :: {:ok, module()} | :error

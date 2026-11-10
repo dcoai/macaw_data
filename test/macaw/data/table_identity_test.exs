@@ -149,6 +149,14 @@ defmodule Macaw.Data.TableIdentityTest do
 
       assert Table.new([{"t", :time, [at(1)]}], origin: %{cpu() | span: 10}) ==
                {:error, [{[:origin, :span], {:type, :duration}}]}
+
+      # The source and resolution name every chunk, and a combined chunk's id is the
+      # kernel's digest of its inputs' ids, so each is data.
+      assert Table.new([{"t", :time, [at(1)]}], origin: %{cpu() | source: self()}) ==
+               {:error, [{[:origin, :source], :not_data}]}
+
+      assert Table.new([{"t", :time, [at(1)]}], origin: %{cpu() | resolution: [60 | 1]}) ==
+               {:error, [{[:origin, :resolution], :not_data}]}
     end
 
     @tag verifies: "table-chunk-ids"
@@ -275,7 +283,7 @@ defmodule Macaw.Data.TableIdentityTest do
       refute Chunk.id(a) == Chunk.id(b)
       # A view from slot 0 keeps the step key itself, as a per-row step's output does.
       assert Chunk.id(whole) == {Chunk.id(chunk), key}
-      assert Chunk.version(whole) == Document.digest({[Chunk.version(chunk)], key})
+      assert {:ok, Chunk.version(whole)} == Document.digest({[Chunk.version(chunk)], key})
     end
 
     @tag verifies: "table-gather-slots"
@@ -311,12 +319,14 @@ defmodule Macaw.Data.TableIdentityTest do
       {:ok, out} = step(input, key, [2, 3])
       assert Chunk.id(out) == {Chunk.id(input), key}
       assert Chunk.digest(out) == nil
-      assert Chunk.version(out) == Document.digest({[Chunk.version(input)], key})
+      assert {:ok, Chunk.version(out)} == Document.digest({[Chunk.version(input)], key})
       assert Chunk.size(out) == 2
 
       {:ok, next} = step(out, {"take", %{"n" => 1}}, [2])
       assert Chunk.id(next) == {{Chunk.id(input), key}, {"take", %{"n" => 1}}}
-      assert Chunk.version(next) == Document.digest({[Chunk.version(out)], {"take", %{"n" => 1}}})
+
+      assert {:ok, Chunk.version(next)} ==
+               Document.digest({[Chunk.version(out)], {"take", %{"n" => 1}}})
     end
 
     @tag verifies: "table-derivation"
@@ -327,13 +337,14 @@ defmodule Macaw.Data.TableIdentityTest do
 
       {:ok, sorted} = Chunk.combine([a, b], key, [{"v", :number, [1, 2, 3]}])
 
-      assert Chunk.id(sorted) ==
-               {:combined,
-                Document.digest(
-                  {key, [{Chunk.id(a), Chunk.version(a)}, {Chunk.id(b), Chunk.version(b)}]}
-                )}
+      {:ok, combined} =
+        Document.digest({key, [{Chunk.id(a), Chunk.version(a)}, {Chunk.id(b), Chunk.version(b)}]})
 
-      assert Chunk.version(sorted) == Document.digest({[Chunk.version(a), Chunk.version(b)], key})
+      assert Chunk.id(sorted) == {:combined, combined}
+
+      assert {:ok, Chunk.version(sorted)} ==
+               Document.digest({[Chunk.version(a), Chunk.version(b)], key})
+
       assert Chunk.digest(sorted) == nil
     end
 

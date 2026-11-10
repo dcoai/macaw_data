@@ -22,7 +22,6 @@ defmodule Macaw.Data.Table.Chunk do
   alias Macaw.Data.Table.Column.Append
   alias Macaw.Data.Table.Delta
   alias Macaw.Data.Table.Digest
-  alias Macaw.Layers.Document
   alias Macaw.Data.Source.Order
 
   @enforce_keys [:size, :columns, :id, :digest, :derivation]
@@ -80,7 +79,7 @@ defmodule Macaw.Data.Table.Chunk do
   A cold chunk (spec/01 §1.1.4): its base held elsewhere, fetched by `fetch`, a function
   answering the base's columns by name, as `Macaw.Data.Table.chunks/1`'s chunks hold them.
   The chunk keeps its `header`, `id`, content `digest` and `size`; it is fetched only when
-  it is read.
+  it is read. `id` is the id `id/1` gave the chunk it stands for, so it is data.
   """
   @spec cold([{term(), atom()}], term(), String.t(), non_neg_integer(), (-> map())) :: t()
   def cold(header, id, digest, size, fetch) when is_function(fetch, 0) do
@@ -149,7 +148,7 @@ defmodule Macaw.Data.Table.Chunk do
   """
   @spec combine([t()], term(), columns()) :: {:ok, t()} | {:error, [{list(), term()}, ...]}
   def combine(inputs, step_key, columns) when is_list(inputs) do
-    id = {:combined, Document.digest({step_key, Enum.map(inputs, &{&1.id, version(&1)})})}
+    id = {:combined, Digest.term({step_key, Enum.map(inputs, &{&1.id, version(&1)})})}
     output(id, inputs, step_key, columns)
   end
 
@@ -179,7 +178,7 @@ defmodule Macaw.Data.Table.Chunk do
 
     case faults do
       [] ->
-        derivation = Document.digest({Enum.map(inputs, &version/1), step_key})
+        derivation = Digest.term({Enum.map(inputs, &version/1), step_key})
         header = for {name, type, _values} <- columns, do: {name, type}
 
         {:ok,
@@ -511,7 +510,7 @@ defmodule Macaw.Data.Table.Chunk do
       columns: columns,
       id: {input.id, key},
       digest: nil,
-      derivation: Document.digest({[version(input)], key}),
+      derivation: Digest.term({[version(input)], key}),
       base_rows: size,
       header: input.header
     }
@@ -558,7 +557,7 @@ defmodule Macaw.Data.Table.Chunk do
       columns: columns,
       id: {input.id, key},
       digest: nil,
-      derivation: Document.digest({[version(input)], key}),
+      derivation: Digest.term({[version(input)], key}),
       base_rows: size,
       header: header
     }

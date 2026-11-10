@@ -1156,7 +1156,7 @@ defmodule Macaw.Data.Derived do
   table and keys, making no atom, its schema by `Macaw.Data.Schema.from_map/1`, then
   judged by `new/1`. `limits:` tightens the limits. A derived source holds no URL: one the
   document holds (a `$url` at a window's bound) is `{path, {:url, reason}}`, under the
-  kernel's closed policy (`Macaw.Layers.Url.Policy.new([])`).
+  kernel's closed policy (`Macaw.Layers.Url.Policy.new!([])`).
   """
   @spec from_map(map(), keyword()) :: {:ok, t()} | {:error, [error(), ...]}
   def from_map(map, opts \\ []) when is_map(map), do: read(map, opts)

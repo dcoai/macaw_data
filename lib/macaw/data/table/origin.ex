@@ -2,9 +2,10 @@ defmodule Macaw.Data.Table.Origin do
   @moduledoc false
   # Where a source's table comes from, and so where its chunks sit (spec/01 §1.1.3): the
   # source, the resolution its relation is held at, its window field and its chunk span.
-  # A chunk's logical id is `{source, resolution, slot}`: the start of the span its rows
-  # lie in (event time), or the position among the source's rows where its run of
-  # `Table.chunk_rows/0` rows starts (row count). Nothing here reads a clock or depends on
+  # A chunk's logical id is `{source, resolution, slot}`, the source and resolution data
+  # (a combined chunk's id is the kernel's digest of its inputs' ids), the slot the start
+  # of the span its rows lie in (event time), or the position among the source's rows
+  # where its run of `Table.chunk_rows/0` rows starts (row count). Nothing here reads a clock or depends on
   # the data seen before: the same rows have the same slots on every node, every time.
 
   @keys [:source, :resolution, :window, :span, :offset]
@@ -36,6 +37,12 @@ defmodule Macaw.Data.Table.Origin do
           key <- [:source, :resolution],
           not Map.has_key?(given, key),
           do: {[:origin, key], :required}
+        ) ++
+        for(
+          key <- [:source, :resolution],
+          Map.has_key?(given, key),
+          not Macaw.Data.Table.Digest.data?(given[key]),
+          do: {[:origin, key], :not_data}
         ) ++
         window_faults(window, types) ++
         span_faults(span, window, types) ++

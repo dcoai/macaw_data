@@ -56,7 +56,7 @@ defmodule Macaw.Data.Schema do
 
   alias Macaw.Data.{Quantity, Table, Unit}
   alias Macaw.Data.Schema.Form
-  alias Macaw.Layers.{Color, Document}
+  alias Macaw.Layers.Color
 
   @enforce_keys [:fields, :version]
   # `identity` is derived by `new/1`: the identity fields in order, read once per schema
@@ -849,7 +849,7 @@ defmodule Macaw.Data.Schema do
 
   # The kernel's digest of the schema's term, its normalized fields; never of a
   # representation of it, so the JSON form (`Macaw.Data.Schema.Form`) is not on the way.
-  defp hash(fields), do: Document.digest(%{"fields" => fields})
+  defp hash(fields), do: Macaw.Data.Table.Digest.term(%{"fields" => fields})
 
   # -- the JSON form (spec/01 §1.11): an adapter at the edge, `Macaw.Data.Schema.Form` --
 

@@ -189,6 +189,8 @@ defmodule Macaw.Data.ReadersImproperListsTest do
 
   @tag verifies: "data-errors-readers"
   test "Schema.from_map/1: its pairs, a pair, values, status, a color's payload" do
+    {:ok, half} = Macaw.Layers.Color.alpha({:color, :warning}, 0.5)
+
     {:ok, map} =
       Schema.new!(%{
         "state" => %{
@@ -197,7 +199,7 @@ defmodule Macaw.Data.ReadersImproperListsTest do
           status: %{"ok" => :good, "bad" => :bad},
           values: [
             %{value: "ok", color: {:color, :warning}},
-            %{value: "bad", color: Macaw.Layers.Color.alpha({:color, :warning}, 0.5)}
+            %{value: "bad", color: half}
           ]
         },
         "n" => %{type: :number, bounds: [0, 1]}

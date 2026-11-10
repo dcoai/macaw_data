@@ -32,6 +32,7 @@ defmodule Macaw.Data.Operations.Step do
 
   alias Macaw.Data.Table
   alias Macaw.Data.Table.Chunk
+  alias Macaw.Data.Table.Digest
   alias Macaw.Layers.Document
 
   @typedoc "A per-row step's selection of a view's rows."
@@ -144,7 +145,9 @@ defmodule Macaw.Data.Operations.Step do
   @doc """
   Each chunk's work, in order: its view, the context as it resolved for it and its step
   key. Nothing of a chunk's part is computed here, so a caller holding a part under its
-  key need not compute it again.
+  key need not compute it again. A node holding a term that is not data (a function, a
+  PID, a reference, a port, an improper list) has no step key: `{:error, {key,
+  :not_data}}`, the node's key holding it.
   """
   @spec parts(module(), map(), Table.t(), map()) :: {:ok, [part()]} | {:error, fault()}
   def parts(module, node, %Table{} = table, context) when is_map(context) do
@@ -158,7 +161,7 @@ defmodule Macaw.Data.Operations.Step do
 
     case bound do
       {:error, {_key, _reason}} = error -> error
-      bound -> {:ok, parts(module, node, table, bound, Table.chunks(table))}
+      bound -> parts(module, node, table, bound, Table.chunks(table))
     end
   end
 
@@ -180,16 +183,22 @@ defmodule Macaw.Data.Operations.Step do
   defp parts(module, node, table, bound, views) do
     rows = Table.size(table)
     keyed = if function_exported?(module, :keyed, 1), do: module.keyed(node), else: node
-    identity = Document.digest(%{"module" => module, "node" => keyed})
 
-    {parts, _at} =
-      Enum.map_reduce(views, 0, fn {chunk, first, count} = view, at ->
-        resolved = module.resolve(node, view, Map.merge(bound, %{at: at, rows: rows}))
-        run = if first == 0 and count == Chunk.size(chunk), do: nil, else: {first, count}
-        {%{view: view, context: resolved, key: {identity, resolved, run}}, at + count}
-      end)
+    case Document.digest(%{"module" => module, "node" => keyed}) do
+      {:ok, identity} ->
+        {parts, _at} =
+          Enum.map_reduce(views, 0, fn {chunk, first, count} = view, at ->
+            resolved = module.resolve(node, view, Map.merge(bound, %{at: at, rows: rows}))
+            run = if first == 0 and count == Chunk.size(chunk), do: nil, else: {first, count}
+            {%{view: view, context: resolved, key: {identity, resolved, run}}, at + count}
+          end)
 
-    parts
+        {:ok, parts}
+
+      # The digest names the term under "node", so the node's key holding it is next.
+      {:error, [{["node", key | _], :not_data} | _]} ->
+        {:error, {key, :not_data}}
+    end
   end
 
   @doc """
@@ -310,7 +319,7 @@ defmodule Macaw.Data.Operations.Step do
   end
 
   defp at(module, node, input, keys, context) do
-    identity = Document.digest(%{"module" => module, "node" => node})
+    identity = Digest.term(%{"module" => module, "node" => node})
     %{input: input, key: {identity, keys}, context: Map.take(context, module.reads())}
   end
 

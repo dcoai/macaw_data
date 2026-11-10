@@ -136,7 +136,7 @@ defmodule Macaw.Data.Table do
   Its chunks are canonical (spec/01 §1.1.1), their ids their content digests. With
   `origin:` it is a source's table (spec/01 §1.1.3), its chunks laid on the origin's slots
   and named `{source, resolution, slot}`; an origin's own faults are `{[:origin, key],
-  reason}`, and rows out of the window field's order `{[:origin, :window], {:unsorted, i}}`.
+  reason}` (a source or resolution that is not data `{[:origin, key], :not_data}`), and rows out of the window field's order `{[:origin, :window], {:unsorted, i}}`.
   """
   @spec new([{name(), type(), [term()]}], keyword()) ::
           {:ok, t()} | {:error, [{list(), term()}, ...]}

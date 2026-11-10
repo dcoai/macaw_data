@@ -116,18 +116,28 @@ defmodule Macaw.Data.Operations do
   one identity whatever order their options were written in, and a step whose name another
   registry gives to another module has another. `{:ok, digest}`; only a checked node has
   an identity, so a node naming no transform of the registry is
-  `{:error, {["op"], {:unknown, :transform, op}}}`, and one with no `"op"`
-  `{:error, {["op"], :required}}`.
+  `{:error, {["op"], {:unknown, :transform, op}}}`, one with no `"op"`
+  `{:error, {["op"], :required}}`, and one holding a term that is not data (a function, a
+  PID, a reference, a port, an improper list) `{:error, {path, :not_data}}`, its path in
+  the node.
   """
   @spec step_digest(Registry.t(), map()) :: {:ok, String.t()} | {:error, fault()}
   def step_digest(%Registry{} = registry, %{"op" => op} = node) do
     case Registry.transform(registry, op) do
-      {:ok, module} -> {:ok, Macaw.Layers.Document.digest(%{"module" => module, "node" => node})}
+      {:ok, module} -> identity(module, node)
       :error -> {:error, {["op"], {:unknown, :transform, op}}}
     end
   end
 
   def step_digest(%Registry{}, node) when is_map(node), do: {:error, {["op"], :required}}
+
+  # The digest names the term under "node", so the rest of its path is the node's.
+  defp identity(module, node) do
+    case Macaw.Layers.Document.digest(%{"module" => module, "node" => node}) do
+      {:ok, digest} -> {:ok, digest}
+      {:error, [{["node" | path], :not_data} | _]} -> {:error, {path, :not_data}}
+    end
+  end
 
   @doc "As `step_digest/2`, raising `Macaw.Data.Error` naming the fault."
   @spec step_digest!(Registry.t(), map()) :: String.t()
@@ -473,6 +483,10 @@ defmodule Macaw.Data.Operations do
 
   defp why(:not_a_table), do: "is not a table"
   defp why(:overflow), do: "is beyond a float's range"
+
+  defp why(:not_data),
+    do: "is not data: a function, a PID, a reference, a port or an improper list has no digest"
+
   defp why(:not_a_package), do: "is not a package: it has no __members__/0"
   defp why(:no_behavior), do: "implements no behavior"
 

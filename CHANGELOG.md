@@ -21,6 +21,19 @@
   | 500 s | 1,567,584 → 611,530 | 43.8 → 8.3 |
   | 3,000 s | 1,571,582 → 911,552 | 43.4 → 19.6 |
   | 7,000 s | 1,575,583 → 1,243,565 | 39.3 → 33.2 |
+- **Depends on macaw_layers 0.5.0** (#216, #217, spec/00 §5), whose functions answer values where they raised; `{:macaw_layers, "~> 0.5.0"}`. Every digest is unchanged: each of the 18,985 distinct `Macaw.Layers.Document.digest/1` calls the 0.4.0 suite made answers the same bytes under 0.5.0, and no golden or stored digest moves. Where a call now answers a fault:
+  - `Macaw.Data.Operations.step_digest/2` answers a node holding a term that is not data (a function, a PID, a reference, a port, an improper list) as `{:error, {path, :not_data}}`, its path in the node, and `Macaw.Data.Operations.Step.parts/4` (so `Step.run/4` and `Macaw.Data.Operations.Cache.run/5`) as `{:error, {key, :not_data}}`; each raised `ArgumentError` from the kernel. A node `Macaw.Data.Operations.validate/3` checked holds none.
+  - `Macaw.Data.Table.new/2` refuses an origin source or resolution that is not data, `{[:origin, key], :not_data}` (spec/01 §1.1.3). It was accepted, and a sort or merge over the table then raised, since a combined chunk's id is the digest of its inputs' ids.
+  - `Macaw.Data.Schema.from_json/2`, `Macaw.Data.Derived.from_json/2` and `Macaw.Data.Derived.from_map/2` answer `limits:` that are none as faults under `[:limits]` (`{[:limits, :depth], {:limit_value, 64}}`, `{[:limits], {:type, :keyword}}`), reading nothing, where the kernel raised `ArgumentError`.
+  - The kernel's digest of a term this library built (a chunk's derivation and combined id, a step's identity over a checked node, a registry's names, a schema's fields) is one named invariant in `ci/raises_allowlist.exs`; `Url.Policy.new!([])`, configuration written in code, is the one `!` twin of the kernel called.
+  - The digest's answer costs a gather 17 reductions more (`Macaw.Data.Table.Chunk.gather/5` ×1,000 on one chunk, median of 21, load 4 to 8):
+
+  | Path | Reductions | ms |
+  |---|---|---|
+  | `Chunk.gather/5` ×1,000 (a derivation digest each) | 255,006 → 272,006 | 22 → 27 |
+  | `filter` over 50,000 rows, 84 chunks | 38,110 → 40,297 | 2.3 → 2.4 |
+  | `sort` over 50,000 rows (a combined id) | 3,187,023 → 3,187,599 | 142 → 140 |
+  | `Document.digest/1` ×10,000 on a derivation term | 1,300,007 → 1,590,007 | 25 → 27 |
 
 ## v0.13.1 (2026-11-06)
 

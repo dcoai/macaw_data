@@ -459,6 +459,12 @@
       "a value that is not data in a digest: Table.new/2 refuses one ({[name, i], :not_data}) before any chunk is built, so a chunk's canonical form never holds one (spec/01 §1.1.2)"
   },
   %{
+    at: {Macaw.Data.Table.Digest, :built_not_data, 1},
+    class: :invariant,
+    reason:
+      "a term this library built is not data in the kernel's digest (macaw_layers 0.5.0 answers it as a value): a chunk's derivation and combined id hold only digests, step keys and ids, Table.new/2 refuses an origin source or resolution that is not data, a step's node is checked by Operations.validate/3 (a :term option holds data only) and Step.parts/4 answers a node's own as {key, :not_data}, a registry holds names and modules, a schema's fields are judged by Schema.new/1 (spec/01 §1.1.3, §1.10; spec/04 §2)"
+  },
+  %{
     at: {Macaw.Data.Table, :column_types!, 1},
     class: :bang,
     reason: "column_types/1's twin: raises the faults column_types/1 answers, as Macaw.Data.Error"

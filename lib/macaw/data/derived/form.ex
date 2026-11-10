@@ -58,7 +58,7 @@ defmodule Macaw.Data.Derived.Form do
     end
   end
 
-  @no_url Url.Policy.new([])
+  @no_url Url.Policy.new!([])
 
   @doc false
   # A derived source holds no URL (spec/02 §1.5): no position of its value is one, so what

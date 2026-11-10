@@ -8,7 +8,7 @@ defmodule Macaw.Data.Operations.FaultsTest do
 
   alias Macaw.Data.{Operations, Schema, Table}
   alias Macaw.Data.Operations.{Cache, Step}
-  alias Macaw.Data.Operations.Transforms.{Bin, Filter}
+  alias Macaw.Data.Operations.Transforms.{Bin, Filter, Take}
 
   @registry Operations.registry()
 
@@ -53,6 +53,13 @@ defmodule Macaw.Data.Operations.FaultsTest do
     assert Cache.run(Cache.new(), Bin, checked, table, %{}) == {:error, fault}
     assert Bin.run(checked, table, %{}) == {:error, fault}
     assert Step.format_error(fault) == "field: reads a value that is not a number"
+
+    # A node holding a term that is not data has no step key: the node's key holding it.
+    {:ok, numbers} = Table.from([%{v: 1}])
+    [take] = checked(%{op: "take", n: 1})
+
+    assert Step.parts(Take, Map.put(take, "x", [self()]), numbers, %{}) ==
+             {:error, {"x", :not_data}}
 
     [filter] = checked(%{op: "filter", field: :v, test: :lt, value: "2"})
     {:ok, numbers} = Table.from([%{v: 1}])

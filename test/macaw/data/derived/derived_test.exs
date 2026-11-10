@@ -597,6 +597,13 @@ defmodule Macaw.Data.DerivedTest do
       assert {:error, [{["from", 0, "$input"], {:limit, :depth, 3, _}}]} =
                Derived.from_json(json, limits: [depth: 3])
 
+      # Limits that are none are faults under [:limits], nothing read (macaw_layers 0.5.0).
+      assert Derived.from_json(json, limits: [depth: -1]) ==
+               {:error, [{[:limits, :depth], {:limit_value, 64}}]}
+
+      assert Derived.from_map(JSON.decode!(json), limits: :none) ==
+               {:error, [{[:limits], {:type, :keyword}}]}
+
       newer = json |> JSON.decode!() |> Map.put("$version", 3)
       assert {:error, [{[], {:newer_schema, 3, 2}}]} = Derived.from_map(newer)
       assert {:error, [{[], {:newer_schema, 3, 2}}]} = Derived.from_json(JSON.encode!(newer))

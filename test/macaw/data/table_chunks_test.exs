@@ -292,7 +292,8 @@ defmodule Macaw.Data.TableChunksTest do
     property "the kernel's encoding the digest uses is the kernel's, byte for byte" do
       check all(term <- data_gen()) do
         assert Document.digest(term) ==
-                 Base.encode16(:crypto.hash(:sha256, [1 | Digest.encode(term)]), case: :lower)
+                 {:ok,
+                  Base.encode16(:crypto.hash(:sha256, [1 | Digest.encode(term)]), case: :lower)}
       end
     end
 

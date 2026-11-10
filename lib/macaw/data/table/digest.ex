@@ -14,9 +14,8 @@ defmodule Macaw.Data.Table.Digest do
   # forms: a chunk's digest costs about as much as hashing its buffers once.
   #
   # The header and a value no packed form holds are in the kernel's own encoding
-  # (`Macaw.Layers.Document.digest/1`), copied below byte for byte: the kernel keeps its
-  # encoder private (macaw_layers#18 asks for it, and for a hook through which the kernel's
-  # digest of a table would be this one).
+  # (`Macaw.Layers.Document.digest/1`), copied below byte for byte: the kernel kept its
+  # encoder private until macaw_layers 0.5.0 (`Document.encode/1`, macaw_layers#18).
 
   alias Macaw.Data.Table.Canonical
   alias Macaw.Data.Table.Column
@@ -50,6 +49,26 @@ defmodule Macaw.Data.Table.Digest do
   end
 
   defp init, do: :crypto.hash_init(:sha256)
+
+  @doc false
+  # The kernel's digest (`Macaw.Layers.Document.digest/1`) of a term this library built
+  # from parts already judged data: a chunk's derivation and combined id (its inputs' ids
+  # and versions and a step key), a step's identity over a checked node, a registry's
+  # names, a schema's normalized fields. Such a term is data by construction, so a fault
+  # here is a defect in this library, raised as a named invariant (`built_not_data/1`).
+  @spec term(term()) :: String.t()
+  def term(value) do
+    case Macaw.Layers.Document.digest(value) do
+      {:ok, digest} -> digest
+      {:error, faults} -> built_not_data(faults)
+    end
+  end
+
+  defp built_not_data(faults) do
+    raise ArgumentError,
+          "a term macaw_data built as data is not data, at " <>
+            Enum.map_join(faults, ", ", fn {path, _} -> inspect(path) end)
+  end
 
   @doc """
   Whether a value is data the kernel's digest encodes: an atom, a number, a bitstring,

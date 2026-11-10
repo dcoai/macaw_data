@@ -728,7 +728,7 @@ defmodule Macaw.Data.SchemaTest do
     test "is the kernel's digest of the schema's term" do
       schema = Schema.new!(%{v: %{type: :number}, s: %{type: :category, status: %{ok: :good}}})
 
-      assert Schema.version(schema) ==
+      assert {:ok, Schema.version(schema)} ==
                Macaw.Layers.Document.digest(%{
                  "fields" => %{
                    "v" => %{type: :number},
@@ -737,7 +737,7 @@ defmodule Macaw.Data.SchemaTest do
                })
 
       # Never of a representation: the JSON form is an adapter the version does not go through.
-      refute Schema.version(schema) ==
+      refute {:ok, Schema.version(schema)} ==
                Macaw.Layers.Document.digest(%{"fields" => Schema.to_map(schema)})
     end
 
@@ -872,12 +872,14 @@ defmodule Macaw.Data.SchemaTest do
           }
         })
 
+      {:ok, good} = Color.color("good")
+
       strings =
         Schema.new!(%{
           s: %{
             type: :category,
             values: [
-              %{value: "ok", color: Color.color("good")},
+              %{value: "ok", color: good},
               %{value: "warn", color: {:alpha, {:blend, [{:color, "warning"}, ~RGB"#fff"]}, 0.5}},
               %{value: "fail", color: {:contrast, {:ramp, "status", 0.2}}}
             ]
@@ -1228,6 +1230,10 @@ defmodule Macaw.Data.SchemaTest do
 
       assert {:error, [{_, {:limit, :depth, 2, 3}}]} =
                Schema.from_json(~s([["v",{"type":"number"}]]), limits: [depth: 2])
+
+      # Limits that are none are faults under [:limits], nothing read (macaw_layers 0.5.0).
+      assert Schema.from_json(~s([["v",{"type":"number"}]]), limits: [items: "many"]) ==
+               {:error, [{[:limits, :items], {:limit_value, 100_000}}]}
     end
 
     @tag verifies: "schema-json-document"
