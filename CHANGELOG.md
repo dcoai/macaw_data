@@ -1,11 +1,28 @@
 # Changelog
 
-## Unreleased
+## v0.15.0 (2026-11-10)
 
-The next release is **0.15.0**: it holds a breaking change and new public API.
+**A ceiling that refuses a budget it can't use, many rows of a table read by index in one gather, and a push drain that reads each incoming row once** (#199, #205, #215). A budget that is no positive integer is now refused, which is breaking, and there is new public API, so this is a minor.
+
+### Upgrading from 0.14.x
+
+- **Breaking: `Macaw.Data.Source.Finish.ceiling/2` refuses a budget that is neither `nil` nor a positive integer:** `{:error, [{[:budget], {:type, :pos_integer}}]}`, answered with any `host:` and `page:` faults, the budget's first, and `ceiling!/2` raises it. `ceiling(0, host: 10)` was `{:ok, {0, false}}`, and an atom budget read as the ceiling itself. A caller that hands it a budget it has not judged judges it first, or reads the fault; a budget from `Macaw.Data.Source.Request.new/1` is already judged, so a request's budget never meets it.
+- **New: `Macaw.Data.Table.rows_at/2` and `rows_at!/2`** read the rows at many indexes in one gather, in the order given, each the row `Macaw.Data.Table.row/2` answers. Use it in place of `row/2` in a loop: over a `:term` column `row/2` reads from its chunk's start, so a loop of it is quadratic in the chunk's rows.
+- **`Macaw.Data.Source.Push.drain/2` answers what it answered,** chunk for chunk and digest for digest, and costs less: a 1,000-row increment into a nearly full open chunk 439,545 → 243,533 reductions, and the first drain after a snapshot 785,932 → 591,168. No call changes; the table is below.
+- `ci/raises.exs` is the family's current copy (#223). Nothing in the package changes.
 
 ### Changes
 
+- **A push drain reads each incoming row once** (#215, #228, #229, spec/01 §1.1.4, §4). `Macaw.Data.Table.apply/2`'s insertions built each row's slot as a `DateTime` to group it, read its instant again to sort it, and matched every key of every row against every column. Now each row's window value is read once, from the increment's packed window column where packing has computed it. Its slot key stands for its slot exactly: a `DateTime` and a naive time at one instant are still two slots, so no chunk id or digest moves. Each slot's term is built once, from one of its rows, and an increment's keys are matched to the header once. Every chunk, fault and count is the one the earlier code gives, which byte-equality properties against a frozen copy of it hold over mixed kinds of time and number, rows into settled slots, and keys spelled as strings, atoms or neither. A 1,000-row drain on the live loop's holding, kernels loaded, median of 21 runs (load 2.8 before, 6.6 after):
+
+  | Drain | Before | After |
+  |---|---|---|
+  | open chunk nearly empty | 402,655 r, 5.9 ms | 206,643 r, 2.6 ms |
+  | open chunk nearly full | 439,545 r, 4.8 ms | 243,533 r, 2.6 ms |
+  | first after the snapshot | 785,932 r, 10.5 ms | 591,168 r, 8.2 ms |
+  | late, from 500 s before the open chunk's last row | 611,563 r, 7.2 ms | 351,539 r, 4.3 ms |
+
+  Slotting and sorting fell by about 112,000 reductions, matching keys to the header once by about 44,000, and reading positions from the packed column by about 40,000 more.
 - **New: `Macaw.Data.Table.rows_at/2` and `rows_at!/2` read many rows by index in one gather** (#205, #226, spec/01 §1.1). `{:ok, rows}` in the order given, repeats kept, each row the one `Macaw.Data.Table.row/2` answers and `nil` past the end; an index that is no non-negative integer is `{[k], {:type, :non_neg_integer}}`, every fault at once, and indexes that are no proper list `{[], {:type, :indexes}}`. It never raises (spec/00 §5 lists it among the readers). `row/2` reads a `:term` column, which a chunk holds as a list, from the chunk's start, so reading rows one at a time is quadratic in the chunk's rows; `rows_at/2` costs the same per row wherever it lies. `row/2` itself is unchanged. 50,000 rows × 9 columns, kernels loaded, median of 9 runs:
 
   | Read | All packed | One `:term` column |
@@ -19,7 +36,9 @@ The next release is **0.15.0**: it holds a breaking change and new public API.
 
 - **Breaking: `Macaw.Data.Source.Finish.ceiling/2` refuses a budget that is neither `nil` nor a positive integer** (#199, #225, spec/01 §6.1). Its last clause answered whatever wasn't above the limit, so `ceiling(0, host: 10)` was `{:ok, {0, false}}`, `ceiling(-1, …)` and `ceiling(1.5, …)` answered themselves, and `ceiling(:nope, host: 10)` was `{:ok, {10, true}}`, an atom ordering above every number. Each is now `{:error, [{[:budget], {:type, :pos_integer}}]}`, answered with the `host:` and `page:` faults at once, the budget's first, and `ceiling!/2` raises it. A budget from `Macaw.Data.Source.Request.new/1` was already judged the same way, and no caller in the family is affected: macaw's surface fetch passes a budget macaw_component has already judged.
 
-## v0.14.0
+- **CI: the family's current `ci/raises.exs`** (#223). The family's raise check counts a raise inside a `__using__` or `__before_compile__` quote as compile time since 2026-11-09, so `mix hex.publish`'s check against the family reference refused 0.14.0 until it was published with the earlier copy. The new copy finds the same raise sites in `lib/`, every one allowlisted; `ci/` is not in the package.
+
+## v0.14.0 (2026-11-10)
  (2026-11-10)
 
 **macaw_layers 0.5.0, native kernels that answer their faults as terms, a push drain that costs the rows an increment brings, and a table whose kernel digest is its contents** (#101, #202, #204, #216, #218, #220). An adopter takes macaw_layers 0.5.0 with it, a few calls that raised now answer faults, `Macaw.Data.Native.elixir/1` and `normal_schedulers/1` run their function in a process of its own, and there is new public API, so this is a minor.
