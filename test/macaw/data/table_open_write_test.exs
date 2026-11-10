@@ -15,11 +15,23 @@ defmodule Macaw.Data.TableOpenWriteTest do
   @t0 ~U[2026-01-01 00:00:00Z]
   @n0 ~N[2026-01-01 00:00:00]
 
-  @header [{"c", :category}, {"s", :text}, {"t", :number}, {"u", :time}, {"v", :number}]
+  @header [
+    {"c", :category},
+    {"k", :color},
+    {"p", :point},
+    {"s", :text},
+    {"t", :number},
+    {"u", :time},
+    {"v", :number}
+  ]
+
+  @columns ~w(c k p s u v)
 
   defp schema(window_type) do
     Schema.new!(%{
       "c" => %{type: :category},
+      "k" => %{type: :color},
+      "p" => %{type: :point},
       "s" => %{type: :text},
       "t" => %{type: window_type, window: true},
       "u" => %{type: :time},
@@ -59,9 +71,28 @@ defmodule Macaw.Data.TableOpenWriteTest do
   defp value("u", :mixed), do: member_of([@t0, DateTime.add(@t0, 1, :microsecond), nil])
   defp value("u", :wide), do: member_of([@t0, @n0, nil])
   defp value("u", :none), do: constant(nil)
+  # Points and colors (macaw_data#234, #235): coordinates of one form or mixed, one past
+  # int64 now and then; a few distinct colors, some told apart only as map keys are.
+  defp value("p", :ints), do: one_of([tuple({integer(-9..9), integer(-9..9)}), constant(nil)])
+  defp value("p", :floats), do: tuple({float(min: -9.0, max: 9.0), member_of([0.0, -0.0, 1.5])})
+
+  defp value("p", :mixed),
+    do: tuple({one_of([integer(-5..5), float(min: -5.0, max: 5.0)]), integer(0..3)})
+
+  defp value("p", :wide), do: member_of([{2 ** 64, 0}, {2 ** 60, 0.5}, nil])
+  defp value("p", :none), do: constant(nil)
+  defp value("k", :ints), do: member_of([{:color, :red}, {:color, :blue}, nil])
+  defp value("k", :floats), do: member_of([{:ramp, :viridis, 0.5}, {:ramp, :viridis, 1}, nil])
+
+  defp value("k", :mixed),
+    do: member_of([{:ramp, :viridis, 0.0}, {:ramp, :viridis, -0.0}, {:contrast, {:color, :red}}])
+
+  defp value("k", :wide), do: member_of([{:blend, [{:color, :red}, {:color, :blue}]}, nil])
+  defp value("k", :none), do: constant(nil)
   # Values a column's type does not hold: the increment is refused whole, its faults compared.
   defp value("v", :bad), do: member_of(["x", 1, nil])
   defp value("u", :bad), do: member_of([5, @t0])
+  defp value("p", :bad), do: member_of([{1, :x}, {0, 0}])
   defp value(c, :bad), do: value(c, :wide)
 
   defp modes(:held), do: member_of([:ints, :ints, :ints, :floats, :mixed, :wide, :none])
@@ -81,12 +112,12 @@ defmodule Macaw.Data.TableOpenWriteTest do
   defp kinds(:time), do: member_of([:utc, :utc, :utc_ms, :naive])
 
   defp rows(positions, kind, of \\ :increment) do
-    bind(fixed_map(for c <- ~w(c s u v), into: %{}, do: {c, modes(of)}), fn modes ->
+    bind(fixed_map(for c <- @columns, into: %{}, do: {c, modes(of)}), fn modes ->
       positions
       |> Enum.map(fn p ->
         fixed_map(
           for(
-            c <- ~w(c s u v),
+            c <- @columns,
             into: %{"t" => constant(window(p, kind))},
             do: {c, value(c, modes[c])}
           )

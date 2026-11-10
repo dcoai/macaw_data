@@ -14,6 +14,14 @@ The next release is **0.16.0**: it adds public API.
   | number window, no span | 1,025,878 r, 13.0 ms | 237,832 r, 2.7 ms |
   | no window field | 683,820 r, 10.1 ms | 147,780 r, 2.8 ms |
   | `:point` window (its column a list until #234) | 1,366,285 r, 24.8 ms | 1,126,277 r, 15.2 ms |
+- **A `:point` column is packed: two number columns and a validity bitmap** (#231, #234, spec/01 §1.1). It was always a list, so `Macaw.Data.Table.row/2` read it from its chunk's start, its digest encoded each point by itself, and a drain into its chunk wrote the chunk again from all its rows. Each coordinate now takes the form a number column of it takes (int64, float64, integral or a dense union), so integer and float coordinates read back as given; a coordinate past int64 keeps the column a list, as it keeps a number column one. No answer changes, and no digest: the canonical streams are built from the coordinates' buffers and are the list form's byte for byte, which a property holds over generated columns and a replay of every point column the suite hashed (6,458 distinct) confirmed. One 8,192-row chunk of float points beside a float column, kernels loaded, ms the median of single calls (load 3 to 8):
+
+  | Measure | Before | After |
+  |---|---|---|
+  | `row/2` at row 0 / 4,096 / 8,000 | 88 / 4,184 / 8,088 r; 0.001 / 0.016 / 0.035 ms | 126 r at each; 0.001 to 0.002 ms |
+  | `Macaw.Data.Table.digest/1` | 328,424 r, 10.5 ms | 80,399 r, 2.0 ms |
+  | a 1,000-row drain into 7,000 held, a `:point` window | 1,077,844 r, 12.9 ms | 335,823 r, 5.3 ms |
+  | the same, a number window beside a point column | 1,289,525 r, 17.2 ms | 313,447 r, 4.4 ms |
 
 ## v0.15.0 (2026-11-10)
 

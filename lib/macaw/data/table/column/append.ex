@@ -27,6 +27,11 @@ defmodule Macaw.Data.Table.Column.Append do
   #   packing every value gives. A slice keeps its column's whole dictionary, strings its
   #   rows may lack, so the kept rows are cut by `head/2` to the strings they hold.
   #
+  # - point and point: each coordinate joined as the number column it is (int64 or
+  #   float64 by both pieces), the validity joined. Packing every point gives a point
+  #   column where no coordinate is past int64, which neither piece's is, and each
+  #   coordinate the form packing its values gives, which its join keeps.
+  #
   # Every other form (integral, union, zoned, bool, list) is repacked.
 
   import Bitwise
@@ -53,6 +58,9 @@ defmodule Macaw.Data.Table.Column.Append do
 
       {{:dictionary, _, _, _, _}, {:dictionary, _, _, _, _}} ->
         concat(head, n, tail, m)
+
+      {{:point, _, _, _}, {:point, _, _, _}} ->
+        Column.Point.joined([{head, n}, {tail, m}], fn [x, y] -> append(x, y) end)
 
       _other ->
         :repack

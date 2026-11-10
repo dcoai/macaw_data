@@ -25,8 +25,8 @@ defmodule Macaw.Data.Table.Canonical do
   # A value has one row of this table whatever form holds it, and the row determines the
   # value: the three streams of a column are a faithful, layout-free form of its values.
   # The forms that lay the values out the canonical way already (int64, float64, UTC
-  # microseconds, text) give their buffers nearly as they are; the others are read value
-  # by value.
+  # microseconds, text) give their buffers nearly as they are, and a point column's
+  # coordinates theirs (macaw_data#234); the others are read value by value.
 
   import Bitwise
 
@@ -39,7 +39,7 @@ defmodule Macaw.Data.Table.Canonical do
 
   # Each byte of a validity bitmap as eight tag bytes, least-significant bit first: the tag
   # where the bit is set, 0 where it is not.
-  @expansions (for tag <- [1, 2, 4, 8, 10], into: %{} do
+  @expansions (for tag <- [1, 2, 4, 7, 8, 10], into: %{} do
                  {tag,
                   List.to_tuple(
                     for byte <- 0..255,
@@ -87,6 +87,16 @@ defmodule Macaw.Data.Table.Canonical do
     {tags, words, bytes}
   end
 
+  # A point is "any other term" (tag 7), its bytes the kernel's encoding of the tuple
+  # `{x, y}`: `<<?t, 2::64>>` and each coordinate's encoding, as `value/1` gives it. They
+  # are built from the coordinates' buffers (macaw_data#234): a float64 coordinate's bits
+  # as the kernel writes a float, `<<?f, bits::big-64>>`; any other coordinate by its
+  # value's encoding (`Digest.encode/1`).
+  def streams({:point, xs, ys, validity}, n) do
+    tags = tags(validity, n, 7)
+    {tags, :binary.copy(<<0::64>>, n), points(tags, coordinates(xs, n), coordinates(ys, n))}
+  end
+
   def streams(storage, n), do: values(Column.values(storage, n))
 
   # -- one value at a time ----------------------------------------------------------------
@@ -128,6 +138,46 @@ defmodule Macaw.Data.Table.Canonical do
     do: {10, <<Date.diff(d, ~D[1970-01-01])::signed-little-64>>, []}
 
   defp value(other), do: {7, <<0::64>>, Digest.encode(other)}
+
+  # -- points -----------------------------------------------------------------------------
+
+  # A coordinate column as `points/3` reads it: a float64 buffer as it lies, else each
+  # value's encoding.
+  defp coordinates({:float64, data, _validity}, _n), do: data
+  defp coordinates(column, n), do: column |> Column.values(n) |> Enum.map(&Digest.encode/1)
+
+  # Each present point's bytes, its two coordinates read together; a missing point's are
+  # not read. Two float64 buffers are walked as binaries into one.
+  defp points(tags, xs, ys) when is_binary(xs) and is_binary(ys), do: floats(tags, xs, ys, <<>>)
+  defp points(tags, xs, ys), do: coded(tags, xs, ys, [])
+
+  defp floats(
+         <<7, tags::binary>>,
+         <<x::little-64, xs::binary>>,
+         <<y::little-64, ys::binary>>,
+         acc
+       ),
+       do: floats(tags, xs, ys, <<acc::binary, ?t, 2::64, ?f, x::64, ?f, y::64>>)
+
+  defp floats(<<0, tags::binary>>, <<_::64, xs::binary>>, <<_::64, ys::binary>>, acc),
+    do: floats(tags, xs, ys, acc)
+
+  defp floats(<<>>, <<>>, <<>>, acc), do: acc
+
+  defp coded(<<tag, tags::binary>>, xs, ys, acc) do
+    {x, xs} = coordinate(xs)
+    {y, ys} = coordinate(ys)
+
+    case tag do
+      7 -> coded(tags, xs, ys, [acc, <<?t, 2::64>>, x | y])
+      0 -> coded(tags, xs, ys, acc)
+    end
+  end
+
+  defp coded(<<>>, _xs, _ys, acc), do: acc
+
+  defp coordinate(<<x::little-64, xs::binary>>), do: {<<?f, x::64>>, xs}
+  defp coordinate([x | xs]), do: {x, xs}
 
   # -- buffers ----------------------------------------------------------------------------
 

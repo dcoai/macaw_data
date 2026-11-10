@@ -39,6 +39,10 @@ defmodule Macaw.Data.Table.Column do
   #                                             value: `macaw.category`, a struct of the
   #                                             dictionary (first) and a bool child
   #   {:bool, values, validity}                 bool: the values a bitmap
+  #   {:point, xs, ys, validity}                `macaw.point`, a struct of two number
+  #                                             columns, x (first) and y, each in the
+  #                                             form above its coordinates take
+  #                                             (`Column.Point`)
   #   {:list, values}                           the values as given (`:term`); a
   #                                             category's atom as its string
   #
@@ -48,6 +52,7 @@ defmodule Macaw.Data.Table.Column do
 
   alias Macaw.Data.{Native, Schema}
   alias Macaw.Data.Table.{Bitmap, Digest}
+  alias Macaw.Data.Table.Column.Point
 
   @typedoc "A column's storage, one of the forms above."
   @type t :: tuple()
@@ -84,7 +89,7 @@ defmodule Macaw.Data.Table.Column do
     point? = &match?({lon, lat} when is_number(lon) and is_number(lat), &1)
 
     case faults(values, name, point?, :point) do
-      [] -> {:ok, {:list, values}}
+      [] -> {:ok, Point.pack(values)}
       faults -> {:error, faults}
     end
   end
@@ -621,6 +626,8 @@ defmodule Macaw.Data.Table.Column do
   def values({:bool, values, validity}, n),
     do: gaps(Enum.map(Bitmap.bits(values, n), &(&1 == 1)), valid(validity, n))
 
+  def values({:point, _xs, _ys, _validity} = column, n), do: Point.values(column, n)
+
   # A validity bitmap as the decoders read it: `:all` when no value is missing, so none
   # expands it, else its first `n` bits.
   defp valid(validity, n),
@@ -898,6 +905,7 @@ defmodule Macaw.Data.Table.Column do
   def validity({form, _offsets, _data, validity}) when form in [:text, :binary], do: validity
   def validity({:dictionary, _codes, validity, _dictionary, _booleans}), do: validity
   def validity({:integral, _data, validity, _integral}), do: validity
+  def validity({:point, _xs, _ys, validity}), do: validity
   def validity(_column), do: nil
 
   # -- slicing ----------------------------------------------------------------------------
@@ -944,6 +952,8 @@ defmodule Macaw.Data.Table.Column do
     {:dictionary, binary_part(codes, first * 4, n * 4), Bitmap.slice(validity, first, n),
      dictionary, slice_booleans(booleans, first, n)}
   end
+
+  def slice({:point, _xs, _ys, _validity} = column, first, n), do: Point.slice(column, first, n)
 
   # -- concatenating ----------------------------------------------------------------------
 
@@ -1034,6 +1044,8 @@ defmodule Macaw.Data.Table.Column do
     {:dictionary, take(codes, 4, indexes),
      Bitmap.take(validity, indexes, div(byte_size(codes), 4)), dictionary, booleans}
   end
+
+  def gather({:point, _xs, _ys, _validity} = column, indexes), do: Point.gather(column, indexes)
 
   # The `width`-byte slots at `indexes`: by the native kernel where the kernels are loaded
   # (spec/04 §4.1.1), on a dirty scheduler past `Native.sync_rows/0` slots; else copied a
