@@ -60,6 +60,15 @@ defmodule Macaw.Data.Table.Canonical do
     {tags, us, :binary.copy(<<precision>>, present(tags, n))}
   end
 
+  # Each zone the column names is encoded once, however many values are in it: a value's
+  # bytes are its precision and its zone's encoding (tag 11), or its precision alone in
+  # UTC (tag 8), as `value/1` reads it.
+  def streams({:zoned, us, validity, precision, zones, codes}, n) do
+    own = zones |> Tuple.to_list() |> Enum.map(&zone/1) |> List.to_tuple()
+    {tags, bytes} = zoned(codes, tags(validity, n, 1), precision, own, <<>>, [])
+    {tags, us, bytes}
+  end
+
   def streams({:date, days, validity}, n) do
     words = for <<d::signed-little-32 <- days>>, into: <<>>, do: <<d::signed-little-64>>
     {tags(validity, n, 10), words, []}
@@ -145,6 +154,29 @@ defmodule Macaw.Data.Table.Canonical do
     do: coded(codes, tags, strings, <<words::binary, 0::64>>, bytes)
 
   defp coded(<<>>, <<>>, _strings, words, bytes), do: {words, bytes}
+
+  # A zone's tag and the encoding its values' bytes carry.
+  defp zone(@utc), do: {8, []}
+  defp zone(zone), do: {11, Digest.encode(zone)}
+
+  # Each value's tag and bytes, walking its code, whether it is present, and its precision
+  # (the column's, or a byte each) together; a missing value's code is not read.
+  defp zoned(<<c::little-32, codes::binary>>, <<1, present::binary>>, p, own, tags, bytes) do
+    {here, rest} = precision(p)
+
+    case elem(own, c) do
+      {8, []} -> zoned(codes, present, rest, own, <<tags::binary, 8>>, [bytes, here])
+      {11, zone} -> zoned(codes, present, rest, own, <<tags::binary, 11>>, [bytes, here | zone])
+    end
+  end
+
+  defp zoned(<<_::32, codes::binary>>, <<0, present::binary>>, p, own, tags, bytes),
+    do: zoned(codes, present, elem(precision(p), 1), own, <<tags::binary, 0>>, bytes)
+
+  defp zoned(<<>>, <<>>, _p, _own, tags, bytes), do: {tags, bytes}
+
+  defp precision(p) when is_integer(p), do: {p, p}
+  defp precision(<<p, rest::binary>>), do: {p, rest}
 
   defp present(tags, n), do: n - length(:binary.matches(tags, <<0>>))
 

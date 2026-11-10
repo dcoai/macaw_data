@@ -35,7 +35,23 @@
   | `sort` over 50,000 rows (a combined id) | 3,187,023 → 3,187,599 | 142 → 140 |
   | `Document.digest/1` ×10,000 on a derivation term | 1,300,007 → 1,590,007 | 25 → 27 |
 
+- **A table's digest uses the kernel's encoder, not a copy of it** (#218, #219, spec/01 §1.1.2). `Macaw.Data.Table.digest/1` encoded its header and every value no packed form holds with a byte-for-byte copy of the kernel's canonical encoder, kept while macaw_layers held it private; it now calls `Macaw.Layers.Document.encode/1`, so a change to the kernel's encoding moves table digests with `Macaw.Layers.Document.digest/1`'s. No digest moves: the 86,841 table digests the suite computed on 0.13.1's code (45,899 distinct, 2,574 integers beyond int64, 40,863 other terms and 28,867 zoned times among their values) replay identical, and no golden or stored digest changes. Two things follow from one encoder:
+  - A struct in a column is encoded as the kernel encodes it, by its canonical term (`Macaw.Layers.Digest`, macaw_layers 0.5.0), where the copy encoded its map. No struct in this library or its family implements the protocol, so no digest moves; a caller's struct that does now has one digest however it is laid out. `Macaw.Data.Table.new/2` judges a struct by that canonical term too, so one whose canonical term is not data is `{[name, i], :not_data}`, never a raise when the table is hashed.
+  - The copy's own `ArgumentError` is gone; a fault from the encoder over a term this library built is the one named invariant `ci/raises_allowlist.exs` already held.
+
+  The kernel's encoder tracks a fault's path, so a value it encodes costs more: 4 reductions a big integer, 7 a small tuple or map. A zoned time column now encodes each of its zones once rather than a zone per value, from its packed zones, so it costs a quarter of what it did. Kernels loaded, the digest of one 10,000-value column, ms the median of 21, load 1 to 3:
+
+  | Column | Reductions | ms |
+  |---|---|---|
+  | integers beyond int64 | 186,550 → 226,584 | 6.3 → 6.3 |
+  | tuples, maps, atoms and lists (`:term`) | 520,745 → 594,808 | 9.2 → 9.6 |
+  | zoned times | 976,010 → 231,948 | 17.3 → 2.7 |
+  | int64 | 16,059 → 16,078 | 0.10 → 0.10 |
+
+  A packed column's digest hashes no such value and costs what it did. A gather, a filter and a sort encode nothing, so they cost what they did (100 gathers of 100 rows: 96,607 reductions; a filter and a sort over 50,000 rows: 209,026 and 3,713,531; each before and after); the digest of their result pays the per-value cost above for its `:term` and big-integer columns (a 50,000-row table with one of each and a number column: 2,785,252 → 3,485,633). `Macaw.Data.Source.Push.drain/2` of 1,000 rows into a nearly full open chunk: 439,512 → 439,545.
+
 ## v0.13.1 (2026-11-06)
+
 
 **A sliding `Macaw.Data.Source.Push.trim/2` costs almost nothing** (#201). It decides from each chunk's last value and no longer decodes and compares the chunk's rows, so a holder that trims every frame stops paying for it.
 

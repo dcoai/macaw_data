@@ -453,16 +453,10 @@
     reason: "stacked/2's twin: raises the faults stacked/2 answers, as Macaw.Data.Error"
   },
   %{
-    at: {Macaw.Data.Table.Digest, :not_data, 1},
-    class: :invariant,
-    reason:
-      "a value that is not data in a digest: Table.new/2 refuses one ({[name, i], :not_data}) before any chunk is built, so a chunk's canonical form never holds one (spec/01 §1.1.2)"
-  },
-  %{
     at: {Macaw.Data.Table.Digest, :built_not_data, 1},
     class: :invariant,
     reason:
-      "a term this library built is not data in the kernel's digest (macaw_layers 0.5.0 answers it as a value): a chunk's derivation and combined id hold only digests, step keys and ids, Table.new/2 refuses an origin source or resolution that is not data, a step's node is checked by Operations.validate/3 (a :term option holds data only) and Step.parts/4 answers a node's own as {key, :not_data}, a registry holds names and modules, a schema's fields are judged by Schema.new/1 (spec/01 §1.1.3, §1.10; spec/04 §2)"
+      "a term this library built is not data in the kernel's digest or encoding (macaw_layers 0.5.0 answers it as a value): a table's header holds its names and types, and a column's value no packed form holds was judged by Digest.data?/1 (as the kernel's encoder judges it, a struct by its canonical term) when Table.new/2 built the column ({[name, i], :not_data}), a chunk's derivation and combined id hold only digests, step keys and ids, Table.new/2 refuses an origin source or resolution that is not data, a step's node is checked by Operations.validate/3 (a :term option holds data only) and Step.parts/4 answers a node's own as {key, :not_data}, a registry holds names and modules, a schema's fields are judged by Schema.new/1 (spec/01 §1.1.3, §1.10; spec/04 §2)"
   },
   %{
     at: {Macaw.Data.Table, :column_types!, 1},

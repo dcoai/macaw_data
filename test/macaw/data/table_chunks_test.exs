@@ -270,11 +270,12 @@ defmodule Macaw.Data.TableChunksTest do
     test "digest/1 is the SHA-256 of the canonical form" do
       table = chunked([{"n", :number, [1, 2.5, nil]}, {"s", :text, ["ab", nil, "c"]}], [2, 1])
       sha = &:crypto.hash(:sha256, &1)
+      {:ok, header} = Document.encode({"macaw.table", [{"n", :number}, {"s", :text}]})
 
       expected =
         sha.([
           1,
-          Digest.encode({"macaw.table", [{"n", :number}, {"s", :text}]}),
+          header,
           <<3::64>>,
           sha.(<<1, 2, 0>>),
           sha.(<<1::little-64, 2.5::float-little-64, 0::64>>),
@@ -290,11 +291,117 @@ defmodule Macaw.Data.TableChunksTest do
 
     @tag verifies: "table-digest"
     property "the kernel's encoding the digest uses is the kernel's, byte for byte" do
+      # The form's version byte is the kernel's encoding version: a new encoding fails
+      # here and asks for a new version of the table form with it.
+      assert Document.encoding_version() == 1
+
       check all(term <- data_gen()) do
+        {:ok, bytes} = Document.encode(term)
+
         assert Document.digest(term) ==
                  {:ok,
-                  Base.encode16(:crypto.hash(:sha256, [1 | Digest.encode(term)]), case: :lower)}
+                  :sha256
+                  |> :crypto.hash([Document.encoding_version() | bytes])
+                  |> Base.encode16(case: :lower)}
+
+        # A value no packed form holds is in that encoding in its column's bytes stream.
+        sha = &:crypto.hash(:sha256, &1)
+        {:ok, header} = Document.encode({"macaw.table", [{"x", :term}]})
+
+        expected =
+          sha.([1, header, <<1::64>>, sha.(<<7>>), sha.(<<0::64>>), sha.(bytes)])
+
+        if not is_nil(term) and not is_integer(term) and not is_float(term) and
+             not is_binary(term) do
+          assert Table.digest(Table.new!([{"x", :term, [term]}])) ==
+                   Base.encode16(expected, case: :lower)
+        end
       end
+    end
+
+    @tag verifies: "table-digest"
+    property "a zoned column's digest is its values', one at a time, each zone encoded once" do
+      zones = [
+        {"Etc/UTC", "UTC", 0, 0},
+        {"Europe/Paris", "CEST", 3600, 3600},
+        {"America/New_York", "EST", -18_000, 0}
+      ]
+
+      at = fn us, p, {zone, abbr, utc, std} ->
+        t = DateTime.from_unix!(us, :microsecond)
+        {micro, _} = t.microsecond
+        shifted = DateTime.add(t, utc + std, :second)
+
+        %{
+          shifted
+          | time_zone: zone,
+            zone_abbr: abbr,
+            utc_offset: utc,
+            std_offset: std,
+            microsecond: {micro, p}
+        }
+      end
+
+      check all(
+              values <-
+                list_of(
+                  one_of([
+                    constant(nil),
+                    map(
+                      {integer(-1_000_000_000_000..4_000_000_000_000), integer(0..6),
+                       member_of(zones)},
+                      fn {us, p, zone} -> at.(us, p, zone) end
+                    )
+                  ]),
+                  min_length: 1,
+                  max_length: 40
+                ),
+              from <- integer(0..(length(values) - 1)),
+              count <- integer(0..(length(values) - from))
+            ) do
+        table = Table.new!([{"t", :time, values}])
+
+        if Enum.any?(values, &(&1 != nil and &1.time_zone != "Etc/UTC")),
+          do: assert(elem(Macaw.Data.Test.Storage.storage(table, "t"), 0) == :zoned)
+
+        view = Table.slice(table, from, count)
+        values = Enum.slice(values, from, count)
+
+        # The same values held as given: `Canonical.value/1` reads them one at a time.
+        one_at_a_time =
+          if count == 0,
+            do: Table.new!([{"t", :time, []}]),
+            else: %{
+              view
+              | chunks: [
+                  {Chunk.build([{"t", :time}], %{"t" => {:list, values}}, count), 0, count}
+                ]
+            }
+
+        assert Table.column(view, "t") == values
+        assert Table.digest(view) == Table.digest(one_at_a_time)
+      end
+    end
+
+    @tag verifies: "table-digest"
+    test "a struct is in a column as the kernel encodes it, by its canonical term" do
+      alias Macaw.Data.Test.{LaidOut, NotDataInside}
+
+      one = %LaidOut{rows: [1, 2], layout: :rows}
+      other = %LaidOut{rows: [1, 2], layout: :columns}
+      {:ok, bytes} = Document.encode(one)
+      assert Document.encode(other) == {:ok, bytes}
+      assert Document.digest(one) == Document.digest({"test.laid_out", [1, 2]})
+
+      assert Table.digest(Table.new!([{"x", :term, [one]}])) ==
+               Table.digest(Table.new!([{"x", :term, [other]}]))
+
+      refute Table.digest(Table.new!([{"x", :term, [one]}])) ==
+               Table.digest(Table.new!([{"x", :term, [%LaidOut{rows: [2, 1]}]}]))
+
+      # A struct whose canonical term is not data is refused as one, never encoded.
+      assert Table.new([{"x", :term, [one, %NotDataInside{name: "n"}]}]) ==
+               {:error, [{["x", 1], :not_data}]}
     end
 
     @tag verifies: "table-digest"
