@@ -72,6 +72,22 @@ defmodule Macaw.Data.TableInsertSlotsTest do
   end
 
   @tag verifies: "table-insert-slots"
+  property "a time's slot key from its kind and position alone is the one its value gives" do
+    check all(
+            span <- one_of([span(:time), span(:number)]),
+            values <- list_of(window_value(:time), min_length: 1, max_length: 30),
+            max_runs: 400
+          ) do
+      origin = origin(span)
+
+      for v <- values do
+        kind = if v, do: v.__struct__, else: DateTime
+        assert Origin.time_key(origin, kind, Origin.position(v)) === Origin.slot_key(origin, v)
+      end
+    end
+  end
+
+  @tag verifies: "table-insert-slots"
   test "a DateTime and a naive time at one instant are two slot keys, as they are two slots" do
     origin = origin(Duration.new!(second: 10))
 

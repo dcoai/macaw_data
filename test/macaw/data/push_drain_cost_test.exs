@@ -16,17 +16,17 @@ defmodule Macaw.Data.PushDrainCostTest do
 
   # Reductions for draining one 1,000-row increment into the 50,000-row holding: with the
   # open chunk nearly full (7,056 rows), and the first drain after the snapshot. Measured
-  # 327,538 and 675,176 (439,545 and 785,932 before macaw_data#215, 1,551,511 and
+  # 243,533 and 591,168 (439,545 and 785,932 before macaw_data#215, 1,551,511 and
   # 10,266,302 before macaw_data#204).
-  @drain_budget 400_000
-  @first_budget 780_000
+  @drain_budget 300_000
+  @first_budget 670_000
   # How much more a drain into a nearly full open chunk may cost than into a nearly empty
   # one: measured 36,891 (1,054,975 before).
   @growth_budget 80_000
   # A late 1,000-row increment, from 500 seconds before the open chunk's last row, into
-  # the nearly full chunk: measured 435,545 (611,563 before macaw_data#215, 1,567,584
+  # the nearly full chunk: measured 351,539 (611,563 before macaw_data#215, 1,567,584
   # before macaw_data#214).
-  @late_budget 540_000
+  @late_budget 430_000
 
   defp describe(_name), do: {:error, :pushed}
 

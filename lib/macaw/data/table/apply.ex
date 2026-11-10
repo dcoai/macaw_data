@@ -19,7 +19,7 @@ defmodule Macaw.Data.Table.Apply do
 
     ctx = %{
       header: header,
-      types: Map.new(header),
+      columns: columns(header),
       origin: origin,
       windowed?: Origin.windowed?(origin),
       schema: schema,
@@ -53,14 +53,32 @@ defmodule Macaw.Data.Table.Apply do
 
   defp edge(row, ctx) do
     Map.new(row, fn {key, value} ->
-      name = column(key, ctx)
-      {name || key, if(name, do: Table.at_edge(ctx.types[name], value), else: value)}
+      case column(key, ctx) do
+        {name, type} -> {name, Table.at_edge(type, value)}
+        nil -> {key, value}
+      end
     end)
   end
 
+  # The header mapped once per increment (macaw_data#215): each column's spelling to its
+  # `{name, type}`, the first column of a spelling winning, so a row key finds its column
+  # by one lookup, not a scan of the header. A name that is `nil` or `false` is no column,
+  # as the scan never answered it.
+  defp columns(header) do
+    for {name, _type} = column <- Enum.reverse(header),
+        name not in [nil, false],
+        into: %{},
+        do: {key_spelling(name), column}
+  end
+
+  # The column a row key spells, `{name, type}`, or `nil`. A key that spells nothing is
+  # compared with each name by `==`, as a term that is no map key's spelling.
+  defp column(key, ctx) when is_atom(key) or is_binary(key) or is_number(key),
+    do: Map.get(ctx.columns, key_spelling(key))
+
   defp column(key, ctx) do
-    Enum.find_value(ctx.header, fn {name, _type} ->
-      if key_spelling(name) == key_spelling(key), do: name
+    Enum.find(ctx.header, fn {name, _type} ->
+      name not in [nil, false] and key_spelling(name) == key
     end)
   end
 
@@ -282,7 +300,7 @@ defmodule Macaw.Data.Table.Apply do
   # gives, and each group's rows the ones sorting it by `key/2` gives.
   defp insert(rows, state, %{windowed?: true} = ctx) do
     rows
-    |> Enum.map(&keyed(&1, ctx))
+    |> keyed(ctx)
     |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
     |> Map.new(fn {_key, [{_sort, row} | _] = group} ->
       {Origin.slot_of(ctx.origin, Table.get(row, ctx.time)), group}
@@ -480,12 +498,42 @@ defmodule Macaw.Data.Table.Apply do
     {keyed, Enum.map(keyed, &elem(&1, 1))}
   end
 
-  # A row's slot key and, beside the row, its order key (`key/2`), from one reading of its
-  # window value.
-  defp keyed(row, ctx) do
-    {slot, p} = Origin.slot_key(ctx.origin, Table.get(row, ctx.time))
-    {slot, {position_key(p), row}}
+  # Each row's slot key and, beside the row, its order key (`key/2`), from one reading of
+  # its window value. Where the increment was packed as one run (`packs/2`) and its window
+  # column is a time column in one kind, every position is read from that column
+  # (`Column.instants/2`), which packing computed: the instant is not read again.
+  defp keyed(rows, ctx) do
+    case packed_instants(rows, ctx) do
+      {kind, positions} ->
+        Enum.zip_with(rows, positions, fn row, p ->
+          {slot, p} = Origin.time_key(ctx.origin, kind, p)
+          {slot, {position_key(p), row}}
+        end)
+
+      nil ->
+        Enum.map(rows, fn row ->
+          {slot, p} = Origin.slot_key(ctx.origin, Table.get(row, ctx.time))
+          {slot, {position_key(p), row}}
+        end)
+    end
   end
+
+  defp packed_instants(rows, %{packed: %{} = packed, time: time}) do
+    with column when is_tuple(column) <- Map.get(packed, time),
+         kind when kind != nil <- time_kind(elem(column, 0)),
+         positions when is_list(positions) <- Column.instants(column, length(rows)) do
+      {kind, positions}
+    else
+      _general -> nil
+    end
+  end
+
+  defp packed_instants(_rows, _ctx), do: nil
+
+  defp time_kind(form) when form in [:utc, :zoned], do: DateTime
+  defp time_kind(:naive), do: NaiveDateTime
+  defp time_kind(:date), do: Date
+  defp time_kind(_form), do: nil
 
   defp value_key(value), do: position_key(Origin.position(value))
 

@@ -208,20 +208,31 @@ defmodule Macaw.Data.Table.Origin do
   # holds (a `DateTime`'s clamped to the earliest it can hold); a number's is its slot
   # itself; `nil` and `:invalid` are themselves.
   @spec slot_key(t(), term()) :: {term(), number() | nil | :invalid}
-  def slot_key(%{span: span}, value) do
+  def slot_key(%{span: span} = origin, value) do
     p = at(value)
 
-    key =
-      cond do
-        p == :invalid or mismatched?(value, span) -> :invalid
-        p == nil -> nil
-        is_number(value) -> slot(value, span)
-        is_struct(value, DateTime) -> {:utc, max(start_us(p, span), @earliest_us)}
-        true -> {:naive, start_us(p, span)}
-      end
-
-    {key, p}
+    cond do
+      p == :invalid or mismatched?(value, span) -> {:invalid, p}
+      is_number(value) -> {slot(value, span), p}
+      true -> time_key(origin, time_kind(value), p)
+    end
   end
+
+  @doc false
+  # `slot_key/2` of a time of kind `kind` (`DateTime`, `NaiveDateTime` or `Date`), or of
+  # none, from its position alone, as a packed time column holds it
+  # (`Column.instants/2`): no time is read or built.
+  @spec time_key(t(), module(), integer() | nil) :: {term(), integer() | nil | :invalid}
+  def time_key(_origin, _kind, nil), do: {nil, nil}
+  def time_key(%{span: span}, _kind, p) when is_number(span), do: {:invalid, p}
+
+  def time_key(%{span: span}, DateTime, p),
+    do: {{:utc, max(start_us(p, span), @earliest_us)}, p}
+
+  def time_key(%{span: span}, _naive_or_date, p), do: {{:naive, start_us(p, span)}, p}
+
+  defp time_kind(%module{}), do: module
+  defp time_kind(nil), do: nil
 
   # A number under a span that is no number, or a value that is no number under one.
   defp mismatched?(value, span) when is_number(value), do: not is_number(span)
