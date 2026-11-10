@@ -7,6 +7,13 @@ The next release is **0.16.0**: it adds public API.
 ### Changes
 
 - **New: `Macaw.Data.Native.enter/1` is documented, the public entry for a host's own counted process** (#224, #237, spec/04 §1.7). Since 0.14.0 `Native.elixir/1` and `normal_schedulers/1` run their function in a process of their own, so a host that counts reductions in a spawned process, as visualize's `Visualize.Work.reductions/2` does, enters the scope in that process instead. `enter(scope)` puts the flags of `scope`, and whichever of the two the process already holds, in the calling process for the rest of its life: it is only for a process that ends with the scope, and `scope/2` is the scope for any other caller, since nothing clears the flag. It now refuses a scope outside `:elixir | :normal_schedulers` with a `FunctionClauseError`, as `scope/2` does; `enter(:bogus)` put `{nil, true}` in the caller's dictionary and answered `:ok`, so a typo counted on the wrong path with no sign.
+- **A drain into a holding laid by row count joins its rows after the last chunk's as they lie** (#231, #233, spec/01 §1.1.4). A holding whose chunks are aligned by row count (no window field, a `:point` window, or a number window at no resolution, so with no span) took `Macaw.Data.Table.apply/2`'s append path, which read every held row of the last chunk and packed them again with the increment's. Now the rows filling it are packed by themselves and joined after the held ones column by column (`Chunk.written_from/4`, as an open chunk's in-order rows have been since #213), and the last held row's window value is read from its column's last slot rather than by reading the chunk. A column the join can't keep exact (a list form among them) still writes the chunk from all its rows, so every chunk, id and digest is the one the full rewrite builds, which a byte-equality property against the frozen copy holds over every such layout, columns of every form and a last chunk with room for all, some or none of the rows. A 1,000-row drain into 6,000 held rows, kernels loaded, median of 15 runs (load 13):
+
+  | Holding | Before | After |
+  |---|---|---|
+  | number window, no span | 1,025,878 r, 13.0 ms | 237,832 r, 2.7 ms |
+  | no window field | 683,820 r, 10.1 ms | 147,780 r, 2.8 ms |
+  | `:point` window (its column a list until #234) | 1,366,285 r, 24.8 ms | 1,126,277 r, 15.2 ms |
 
 ## v0.15.0 (2026-11-10)
 

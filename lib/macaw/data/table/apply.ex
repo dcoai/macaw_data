@@ -350,12 +350,12 @@ defmodule Macaw.Data.Table.Apply do
   # placed in the chunk that spans it, which is written again.
   defp insert(rows, state, %{time: time} = ctx) when time != nil do
     last = last_key(state.chunks, ctx)
-    {late, rows} = Enum.split_with(ordered(rows, ctx), &(key(&1, ctx) < last))
+    {late, in_order} = Enum.split_with(ordered(rows, ctx), &(key(&1, ctx) < last))
     state = Enum.reduce(late, state, &place(&1, &2, ctx))
-    append(rows, state, ctx)
+    append(in_order, state, rows, ctx)
   end
 
-  defp insert(rows, state, ctx), do: append(rows, state, ctx)
+  defp insert(rows, state, ctx), do: append(rows, state, rows, ctx)
 
   # An open chunk with `group` inserted, kept in the window field's order, a held row
   # first among equal values (spec/01 §1.1.4) (macaw_data#204). Only the group is sorted.
@@ -392,12 +392,17 @@ defmodule Macaw.Data.Table.Apply do
     rewrite(state, k, chunk, ordered(rows, ctx), ctx)
   end
 
-  # The order key of the last held row, nothing held before everything.
+  # The order key of the last held row, nothing held before everything: read from the
+  # window column's last slot alone (macaw_data#233), or from the last row as read where
+  # the chunk holds no window column.
+  defp last_key([], _ctx), do: {-1, 0}
+
   defp last_key(chunks, ctx) do
-    case chunks do
-      [] -> {-1, 0}
-      _ -> chunks |> List.last() |> Chunk.read() |> List.last() |> elem(0) |> key(ctx)
-    end
+    chunk = List.last(chunks)
+
+    if List.keymember?(ctx.header, ctx.time, 0),
+      do: held_key(chunk, ctx),
+      else: chunk |> Chunk.read() |> List.last() |> elem(0) |> key(ctx)
   end
 
   # The held rows from `at` merged with the group, packed and joined after the rest.
@@ -540,23 +545,34 @@ defmodule Macaw.Data.Table.Apply do
   defp position_key(p) when is_number(p), do: {0, p}
   defp position_key(_none), do: {1, 0}
 
-  defp append([], state, _ctx), do: state
+  # Rows in order after every held row (macaw_data#233): the last chunk filled to its
+  # room and the rest laid in new chunks. The rows filling it are packed by themselves
+  # and joined after its held rows as they lie (`Chunk.written_from/4`), nothing held
+  # read; a column the join can't keep exact writes the chunk again from all its rows.
+  # Either way the chunk is the one packing its rows in order gives. `inserted` is every
+  # row the increment inserts in the order it came, which `ctx.packed` packs.
+  defp append([], state, _inserted, _ctx), do: state
 
-  defp append(rows, state, ctx) do
+  defp append(rows, state, inserted, ctx) do
     {kept, last} =
       case state.chunks do
         [] -> {[], []}
         chunks -> {Enum.drop(chunks, -1), [List.last(chunks)]}
       end
 
-    held = for chunk <- last, {row, _} <- Chunk.read(chunk), do: row
-
     {laid, next} =
-      case ctx.origin do
-        nil ->
-          {lay(held ++ rows, [], ctx), state.next}
+      case {ctx.origin, last} do
+        {nil, []} ->
+          {lay(rows, [], ctx), state.next}
 
-        origin ->
+        # Without an origin the chunks are aligned from the first row, each named by its
+        # digest: the last one filled to a whole chunk, the rest laid after it.
+        {nil, [chunk]} ->
+          {into, after_} = Enum.split(rows, max(Table.chunk_rows() - Chunk.size(chunk), 0))
+          filled = fill(chunk, into, inserted, ctx)
+          {[%{filled | id: Chunk.digest(filled)} | lay(after_, [], ctx)], state.next}
+
+        {origin, last} ->
           start =
             case last do
               [chunk] -> elem(Chunk.id(chunk), 2)
@@ -565,7 +581,7 @@ defmodule Macaw.Data.Table.Apply do
 
           room = if last == [], do: 0, else: max(start + Table.chunk_rows() - state.next, 0)
           {into, after_} = Enum.split(rows, room)
-          head = if last == [], do: [], else: [fill(hd(last), held ++ into, ctx)]
+          head = for chunk <- last, do: fill(chunk, into, inserted, ctx)
 
           {head ++ lay(after_, [origin: Map.put(origin, :offset, state.next + length(into))], ctx),
            state.next + length(rows)}
@@ -574,9 +590,17 @@ defmodule Macaw.Data.Table.Apply do
     %{state | chunks: kept ++ laid, next: next}
   end
 
-  defp fill(chunk, rows, ctx) do
-    {:ok, chunk} = Chunk.of_rows(ctx.header, rows, Chunk.id(chunk))
-    chunk
+  # The last chunk with `rows` after its held rows: joined, or written again whole.
+  defp fill(chunk, rows, inserted, ctx) do
+    case Chunk.written_from(chunk, Chunk.size(chunk), rows, packed(rows, inserted, ctx)) do
+      {:ok, chunk} ->
+        chunk
+
+      :repack ->
+        held = for {row, _} <- Chunk.read(chunk), do: row
+        {:ok, chunk} = Chunk.of_rows(ctx.header, held ++ rows, Chunk.id(chunk))
+        chunk
+    end
   end
 
   defp lay([], _opts, _ctx), do: []

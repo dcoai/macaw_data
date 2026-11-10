@@ -146,4 +146,45 @@ defmodule Macaw.Data.PushDrainCostTest do
       assert Push.held(push).served.window == [fold(after_, &Window.earliest/2), to]
     end
   end
+
+  # -- a holding laid by row count --------------------------------------------------------
+
+  # Reductions for draining one 1,000-row increment into a holding laid by row count
+  # (macaw_data#233): a number window at no resolution, so no span, and no window field.
+  # Measured 237,832 and 147,780 with 6,000 rows held (1,025,878 and 683,820 before, every
+  # held row of the last chunk read and packed again).
+  @unslotted_budget 320_000
+  @unwindowed_budget 210_000
+  # How much more the same drain may cost with 7,000 rows held than with 500: the chunk is
+  # hashed whole again, its held rows not read. Measured 68,871 (about 800,000 before).
+  @unslotted_growth 100_000
+
+  defp unslotted(window?, held) do
+    fields = %{"t" => %{type: :number}, "v" => %{type: :number}, "w" => %{type: :number}}
+    schema = Schema.new!(if window?, do: put_in(fields, ["t", :window], true), else: fields)
+    rows = fn from, n -> for i <- from..(from + n - 1)//1, do: %{"t" => i, "v" => i / 2} end
+    ref = make_ref()
+
+    snapshot =
+      Delivery.new!(rows.(0, held), schema: Schema.version(schema), served: [position: 0])
+
+    {:ok, push} = Push.receive(Push.new!(:rows, ref), Push.schema_message(ref, schema))
+    {:ok, push} = Push.receive(push, Push.snapshot_message(ref, snapshot))
+    push = Push.drain(push, &describe/1)
+    increment = Delivery.new!(rows.(held, 1_000), schema: Schema.version(schema))
+    {:ok, push} = Push.receive(push, Push.increment_message(ref, push.position + 1, increment))
+    push
+  end
+
+  @tag verifies: "push-drain-cost"
+  test "a drain into a holding laid by row count costs the rows it brings, not the rows held" do
+    windowed = unslotted(true, 6_000) |> drain_work()
+    unwindowed = unslotted(false, 6_000) |> drain_work()
+    assert windowed < @unslotted_budget, "number window with no span: #{windowed}"
+    assert unwindowed < @unwindowed_budget, "no window field: #{unwindowed}"
+
+    few = unslotted(true, 500) |> drain_work()
+    many = unslotted(true, 7_000) |> drain_work()
+    assert many - few < @unslotted_growth, "#{few} to #{many}"
+  end
 end
