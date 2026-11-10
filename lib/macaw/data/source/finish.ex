@@ -482,9 +482,11 @@ defmodule Macaw.Data.Source.Finish do
   A budget clamped to the host's ceiling (spec/01 §6, macaw_compose 05 §1.2): `{:ok,
   {budget, clamped?}}`. A `nil` budget reads at the ceiling; a page's ceiling, given as
   `page:`, may lower the host's, never raise it. `host:` is required: without it,
-  `{:error, [{[:host], :required}]}`. A `host:` or `page:` that is no positive integer is
-  `{[key], {:type, :pos_integer}}`, every fault at once, and an option it does not take is
-  `{[key], :unknown_key}` (spec/00 §5). `ceiling!/2` answers the pair or raises.
+  `{:error, [{[:host], :required}]}`. A budget that is neither `nil` nor a positive integer
+  is `{[:budget], {:type, :pos_integer}}`, and a `host:` or `page:` that is no positive
+  integer is `{[key], {:type, :pos_integer}}`, every fault at once, the budget's first, and
+  nothing is clamped; an option it does not take is `{[key], :unknown_key}` (spec/00 §5).
+  `ceiling!/2` answers the pair or raises.
 
       iex> Macaw.Data.Source.Finish.ceiling(50_000, host: 10_000)
       {:ok, {10_000, true}}
@@ -494,12 +496,16 @@ defmodule Macaw.Data.Source.Finish do
       {:error, [{[:host], :required}]}
       iex> Macaw.Data.Source.Finish.ceiling(50_000, host: :nope, page: 0)
       {:error, [{[:host], {:type, :pos_integer}}, {[:page], {:type, :pos_integer}}]}
+      iex> Macaw.Data.Source.Finish.ceiling(0, host: 10_000)
+      {:error, [{[:budget], {:type, :pos_integer}}]}
   """
   @spec ceiling(pos_integer() | nil, keyword()) ::
           {:ok, {pos_integer(), boolean()}} | {:error, [{list(), term()}, ...]}
   def ceiling(budget, opts) do
     with {:ok, opts} <- Macaw.Data.Options.known(opts, host: nil, page: nil),
-         [] <- limit_fault(:host, opts[:host]) ++ limit_fault(:page, opts[:page]) do
+         [] <-
+           budget_fault(budget) ++
+             limit_fault(:host, opts[:host]) ++ limit_fault(:page, opts[:page]) do
       limit = min(opts[:host], opts[:page] || opts[:host])
 
       case budget do
@@ -516,6 +522,12 @@ defmodule Macaw.Data.Source.Finish do
   # A term that isn't a number orders above every number, so an unchecked limit applies
   # no limit at all (macaw_data#195). A safety limit that is wrong refuses, it doesn't
   # fail open.
+  # The budget too: an unchecked one was answered as itself, `0` or `1.5` a budget, and an
+  # atom clamped to the limit (macaw_data#199).
+  defp budget_fault(nil), do: []
+  defp budget_fault(budget) when is_integer(budget) and budget > 0, do: []
+  defp budget_fault(_budget), do: [{[:budget], {:type, :pos_integer}}]
+
   defp limit_fault(:host, nil), do: [{[:host], :required}]
   defp limit_fault(:page, nil), do: []
   defp limit_fault(_key, limit) when is_integer(limit) and limit > 0, do: []

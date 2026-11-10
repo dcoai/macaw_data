@@ -374,19 +374,44 @@ defmodule Macaw.Data.FinishTest do
   end
 
   @tag verifies: "finish-ceiling-pool"
+  test "a budget that is neither nil nor a positive integer is its fault, never answered" do
+    fault = {:type, :pos_integer}
+
+    for budget <- [0, -1, 1.5, :nope, "10", false, true, %{}, [], {10}] do
+      assert Finish.ceiling(budget, host: 10) == {:error, [{[:budget], fault}]}
+      assert Finish.ceiling(budget, host: 10, page: 5) == {:error, [{[:budget], fault}]}
+      error = assert_raise Macaw.Data.Error, fn -> Finish.ceiling!(budget, host: 10) end
+      assert error.reason == [{[:budget], fault}]
+    end
+
+    # Every fault at once, the budget's first, and nothing clamped.
+    assert Finish.ceiling(0, host: :nope, page: 0) ==
+             {:error, [{[:budget], fault}, {[:host], fault}, {[:page], fault}]}
+
+    assert Finish.ceiling(-1, page: 2) == {:error, [{[:budget], fault}, {[:host], :required}]}
+
+    # The sound budgets still answer.
+    assert Finish.ceiling(1, host: 10) == {:ok, {1, false}}
+    assert Finish.ceiling(nil, host: 10) == {:ok, {10, false}}
+  end
+
+  @tag verifies: "finish-ceiling-pool"
   property "a budget is answered only under limits that are positive integers" do
     limit = one_of([integer(), float(), atom(:alphanumeric), string(:printable), constant(nil)])
 
-    check all(host <- limit, page <- limit, budget <- one_of([constant(nil), integer(1..100)])) do
+    check all(host <- limit, page <- limit, budget <- one_of([limit, integer(1..100)])) do
       good? = &(is_integer(&1) and &1 > 0)
+
+      sound? =
+        good?.(host) and (is_nil(page) or good?.(page)) and (is_nil(budget) or good?.(budget))
 
       case Finish.ceiling(budget, host: host, page: page) do
         {:ok, {answer, _clamped?}} ->
-          assert good?.(host) and (is_nil(page) or good?.(page))
-          assert answer <= min(host, page || host)
+          assert sound?
+          assert good?.(answer) and answer <= min(host, page || host)
 
         {:error, faults} ->
-          refute good?.(host) and (is_nil(page) or good?.(page))
+          refute sound?
           assert faults != []
       end
     end

@@ -84,6 +84,10 @@ defmodule Macaw.Data.ReadersNeverRaiseTest do
   defp options(keys),
     do: list_of(one_of([tuple({member_of(keys), value()}), leaf()]), max_length: 3)
 
+  # A ceiling limit `Finish.ceiling/2` takes, so its budget is judged and not only its
+  # options (#199).
+  defp sound_limit, do: tuple({member_of([:host, :page]), positive_integer()})
+
   # The value twin's answer, and the twin raising exactly its faults.
   defp answers(value, bang) do
     case value.() do
@@ -321,7 +325,7 @@ defmodule Macaw.Data.ReadersNeverRaiseTest do
             name <- leaf(),
             push <- options([:cache, :limit, :lateness, :chunk_span]),
             budget <- leaf(),
-            ceiling <- options([:host, :page])
+            ceiling <- one_of([options([:host, :page]), list_of(sound_limit(), length: 1..2)])
           ) do
       answers(fn -> Push.new(name, make_ref(), push) end, fn ->
         Push.new!(name, make_ref(), push)
@@ -352,9 +356,14 @@ defmodule Macaw.Data.ReadersNeverRaiseTest do
         end
       end
 
-      answers(fn -> Finish.ceiling(budget, ceiling) end, fn ->
-        Finish.ceiling!(budget, ceiling)
-      end)
+      # What it answers is a budget: a positive integer at most the effective limit (#199).
+      with {:ok, {answer, _clamped?}} <-
+             answers(fn -> Finish.ceiling(budget, ceiling) end, fn ->
+               Finish.ceiling!(budget, ceiling)
+             end) do
+        limit = min(ceiling[:host], ceiling[:page] || ceiling[:host])
+        assert is_integer(answer) and answer > 0 and answer <= limit
+      end
     end
   end
 

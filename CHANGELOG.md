@@ -1,6 +1,15 @@
 # Changelog
 
-## v0.14.0 (2026-11-10)
+## Unreleased
+
+The next release is **0.15.0**: it holds a breaking change.
+
+### Changes
+
+- **Breaking: `Macaw.Data.Source.Finish.ceiling/2` refuses a budget that is neither `nil` nor a positive integer** (#199, #225, spec/01 §6.1). Its last clause answered whatever wasn't above the limit, so `ceiling(0, host: 10)` was `{:ok, {0, false}}`, `ceiling(-1, …)` and `ceiling(1.5, …)` answered themselves, and `ceiling(:nope, host: 10)` was `{:ok, {10, true}}`, an atom ordering above every number. Each is now `{:error, [{[:budget], {:type, :pos_integer}}]}`, answered with the `host:` and `page:` faults at once, the budget's first, and `ceiling!/2` raises it. A budget from `Macaw.Data.Source.Request.new/1` was already judged the same way, and no caller in the family is affected: macaw's surface fetch passes a budget macaw_component has already judged.
+
+## v0.14.0
+ (2026-11-10)
 
 **macaw_layers 0.5.0, native kernels that answer their faults as terms, a push drain that costs the rows an increment brings, and a table whose kernel digest is its contents** (#101, #202, #204, #216, #218, #220). An adopter takes macaw_layers 0.5.0 with it, a few calls that raised now answer faults, `Macaw.Data.Native.elixir/1` and `normal_schedulers/1` run their function in a process of its own, and there is new public API, so this is a minor.
 
