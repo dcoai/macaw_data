@@ -26,7 +26,8 @@ defmodule Macaw.Data.Table.Canonical do
   # value: the three streams of a column are a faithful, layout-free form of its values.
   # The forms that lay the values out the canonical way already (int64, float64, UTC
   # microseconds, text) give their buffers nearly as they are, and a point column's
-  # coordinates theirs (macaw_data#234); the others are read value by value.
+  # coordinates theirs (macaw_data#234); a terms column encodes each distinct term once
+  # (macaw_data#235); the others are read value by value.
 
   import Bitwise
 
@@ -97,6 +98,19 @@ defmodule Macaw.Data.Table.Canonical do
     {tags, :binary.copy(<<0::64>>, n), points(tags, coordinates(xs, n), coordinates(ys, n))}
   end
 
+  # A terms column's values (a color column's, macaw_data#235) are read as `value/1` reads
+  # each: every distinct term's tag, word and bytes once a call, repeated by code, as a
+  # zoned column's zones are.
+  def streams({:terms, codes, validity, terms}, n) do
+    own =
+      for term <- Tuple.to_list(terms) do
+        {tag, word, bytes} = value(term)
+        {tag, word, IO.iodata_to_binary(bytes)}
+      end
+
+    termed(codes, tags(validity, n, 1), List.to_tuple(own), <<>>, <<>>, <<>>)
+  end
+
   def streams(storage, n), do: values(Column.values(storage, n))
 
   # -- one value at a time ----------------------------------------------------------------
@@ -138,6 +152,28 @@ defmodule Macaw.Data.Table.Canonical do
     do: {10, <<Date.diff(d, ~D[1970-01-01])::signed-little-64>>, []}
 
   defp value(other), do: {7, <<0::64>>, Digest.encode(other)}
+
+  # -- terms ------------------------------------------------------------------------------
+
+  # Each value's tag, word and bytes by its code, each stream one binary, so hashing it
+  # costs its bytes, not its parts; a missing value's code is not read.
+  defp termed(<<c::little-32, codes::binary>>, <<1, present::binary>>, own, tags, words, bytes) do
+    {tag, word, value} = elem(own, c)
+
+    termed(
+      codes,
+      present,
+      own,
+      <<tags::binary, tag>>,
+      <<words::binary, word::binary>>,
+      <<bytes::binary, value::binary>>
+    )
+  end
+
+  defp termed(<<_::32, codes::binary>>, <<0, present::binary>>, own, tags, words, bytes),
+    do: termed(codes, present, own, <<tags::binary, 0>>, <<words::binary, 0::64>>, bytes)
+
+  defp termed(<<>>, <<>>, _own, tags, words, bytes), do: {tags, words, bytes}
 
   # -- points -----------------------------------------------------------------------------
 

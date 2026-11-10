@@ -27,6 +27,8 @@ defmodule Macaw.Data.Table.Column.Append do
   #   packing every value gives. A slice keeps its column's whole dictionary, strings its
   #   rows may lack, so the kept rows are cut by `head/2` to the strings they hold.
   #
+  # - terms and terms: as dictionary and dictionary, the kept values' terms cut by
+  #   `head/2` to those they hold (`Column.Terms`).
   # - point and point: each coordinate joined as the number column it is (int64 or
   #   float64 by both pieces), the validity joined. Packing every point gives a point
   #   column where no coordinate is past int64, which neither piece's is, and each
@@ -59,6 +61,9 @@ defmodule Macaw.Data.Table.Column.Append do
       {{:dictionary, _, _, _, _}, {:dictionary, _, _, _, _}} ->
         concat(head, n, tail, m)
 
+      {{:terms, _, _, _}, {:terms, _, _, _}} ->
+        concat(head, n, tail, m)
+
       {{:point, _, _, _}, {:point, _, _, _}} ->
         Column.Point.joined([{head, n}, {tail, m}], fn [x, y] -> append(x, y) end)
 
@@ -83,6 +88,7 @@ defmodule Macaw.Data.Table.Column.Append do
      {binary_part(offsets, 0, (k + 1) * 4), binary_part(data, 0, last)}, booleans}
   end
 
+  def head({:terms, _codes, _validity, _terms} = column, at), do: Column.Terms.head(column, at)
   def head(column, at), do: Column.slice(column, 0, at)
 
   # How many strings the first `n` slots hold: one past the largest code, or none where

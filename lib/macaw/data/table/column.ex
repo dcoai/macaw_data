@@ -43,6 +43,10 @@ defmodule Macaw.Data.Table.Column do
   #                                             columns, x (first) and y, each in the
   #                                             form above its coordinates take
   #                                             (`Column.Point`)
+  #   {:terms, codes, validity, terms}         no Arrow form: an int32 code per value
+  #                                             into terms, a tuple of the distinct
+  #                                             values in first-appearance order, each
+  #                                             the term given (`Column.Terms`)
   #   {:list, values}                           the values as given (`:term`); a
   #                                             category's atom as its string
   #
@@ -52,7 +56,7 @@ defmodule Macaw.Data.Table.Column do
 
   alias Macaw.Data.{Native, Schema}
   alias Macaw.Data.Table.{Bitmap, Digest}
-  alias Macaw.Data.Table.Column.Point
+  alias Macaw.Data.Table.Column.{Point, Terms}
 
   @typedoc "A column's storage, one of the forms above."
   @type t :: tuple()
@@ -96,7 +100,7 @@ defmodule Macaw.Data.Table.Column do
 
   def pack(:color, values, name) do
     case faults(values, name, &Schema.color?/1, :color) do
-      [] -> {:ok, {:list, values}}
+      [] -> {:ok, Terms.pack(values)}
       faults -> {:error, faults}
     end
   end
@@ -122,27 +126,38 @@ defmodule Macaw.Data.Table.Column do
   @doc false
   # A piece of a column packed, its faults' indexes counted from `at`: `pack/3`'s, and a
   # value that is not data (a function, a PID, a reference, a port, an improper list),
-  # which has no digest (spec/01 §1.1.2), `{[name, i], :not_data}`. Only the list form
-  # holds values as given, so only it is read for them.
+  # which has no digest (spec/01 §1.1.2), `{[name, i], :not_data}`. Only the list form and
+  # the terms form hold values as given, so only they are read for them: the terms form's
+  # distinct terms once each, and its values only where one is not data.
   @spec piece(atom(), [term()], term(), non_neg_integer()) ::
           {:ok, t()} | {:error, [{list(), term()}, ...]}
   def piece(type, values, name, at) do
     case pack(type, values, name) do
       {:ok, {:list, list} = col} ->
-        case for(
-               {v, i} <- Enum.with_index(list, at),
-               not Digest.data?(v),
-               do: {[name, i], :not_data}
-             ) do
-          [] -> {:ok, col}
-          faults -> {:error, faults}
-        end
+        data(col, list, name, at)
+
+      {:ok, {:terms, _codes, _validity, terms} = col} ->
+        if Enum.all?(Tuple.to_list(terms), &Digest.data?/1),
+          do: {:ok, col},
+          else: data(col, values, name, at)
 
       {:ok, col} ->
         {:ok, col}
 
       {:error, faults} ->
         {:error, Enum.map(faults, fn {[name, i], fault} -> {[name, i + at], fault} end)}
+    end
+  end
+
+  # The column, or each value of it that is not data, by its path.
+  defp data(col, values, name, at) do
+    case for(
+           {v, i} <- Enum.with_index(values, at),
+           not Digest.data?(v),
+           do: {[name, i], :not_data}
+         ) do
+      [] -> {:ok, col}
+      faults -> {:error, faults}
     end
   end
 
@@ -627,6 +642,7 @@ defmodule Macaw.Data.Table.Column do
     do: gaps(Enum.map(Bitmap.bits(values, n), &(&1 == 1)), valid(validity, n))
 
   def values({:point, _xs, _ys, _validity} = column, n), do: Point.values(column, n)
+  def values({:terms, _codes, _validity, _terms} = column, n), do: Terms.values(column, n)
 
   # A validity bitmap as the decoders read it: `:all` when no value is missing, so none
   # expands it, else its first `n` bits.
@@ -906,6 +922,7 @@ defmodule Macaw.Data.Table.Column do
   def validity({:dictionary, _codes, validity, _dictionary, _booleans}), do: validity
   def validity({:integral, _data, validity, _integral}), do: validity
   def validity({:point, _xs, _ys, validity}), do: validity
+  def validity({:terms, _codes, validity, _terms}), do: validity
   def validity(_column), do: nil
 
   # -- slicing ----------------------------------------------------------------------------
@@ -954,6 +971,9 @@ defmodule Macaw.Data.Table.Column do
   end
 
   def slice({:point, _xs, _ys, _validity} = column, first, n), do: Point.slice(column, first, n)
+
+  def slice({:terms, _codes, _validity, _terms} = column, first, n),
+    do: Terms.slice(column, first, n)
 
   # -- concatenating ----------------------------------------------------------------------
 
@@ -1046,6 +1066,11 @@ defmodule Macaw.Data.Table.Column do
   end
 
   def gather({:point, _xs, _ys, _validity} = column, indexes), do: Point.gather(column, indexes)
+
+  def gather({:terms, codes, validity, terms}, indexes),
+    do:
+      {:terms, take(codes, 4, indexes), Bitmap.take(validity, indexes, div(byte_size(codes), 4)),
+       terms}
 
   # The `width`-byte slots at `indexes`: by the native kernel where the kernels are loaded
   # (spec/04 §4.1.1), on a dirty scheduler past `Native.sync_rows/0` slots; else copied a

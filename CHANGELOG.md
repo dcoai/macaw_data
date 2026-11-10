@@ -22,6 +22,13 @@ The next release is **0.16.0**: it adds public API.
   | `Macaw.Data.Table.digest/1` | 328,424 r, 10.5 ms | 80,399 r, 2.0 ms |
   | a 1,000-row drain into 7,000 held, a `:point` window | 1,077,844 r, 12.9 ms | 335,823 r, 5.3 ms |
   | the same, a number window beside a point column | 1,289,525 r, 17.2 ms | 313,447 r, 4.4 ms |
+- **A `:color` column is packed: its distinct terms once, an int32 code per value and a validity bitmap** (#231, #235, spec/01 §1.1). It was always a list, with the list's costs. The terms are kept in the order they first appear and told apart as a map key tells them, so `{:ramp, :viridis, 1}` and `{:ramp, :viridis, 1.0}`, or `0.0` and `-0.0`, stay two, and each value reads back as the very term given. The form has its own tag, so grouping and filtering, which read a category's dictionary as strings, take their general path for it as before. No answer changes, and no digest: the canonical streams encode each distinct term once and are the list form's byte for byte, which a property holds over generated columns and a replay of every color column the suite hashed (4,536 distinct) confirmed. One 8,192-row chunk of four distinct colors beside a float column, kernels loaded, ms the median of single calls (load 8 to 9):
+
+  | Measure | Before | After |
+  |---|---|---|
+  | `row/2` at row 0 / 4,096 / 8,000 | 88 / 4,184 / 8,088 r; 0.001 / 0.019 / 0.031 ms | 90 r at each; 0.001 ms |
+  | `Macaw.Data.Table.digest/1` | 606,770 r, 16.2 ms | 126,730 r, 1.6 ms |
+  | a 1,000-row drain into 7,000 held, a number window beside a color column | 1,901,577 r, 61.2 ms | 377,461 r, 8.0 ms |
 
 ## v0.15.0 (2026-11-10)
 

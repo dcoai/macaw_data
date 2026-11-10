@@ -13,6 +13,7 @@ defmodule Macaw.Data.Table.Column.Concat do
   #   piece's strings, in first-appearance order. A missing or boolean slot keeps code 0.
   #   Side bitmaps of booleans join, a piece without them read as holding none.
   # - Point columns join each coordinate as the number column it is, where both do.
+  # - Terms columns join their codes as dictionary columns do (`Column.Terms.concat/1`).
   #
   # Validity bitmaps join bit by bit (`Macaw.Data.Table.Bitmap.concat/1`). Any other form,
   # or pieces of different forms, is `:general`, which a caller reads value by value.
@@ -40,12 +41,14 @@ defmodule Macaw.Data.Table.Column.Concat do
 
   defp shape({:dictionary, _codes, _validity, _dictionary, _booleans}), do: :dictionary
   defp shape({:point, _xs, _ys, _validity}), do: :point
+  defp shape({:terms, _codes, _validity, _terms}), do: :terms
   defp shape(_column), do: :general
 
   defp joined(:general, _pieces), do: :general
 
   # Each coordinate's pieces joined as a number column's, `:general` where either's are.
   defp joined(:point, pieces), do: Column.Point.joined(pieces, &concat/1)
+  defp joined(:terms, pieces), do: Column.Terms.concat(pieces)
 
   defp joined(form, pieces) when form in [:int64, :float64, :date] do
     data = IO.iodata_to_binary(for {{_form, data, _validity}, _n} <- pieces, do: data)

@@ -1,9 +1,9 @@
 defmodule Macaw.Data.TablePackedFormsCostTest do
   @moduledoc """
-  What the packed `:point` form costs (spec/01 §1.1, macaw_data#234): reading one row at
-  any place in its chunk, a chunk's digest, and a drain into a holding that has a point
-  column or a point window, each near the cost of the same data in number columns and
-  never a walk of the column's list.
+  What the packed `:point` and `:color` forms cost (spec/01 §1.1, macaw_data#234, #235):
+  reading one row at any place in its chunk, a chunk's digest, and a drain into a holding
+  that has a point column, a point window or a color column, each near the cost of the
+  same data in number or category columns and never a walk of the column's list.
   """
   # Counted work: no other test loads or purges code meanwhile (`Macaw.Data.Test.Work`).
   use ExUnit.Case, async: false
@@ -26,6 +26,22 @@ defmodule Macaw.Data.TablePackedFormsCostTest do
   # measured 313,447 (1,289,525; two number columns 285,490).
   @point_window_budget 420_000
   @point_column_budget 400_000
+  # The same for a color column of four distinct terms: `row/2` measured 90 at every row
+  # (as a list 88 to 8,088; a category column 123), the digest 126,730 (606,770; a category
+  # column 42,972: a color's own bytes are its kernel encoding, tens of bytes, which the
+  # hash reads), the drain 377,461 (1,901,577; a category column 257,435).
+  @color_row_budget 250
+  @color_digest_budget 190_000
+  @color_column_budget 480_000
+
+  @colors [
+    {:color, :blue},
+    {:color, :red},
+    {:ramp, :viridis, 0.5},
+    {:blend, [{:color, :blue}, {:color, :red}]}
+  ]
+
+  defp color(i), do: Enum.at(@colors, rem(i, 4))
 
   defp lon(i), do: -180 + rem(i * 37, 3600) / 10
   defp lat(i), do: -90 + rem(i * 53, 1800) / 10
@@ -54,6 +70,26 @@ defmodule Macaw.Data.TablePackedFormsCostTest do
     table = points()
     work = red(fn -> Table.digest(table) end)
     assert work < @digest_budget, "digest: #{work}"
+  end
+
+  defp colors do
+    Table.new!([
+      {"v", :number, Enum.map(0..(@n - 1), &(&1 / 1))},
+      {"c", :color, Enum.map(0..(@n - 1), &color/1)}
+    ])
+  end
+
+  @tag verifies: "table-colors-cost"
+  test "row/2 over a color column costs the same at every row, and its digest each term once" do
+    table = colors()
+
+    for i <- [0, 4_096, 8_000] do
+      work = red(fn -> Table.row(table, i) end)
+      assert work < @color_row_budget, "row #{i}: #{work}"
+    end
+
+    work = red(fn -> Table.digest(table) end)
+    assert work < @color_digest_budget, "digest: #{work}"
   end
 
   defp drain_work(schema, row) do
@@ -92,5 +128,20 @@ defmodule Macaw.Data.TablePackedFormsCostTest do
 
     assert window < @point_window_budget, "point window: #{window}"
     assert column < @point_column_budget, "point column: #{column}"
+  end
+
+  @tag verifies: "table-colors-cost"
+  test "a drain into a holding with a color column joins the open chunk" do
+    work =
+      drain_work(
+        Schema.new!(%{
+          "t" => %{type: :number, window: true},
+          "c" => %{type: :color},
+          "v" => %{type: :number}
+        }),
+        &%{"t" => &1, "c" => color(&1), "v" => &1 / 1}
+      )
+
+    assert work < @color_column_budget, "color column: #{work}"
   end
 end
