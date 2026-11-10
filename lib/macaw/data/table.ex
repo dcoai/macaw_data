@@ -53,6 +53,7 @@ defmodule Macaw.Data.Table do
   alias Macaw.Data.Table.Column
   alias Macaw.Data.Table.Digest
   alias Macaw.Data.Table.Origin
+  alias Macaw.Data.Table.Subset
 
   import Kernel, except: [apply: 2]
 
@@ -519,6 +520,78 @@ defmodule Macaw.Data.Table do
 
   def row(%__MODULE__{names: names} = table, i) when is_integer(i) and i >= 0,
     do: Map.new(names, &{&1, hd(column(slice(table, i, 1), &1))})
+
+  @doc """
+  The rows at `indexes` (from 0): `{:ok, rows}`, in the order given, repeats kept, each
+  row the one `row/2` answers, `nil` for an index past the end (spec/01 §1.1). The rows are
+  gathered once, so a row costs the same wherever it lies in its chunk, even in a `:term`
+  column, which `row/2` reads from its chunk's start (macaw_data#205).
+
+  An index that is no non-negative integer is `{[k], {:type, :non_neg_integer}}`, `k` its
+  position, every fault at once; `indexes` that are no proper list are
+  `{[], {:type, :indexes}}` (spec/00 §5). `rows_at!/2` answers the rows alone or raises.
+
+      iex> table = Macaw.Data.Table.new!([{"t", :number, [10, 20, 30]}])
+      iex> Macaw.Data.Table.rows_at(table, [2, 0, 7])
+      {:ok, [%{"t" => 30}, %{"t" => 10}, nil]}
+      iex> Macaw.Data.Table.rows_at(table, [0, -1, :a])
+      {:error, [{[1], {:type, :non_neg_integer}}, {[2], {:type, :non_neg_integer}}]}
+  """
+  @spec rows_at(t(), [non_neg_integer()]) ::
+          {:ok, [map() | nil]} | {:error, [{list(), term()}, ...]}
+  def rows_at(%__MODULE__{} = table, indexes) when is_proper_list(indexes) do
+    case index_faults(indexes, 0, []) do
+      [] -> {:ok, gathered_rows(table, indexes)}
+      faults -> {:error, faults}
+    end
+  end
+
+  def rows_at(%__MODULE__{}, _indexes), do: {:error, [{[], {:type, :indexes}}]}
+
+  @doc "As `rows_at/2`, the rows alone, raising `Macaw.Data.Error` with the faults."
+  @spec rows_at!(t(), [non_neg_integer()]) :: [map() | nil]
+  def rows_at!(table, indexes) do
+    case rows_at(table, indexes) do
+      {:ok, rows} ->
+        rows
+
+      {:error, faults} ->
+        raise Macaw.Data.Error, reason: faults, what: "not row indexes", root: "indexes"
+    end
+  end
+
+  defp index_faults([], _k, faults), do: :lists.reverse(faults)
+
+  defp index_faults([i | rest], k, faults) when is_integer(i) and i >= 0,
+    do: index_faults(rest, k + 1, faults)
+
+  defp index_faults([_i | rest], k, faults),
+    do: index_faults(rest, k + 1, [{[k], {:type, :non_neg_integer}} | faults])
+
+  # The rows inside the table gathered in one pass (`Table.Subset.at/2`, the path `Finish`
+  # and `Derived.Last` take), then read as the row view; past the end, `nil` in place.
+  defp gathered_rows(_table, []), do: []
+
+  defp gathered_rows(%__MODULE__{size: nil} = table, indexes),
+    do: table |> warm() |> gathered_rows(indexes)
+
+  defp gathered_rows(%__MODULE__{size: size} = table, indexes) do
+    case Enum.filter(indexes, &(&1 < size)) do
+      [] -> List.duplicate(nil, length(indexes))
+      ^indexes -> subset_rows(table, indexes)
+      inside -> in_place(indexes, subset_rows(table, inside), size, [])
+    end
+  end
+
+  defp subset_rows(table, indexes),
+    do: table |> Subset.ready() |> Subset.at(indexes) |> table_rows()
+
+  defp in_place([], [], _size, acc), do: :lists.reverse(acc)
+
+  defp in_place([i | rest], rows, size, acc) when i >= size,
+    do: in_place(rest, rows, size, [nil | acc])
+
+  defp in_place([_i | rest], [row | rows], size, acc), do: in_place(rest, rows, size, [row | acc])
 
   @doc """
   The rows `start` to `start + count - 1`, as a table of the same columns. It keeps the

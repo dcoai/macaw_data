@@ -131,6 +131,38 @@ defmodule Macaw.Data.TableSubsetTest do
   end
 
   @tag verifies: "finish-subset-gather"
+  property "rows repeated, in any order across chunks, equal the same rows packed (#205)" do
+    check all(given <- input(), repeats <- integer(1..6), max_runs: 200) do
+      {_types, _sizes, _columns, _ks, _skip, _trim, share, seed} = given
+      table = table(given)
+      once = indexes(Table.size(table), share, seed)
+      indexes = Enum.shuffle(once ++ Enum.take(once, repeats))
+      taken = Subset.at(table, indexes)
+
+      assert Table.size(taken) == length(indexes)
+      assert Table.equal?(taken, packed(table, indexes))
+    end
+  end
+
+  # A view's kept rows spanning as many places as they hold read as a run only when none
+  # repeats: [10, 10, 12, 13] spans four and holds four, and is not rows 10 to 13 (#205).
+  @tag verifies: "finish-subset-gather"
+  test "repeated rows in a view are gathered, never read as the run they span" do
+    table = Macaw.Data.Test.Storage.chunked(Table.new!([{"v", :number, Enum.to_list(0..29)}]), 5)
+
+    assert Table.column(Subset.at(table, [12, 10, 10, 13]), "v") == [12, 10, 10, 13]
+
+    assert Table.column(Subset.at(table, [13, 10, 13, 14, 14, 27]), "v") == [
+             13,
+             10,
+             13,
+             14,
+             14,
+             27
+           ]
+  end
+
+  @tag verifies: "finish-subset-gather"
   test "a reorder of more than a chunk's rows is chunked at chunk_rows/0, each column joined" do
     n = Table.chunk_rows() * 2 + 100
 

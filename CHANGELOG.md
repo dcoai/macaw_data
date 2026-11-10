@@ -2,9 +2,20 @@
 
 ## Unreleased
 
-The next release is **0.15.0**: it holds a breaking change.
+The next release is **0.15.0**: it holds a breaking change and new public API.
 
 ### Changes
+
+- **New: `Macaw.Data.Table.rows_at/2` and `rows_at!/2` read many rows by index in one gather** (#205, #226, spec/01 §1.1). `{:ok, rows}` in the order given, repeats kept, each row the one `Macaw.Data.Table.row/2` answers and `nil` past the end; an index that is no non-negative integer is `{[k], {:type, :non_neg_integer}}`, every fault at once, and indexes that are no proper list `{[], {:type, :indexes}}`. It never raises (spec/00 §5 lists it among the readers). `row/2` reads a `:term` column, which a chunk holds as a list, from the chunk's start, so reading rows one at a time is quadratic in the chunk's rows; `rows_at/2` costs the same per row wherever it lies. `row/2` itself is unchanged. 50,000 rows × 9 columns, kernels loaded, median of 9 runs:
+
+  | Read | All packed | One `:term` column |
+  |---|---|---|
+  | `row/2` over 1,000 ascending indexes | 450,553 r, 13.7 ms | 4,445,107 r, 33.3 ms |
+  | `rows_at/2`, the same 1,000 | 95,584 r, 4.4 ms | 96,975 r, 7.9 ms |
+  | `rows_at/2`, the same 1,000 shuffled | 139,971 r, 6.8 ms | 201,852 r, 8.2 ms |
+  | `row/2` over every row | 22,501,767 r, 1,236 ms | 223,962,959 r, 2,284 ms |
+  | `rows_at/2` over every row | 3,655,400 r, 277 ms | 3,555,351 r, 296 ms |
+- **A gather of rows that repeat, in another order, reads each row it names** (#205, #226). The internal gather `Macaw.Data.Table.rows_at/2` is built on took a chunk's kept rows as a contiguous run when they spanned as many places as they held, which rows that repeat can do: `[10, 10, 12, 13]` read rows 10 to 13. No released path passed a repeated index (every caller's were distinct), so no answer of 0.14.0 changes.
 
 - **Breaking: `Macaw.Data.Source.Finish.ceiling/2` refuses a budget that is neither `nil` nor a positive integer** (#199, #225, spec/01 §6.1). Its last clause answered whatever wasn't above the limit, so `ceiling(0, host: 10)` was `{:ok, {0, false}}`, `ceiling(-1, …)` and `ceiling(1.5, …)` answered themselves, and `ceiling(:nope, host: 10)` was `{:ok, {10, true}}`, an atom ordering above every number. Each is now `{:error, [{[:budget], {:type, :pos_integer}}]}`, answered with the `host:` and `page:` faults at once, the budget's first, and `ceiling!/2` raises it. A budget from `Macaw.Data.Source.Request.new/1` was already judged the same way, and no caller in the family is affected: macaw's surface fetch passes a budget macaw_component has already judged.
 

@@ -140,6 +140,23 @@ defmodule Macaw.Data.ReadersNeverRaiseTest do
     end
   end
 
+  # A table's rows by index (#205): any list of indexes, of any term, or none.
+  @tag verifies: "data-errors-readers"
+  property "Table.rows_at/2 answers any indexes as rows or faults" do
+    table = Table.new!([{"t", :number, [1, 2, 3]}, {"x", :term, [:a, {:b}, nil]}])
+
+    check all(
+            indexes <- one_of([list_of(one_of([integer(-2..5), leaf()]), max_length: 6), value()])
+          ) do
+      with {:ok, rows} <-
+             answers(fn -> Table.rows_at(table, indexes) end, fn ->
+               Table.rows_at!(table, indexes)
+             end) do
+        assert rows == Enum.map(indexes, &Table.row(table, &1))
+      end
+    end
+  end
+
   # A tensor of rank 1 to 3: rank 3 is refused.
   defp tensor do
     bind(integer(1..3), fn rank ->
@@ -382,7 +399,7 @@ defmodule Macaw.Data.ReadersNeverRaiseTest do
   @tag verifies: "data-errors-readers"
   test "every reader spec/00 §5 names exports its ! twin at its arity" do
     readers = named_readers()
-    assert length(readers) == 23
+    assert length(readers) == 24
 
     for {module, name, arity} <- readers do
       assert Code.ensure_loaded?(module), inspect(module)

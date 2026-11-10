@@ -140,12 +140,14 @@ defmodule Macaw.Data.Table.Subset do
   defp split_below([i | rest], limit, acc) when i < limit, do: split_below(rest, limit, [i | acc])
   defp split_below(rest, _limit, acc), do: {:lists.reverse(acc), rest}
 
-  # One view's kept rows: a contiguous run read where it lies, any other gathered.
+  # One view's kept rows: a contiguous run read where it lies, any other gathered. The rows
+  # are in order, so they are a run when they span as many places as they hold and none
+  # repeats: [10, 10, 12, 13] spans four and holds four (macaw_data#205).
   defp run(chunk, first, count, start, [i | _] = here) do
     locals = Enum.map(here, &(&1 - start))
     k = length(locals)
 
-    if List.last(here) - i + 1 == k,
+    if List.last(here) - i + 1 == k and ascending?(here),
       do: {chunk, first + i - start, k},
       else: {Chunk.gather(chunk, first, count, locals, {:subset, locals}), 0, k}
   end

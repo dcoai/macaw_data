@@ -474,6 +474,11 @@
     reason: "rows/1's twin: raises the faults rows/1 answers, as Macaw.Data.Error"
   },
   %{
+    at: {Macaw.Data.Table, :rows_at!, 2},
+    class: :bang,
+    reason: "rows_at/2's twin: raises the faults rows_at/2 answers, as Macaw.Data.Error"
+  },
+  %{
     at: {Macaw.Data.Table, :time_columns!, 1},
     class: :bang,
     reason: "time_columns/1's twin: raises the faults time_columns/1 answers, as Macaw.Data.Error"

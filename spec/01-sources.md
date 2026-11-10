@@ -54,7 +54,7 @@ A **source** is anything a component's slot reads. One contract serves feeds, qu
 - **Text is Arrow `utf8` only when it is valid UTF-8,** every string checked by itself (two halves of one character are each invalid, though their bytes together are not). A text column holding a binary that is not is Arrow `binary`, the same layout; a category column holding one is kept as its list.
 - **A missing value is `nil`,** in every type. A packed column keeps a **validity bitmap** beside its buffers, so a gap stays a gap and reads back as `nil`, never as 0 (§3). A bitmap is **least-significant-bit first,** as Arrow numbers bits: value i is bit (i rem 8) of byte (i div 8), and the padding bits of the last byte are 0. A missing value's slot in a values buffer holds zeros, which Arrow leaves unspecified, and takes no bytes of a text column's data.
 - **`new/1`** builds a table from `{name, type, values}` columns and reports every fault at once: a type not in the list (`{:enum, types}`), a value its type does not hold (`{[name, i], {:type, type}}`: a number column's non-number, a time column's non-time, a color column's value that is not a color term, `Schema.color?/1`, a point column's non-point), a value that is not data, a function, a PID, a reference, a port or an improper list, which has no digest (`{[name, i], :not_data}`, §1.1.2), a column of another length than the first (`{:length, n}`), a name given twice (`:duplicate`), and an element of the list that is no `{name, type, values}` column, a row map among them (`{[i], {:type, :column_spec}}`, its index in the list; macaw_data#159). `new!/1` raises naming them.
-- **Reading back:** `column/2` is a column's values in order. `rows/1` is the row view: one map per row keyed by every column name. `row/2` is one row, `nil` past the end; `names/1`, `size/1` and `column_type/2` describe the table.
+- **Reading back:** `column/2` is a column's values in order. `rows/1` is the row view: one map per row keyed by every column name. `row/2` is one row, `nil` past the end. `rows_at/2` is many rows by index (macaw_data#205): `{:ok, rows}` in the order given, repeats kept, each the row `row/2` answers, `nil` past the end; an index that is no non-negative integer is `{[k], {:type, :non_neg_integer}}`, `k` its position, every fault at once, and indexes that are no proper list `{[], {:type, :indexes}}` ([00 §5](00-overview.md#data-errors)); `rows_at!/2` raises them. It gathers the rows once, so a row costs the same wherever it lies in its chunk; `row/2` reads a `:term` column, which a chunk holds as a list, from the chunk's start. `names/1`, `size/1` and `column_type/2` describe the table.
 - **`slice/3`** is a run of rows as a table of the same columns. It keeps the chunks the run spans and where the run starts and ends in them (§1.1.1), copying nothing; a column read from it slices its packed buffers and shifts its bitmaps to start at the slice. A text column's offsets keep pointing into their chunk's data, and a dictionary column keeps its chunk's dictionary, as Arrow's slices do.
 - **The packed columns live off the process heap:** a binary over 64 bytes is reference-counted, so a collection never copies it. A table's cost to its process is a constant number of words per chunk, never per row.
 - **Chunked** (§1.1.1): every form above is a chunk's, so a zoned column's and a category column's dictionary are its chunk's.
@@ -97,6 +97,14 @@ for generated rows of numbers, floats, strings and times with gaps, rows to a ta
 
 ```test:table-slice
 slice/3 is the rows from start, count of them, for generated tables, chunkings and bounds; row/2 is one row or nil; a slice shares its parent's chunks and their binaries
+```
+
+```test:table-rows-at
+rows_at/2 is row/2 mapped over the same indexes, for generated tables of every column form, chunkings and slices, indexes in any order, repeated and past the end; an index that is no non-negative integer is its fault, every fault at once, and indexes that are no proper list are one fault; rows_at!/2 raises them
+```
+
+```test:table-rows-at-cost
+1,000 indexes over a table of three chunks with a :term column read at most 80 reductions a row, where row/2 reads thousands
 ```
 
 **Row lists are accepted at the edge.** `from/2` reads every shape data arrives in into a table:
