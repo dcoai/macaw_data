@@ -40,7 +40,11 @@ defmodule Raises do
   def scan(source, file) do
     case Code.string_to_quoted(source, file: file, columns: false) do
       {:ok, ast} ->
-        {:ok, walk(ast, %{module: nil, def: nil, quoted: false}, %{sites: [], defs: []})}
+        {:ok,
+         walk(ast, %{module: nil, def: nil, quoted: false, generated: false}, %{
+           sites: [],
+           defs: []
+         })}
 
       {:error, {meta, message, token}} ->
         {:error, "#{file}:#{meta[:line]}: does not parse: #{message}#{token}"}
@@ -51,9 +55,25 @@ defmodule Raises do
     do: walk(body, %{ctx | module: module(name, ctx.module), def: nil}, acc)
 
   # Code inside a `quote` is generated into the caller: a function it defines is not this
-  # module's, and a raise in it is attributed to the macro that writes it, marked quoted.
-  defp walk({:quote, _, args}, ctx, acc) when is_list(args),
-    do: walk(args, %{ctx | quoted: true}, acc)
+  # module's, and a raise in it is attributed to the macro that writes it. Where it runs
+  # is where it lands: `__using__`'s and `__before_compile__`'s quote lands in the
+  # caller's module body (`:body`), which runs while the caller compiles; any other
+  # macro's lands in an expression of the caller's (`true`), which runs at run time.
+  defp walk({:quote, _, args}, ctx, acc) when is_list(args) do
+    quoted = if not ctx.generated and module_body?(ctx.def), do: :body, else: true
+    walk(args, %{ctx | quoted: quoted}, acc)
+  end
+
+  # A function the quoted code defines runs in the caller at run time. A macro it defines
+  # runs while the caller's own callers compile, so its body, outside a quote of its own,
+  # is compile time; a quote inside it lands in their expressions.
+  defp walk({kind, _, [_head | rest]}, %{quoted: quoted} = ctx, acc)
+       when quoted != false and kind in [:def, :defp],
+       do: walk(rest, %{ctx | quoted: true}, acc)
+
+  defp walk({kind, _, [_head | rest]}, %{quoted: quoted} = ctx, acc)
+       when quoted != false and kind in [:defmacro, :defmacrop],
+       do: walk(rest, %{ctx | quoted: false, generated: true}, acc)
 
   defp walk({kind, _, [head | rest]}, %{module: module, quoted: false} = ctx, acc)
        when kind in @defs and module != nil do
@@ -97,9 +117,14 @@ defmodule Raises do
       kind: kind,
       line: meta[:line],
       call: words,
-      quoted: ctx.quoted
+      quoted: ctx.quoted == true
     }
   end
+
+  defp module_body?({kind, name, 1}) when kind in [:defmacro, :defmacrop],
+    do: name in [:__using__, :__before_compile__]
+
+  defp module_body?(_def), do: false
 
   defp head({:when, _, [head | _guards]}), do: head(head)
   defp head({name, _, args}) when is_atom(name) and is_list(args), do: {name, length(args)}
@@ -200,7 +225,8 @@ defmodule Raises do
       else: ["#{@allowlist}: #{name(at)} is listed as :mix_task but isn't in a Mix.Tasks module"]
   end
 
-  # A raise in quoted code runs in the caller at run time, not while it compiles.
+  # A raise in quoted code runs in the caller at run time, not while it compiles, unless
+  # it lands in the caller's module body or in a macro the quoted code defines (walk/3).
   defp holds(:compile, at, [site | _] = sites, _defs, _entry) do
     cond do
       site.kind not in [:defmacro, :defmacrop, nil] ->
