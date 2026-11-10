@@ -27,7 +27,9 @@ defmodule Macaw.Data.Table do
 
   **A table's identity is its contents** (spec/01 §1.1.2): `equal?/2` and `digest/1` read
   the values, never the layout, so the same rows chunked two ways are one value. `t()` is
-  opaque, and `==` on the struct is not a table's equality.
+  opaque, and `==` on the struct is not a table's equality. The kernel's digest
+  (`Macaw.Layers.Document.digest/1`) of a term holding a table follows `equal?/2` too:
+  a table's canonical term (`Macaw.Layers.Digest`) is its contents'.
 
   **The packed columns live off the process heap.** A binary over 64 bytes is
   reference-counted, so a garbage collection never copies it: a table costs its process a
@@ -852,6 +854,15 @@ defmodule Macaw.Data.Table do
 
   defp header(%__MODULE__{names: names, types: types}), do: Enum.map(names, &{&1, types[&1]})
 
+  @doc false
+  # The table's canonical term, what the kernel's digest encodes in its place
+  # (`Macaw.Layers.Digest`, spec/01 §1.1.2): `{"macaw.table", header, digests}`, its
+  # header and the content digests of its rows a canonical chunk at a time, equal exactly
+  # when `equal?/2` holds. Whole canonical chunks give the digests they keep.
+  @spec canonical(t()) :: {String.t(), [{name(), type()}], [String.t()]}
+  def canonical(%__MODULE__{size: nil} = table), do: table |> warm() |> canonical()
+  def canonical(%__MODULE__{chunks: views} = table), do: Digest.canonical(header(table), views)
+
   @doc """
   A tensor's columns, or tuple rows' elements, under `names`, in order.
 
@@ -987,4 +998,9 @@ defmodule Macaw.Data.Table do
   """
   @spec temporal?(term()) :: boolean()
   defdelegate temporal?(value), to: Edge
+end
+
+defimpl Macaw.Layers.Digest, for: Macaw.Data.Table do
+  # A table's digest is of its contents, never its layout (spec/01 §1.1.2).
+  def canonical(table), do: Macaw.Data.Table.canonical(table)
 end

@@ -582,6 +582,21 @@ defmodule Macaw.Data.Table.Chunk do
   defp as_read(%__MODULE__{read: %{columns: columns}}), do: columns
   defp as_read(%__MODULE__{} = chunk), do: chunk |> warm() |> as_read()
 
+  @doc false
+  # The chunk's canonical term, what the kernel's digest encodes in its place
+  # (`Macaw.Layers.Digest`): `{"macaw.table.chunk", header, digest}`, its content digest
+  # as a one-chunk table, the one it keeps, else hashed as read; a pending one is warmed.
+  @spec canonical(t()) :: {String.t(), [{term(), atom()}], String.t()}
+  def canonical(%__MODULE__{header: header, digest: digest}) when is_binary(digest),
+    do: Digest.chunk_canonical(header, digest)
+
+  def canonical(%__MODULE__{digest: :pending} = chunk), do: chunk |> warm() |> canonical()
+
+  def canonical(%__MODULE__{header: header, size: size} = chunk) do
+    segments = for {name, _type} <- header, do: [fn -> {storage(chunk, name, 0, size), size} end]
+    Digest.chunk_canonical(header, Digest.digest(header, size, segments))
+  end
+
   # A run of the chunk's rows as a chunk of its own: each column's storage as read, sliced,
   # under `header`, with no id, digest, derivation, delta or fetch (`Table.detached/1`).
   @doc false
@@ -682,4 +697,9 @@ defmodule Macaw.Data.Table.Chunk do
       header: chunk.header
     }
   end
+end
+
+defimpl Macaw.Layers.Digest, for: Macaw.Data.Table.Chunk do
+  # A chunk's digest is of its contents, never its layout, nor where it sits.
+  def canonical(chunk), do: Macaw.Data.Table.Chunk.canonical(chunk)
 end

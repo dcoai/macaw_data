@@ -18,6 +18,7 @@ defmodule Macaw.Data.Table.Digest do
   # digests with `Document.digest/1`'s: there is one encoder in the family.
 
   alias Macaw.Data.Table.Canonical
+  alias Macaw.Data.Table.Chunk
   alias Macaw.Data.Table.Column
   alias Macaw.Layers.Document
 
@@ -52,6 +53,82 @@ defmodule Macaw.Data.Table.Digest do
   end
 
   defp init, do: :crypto.hash_init(:sha256)
+
+  # A canonical chunk's rows (spec/01 §1.1.1), `Macaw.Data.Table.chunk_rows/0`.
+  @rows 8192
+
+  @doc false
+  # A table's canonical term (`Macaw.Layers.Digest`, spec/01 §1.1.2): what the kernel's
+  # digest encodes in its place, `{"macaw.table", header, digests}`. `digests` are the
+  # content digests, each as a one-chunk table under `header`, of its rows `@rows` at a
+  # time from the first, the last run shorter: the digests a canonical rebuild's chunks
+  # carry. So it is equal exactly when the contents are (`Table.equal?/2`). Views that
+  # are those chunks already, whole, hashed, with no delta and the table's columns in its
+  # order, give the digests they keep, hashing nothing and fetching no cold chunk; any
+  # other layout hashes its rows a run at a time, as `digest/3` hashes a table.
+  @spec canonical([{term(), atom()}], [{Chunk.t(), non_neg_integer(), non_neg_integer()}]) ::
+          {String.t(), [{term(), atom()}], [String.t()]}
+  def canonical(header, views) do
+    digests =
+      case kept(views, header, []) do
+        {:ok, digests} -> digests
+        :general -> views |> runs(@rows, [], []) |> Enum.map(&run_digest(header, &1))
+      end
+
+    {"macaw.table", header, digests}
+  end
+
+  # The digests whole canonical chunks keep, in order, or `:general`.
+  defp kept([], _header, acc), do: {:ok, Enum.reverse(acc)}
+
+  defp kept([{chunk, 0, count} | rest], header, acc)
+       when count == @rows or (rest == [] and count in 1..@rows//1) do
+    digest = Chunk.digest(chunk)
+
+    if count == Chunk.size(chunk) and not Chunk.delta?(chunk) and is_binary(digest) and
+         Chunk.header(chunk) == header,
+       do: kept(rest, header, [digest | acc]),
+       else: :general
+  end
+
+  defp kept(_views, _header, _acc), do: :general
+
+  # The views cut into runs of `@rows` rows from the first, the last shorter: `room` the
+  # rows the current run still takes.
+  defp runs([], _room, [], done), do: Enum.reverse(done)
+  defp runs([], _room, run, done), do: Enum.reverse([Enum.reverse(run) | done])
+
+  defp runs([{_chunk, _first, count} = view | rest], room, run, done) when count < room,
+    do: runs(rest, room - count, [view | run], done)
+
+  defp runs([{chunk, first, count} | rest], room, run, done) do
+    done = [Enum.reverse([{chunk, first, room} | run]) | done]
+    rest = if count == room, do: rest, else: [{chunk, first + room, count - room} | rest]
+    runs(rest, @rows, [], done)
+  end
+
+  # A run's content digest as a one-chunk table under `header`.
+  defp run_digest(header, run) do
+    size = run |> Enum.map(&elem(&1, 2)) |> Enum.sum()
+
+    columns =
+      for {name, _type} <- header do
+        for {chunk, first, count} <- run,
+            do: fn -> {Chunk.storage(chunk, name, first, count), count} end
+      end
+
+    digest(header, size, columns)
+  end
+
+  @doc false
+  # A chunk's canonical term (`Macaw.Layers.Digest`): `{"macaw.table.chunk", header,
+  # digest}`, its content digest as a one-chunk table, read where it keeps one and else
+  # hashed as read. Its id is where it sits, not its contents, so it is not in the term,
+  # as a table's origin is not in its.
+  @spec chunk_canonical([{term(), atom()}], String.t()) ::
+          {String.t(), [{term(), atom()}], String.t()}
+  def chunk_canonical(header, digest) when is_binary(digest),
+    do: {"macaw.table.chunk", header, digest}
 
   @doc false
   # The kernel's digest (`Macaw.Layers.Document.digest/1`) of a term this library built
