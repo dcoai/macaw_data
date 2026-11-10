@@ -1,6 +1,23 @@
 # Changelog
 
-## Unreleased
+## v0.14.0 (2026-11-10)
+
+**macaw_layers 0.5.0, native kernels that answer their faults as terms, a push drain that costs the rows an increment brings, and a table whose kernel digest is its contents** (#101, #202, #204, #216, #218, #220). An adopter takes macaw_layers 0.5.0 with it, a few calls that raised now answer faults, `Macaw.Data.Native.elixir/1` and `normal_schedulers/1` run their function in a process of its own, and there is new public API, so this is a minor.
+
+### Upgrading from 0.13.x
+
+- **Take macaw_layers 0.5.0 too:** `{:macaw_layers, "~> 0.5.0"}`. 0.14.0 does not resolve against 0.4.x, and a project that calls macaw_layers itself takes that release's own changes. The move to 0.5.0 changes no digest by itself.
+- **Calls that raised `ArgumentError` from the kernel now answer faults,** so a test rescuing it changes:
+  - `Macaw.Data.Operations.step_digest/2`: `{:error, {path, :not_data}}` for a node holding a function, PID, reference, port or improper list; `Macaw.Data.Operations.Step.parts/4`, and so `Step.run/4` and `Macaw.Data.Operations.Cache.run/5`: `{:error, {key, :not_data}}`.
+  - `Macaw.Data.Schema.from_json/2`, `Macaw.Data.Derived.from_json/2` and `Macaw.Data.Derived.from_map/2`: `limits:` that are no limits answer faults under `[:limits]`, such as `{[:limits, :depth], {:limit_value, 64}}`.
+- **`Macaw.Data.Table.new/2` refuses an origin source or resolution that is not data,** `{[:origin, key], :not_data}`. It accepted one, and a sort or merge over the table raised later.
+- **`Macaw.Data.Native.elixir/1` and `normal_schedulers/1` run their function in a process of their own.** The function must not use the caller's `self()`, mailbox or process dictionary (only `$callers` is carried): a `send(self(), …)` inside it reaches its own process, and a `receive` waits there. Its reductions are not the caller's, so a count taken around either call sees only the plumbing; take it inside the function. A raise, throw or exit reaches the caller as before. `Macaw.Data.Native.scope/2` answers `{:ok, result}` or `{:error, {:down, reason}}` instead of passing an exit on.
+- **A kernel fault that is this library's defect raises `RuntimeError`,** naming the kernel, where an `ErlangError` such as `:ShortBuffer` was raised. Out of memory in a kernel is answered by the Elixir path. Nothing a caller passes reaches the raise, so only code rescuing `ErlangError` around a step changes.
+- **Kernel digests of a term holding a table or a chunk move:** `Macaw.Layers.Document.digest/1` and `encode/1` follow `Macaw.Data.Table.equal?/2`, so equal tables chunked otherwise give one digest. A step identity whose `:term` option holds a table moves with them. Anything you stored keyed on such a digest is recomputed; `Macaw.Data.Table.digest/1` of a table with no table among its values, and every chunk digest, is unchanged.
+- **New:** `Macaw.Data.Source.Push.cache/1`, `position/1` and `drained/1`; read them in place of the holder's struct fields. `Macaw.Data.Native.scope/2` and `scope!/2`.
+- **`Macaw.Data.Source.Push.drain/2` answers what it answered** and costs the rows an increment brings: a 1,000-row increment into a nearly full open chunk 1,551,511 → 439,513 reductions (33.1 → 5.7 ms), and the first drain after a snapshot 10,266,302 → 785,865 (171.7 → 7.4 ms). Each kernel call costs 2 to 4 reductions more and `Macaw.Data.Table.Chunk.gather/5` 17 more; the tables are below.
+
+### Changes
 
 - **A native kernel answers a fault as a term, never as a Zig error** (#101, #208, spec/04 §1.7). Zigler turned a kernel's error return into an `ErlangError` through its error-return trace, whose debug-info globals it initializes on first use without a lock. A kernel now answers `{:fault, reason}` (`:short_buffer`, `:not_a_binary`, `:not_a_piece`, `:unknown_form`, `:out_of_memory`), and a compile-time check refuses one that returns an error union. Out of memory is answered by the Elixir path. Any other fault is a defect in this library's own packing and raises a `RuntimeError` naming the kernel and its arguments' shapes, where an `ErlangError` such as `:ShortBuffer` was raised before. The kernels' interface version is 8. Each kernel call counts 2 to 4 reductions more (a ladder partial over 8,192 rows: 39 → 42; the column sum: 215 → 219); its time is within noise.
 - **A native kernel frees what it allocated when an allocation fails** (#101, #209, spec/04 §1.7). `group_sum` leaked its hash index when `Table.init`'s second allocation failed, found by extla's allocation model. Out of memory only, so no working call changes. Every kernel allocation now goes through one counted path, and the suite fails each allocation of each kernel in turn and finds nothing live at any return.
