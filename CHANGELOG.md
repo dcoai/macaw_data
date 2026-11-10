@@ -30,6 +30,8 @@ The next release is **0.16.0**: it adds public API.
   | `Macaw.Data.Table.digest/1` | 606,770 r, 16.2 ms | 126,730 r, 1.6 ms |
   | a 1,000-row drain into 7,000 held, a number window beside a color column | 1,901,577 r, 61.2 ms | 377,461 r, 8.0 ms |
 
+- **Fixed:** `Macaw.Data.Schema.new/1` and `from_map/1` answer a struct `status:` beside `order:` or `values:` as the status's fault, `{[name, :status], {:type, :status}}`, where they raised `Protocol.UndefinedError` (#236, #240, spec/00 §5, spec/01 §1.3). A struct is a map to `is_map/1`, and the two cross-checks of a status against `order:` and `values:` enumerated it; they now read only the plain map `status:` accepts. This also removes a random CI failure: the reader property reached it only when a generated description drew a struct at `:status` and an `order:` or `values:` beside it (first at seed 112837). The property now puts each struct at every description key, beside each cross-checked companion, on every run.
+
 ## v0.15.0 (2026-11-10)
 
 **A ceiling that refuses a budget it can't use, many rows of a table read by index in one gather, and a push drain that reads each incoming row once** (#199, #205, #215). A budget that is no positive integer is now refused, which is breaking, and there is new public API, so this is a minor.

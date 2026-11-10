@@ -74,6 +74,20 @@ defmodule Macaw.Data.ReadersNeverRaiseTest do
     ]
   end
 
+  # The descriptions a key's struct sits beside: none, and each one whose cross-checks read
+  # another key (order: against status:, values: against order: and status:), so a struct
+  # reaches every check on every run (#236).
+  defp struct_companions do
+    [
+      %{},
+      %{order: []},
+      %{order: ["x"]},
+      %{type: :category, values: ["x"]},
+      %{type: :category, values: ["x"], order: ["x"]},
+      %{type: :category, status: %{"x" => :good}, order: ["x"]}
+    ]
+  end
+
   defp name,
     do: one_of([atom(:alphanumeric), string(:alphanumeric, min_length: 1, max_length: 4)])
 
@@ -270,6 +284,21 @@ defmodule Macaw.Data.ReadersNeverRaiseTest do
                Schema.from_map([[named, %{"type" => "category", "values" => [struct]}]])
 
       assert {[named, :values], {:type, :values}} in in_values
+
+      # A struct at every key, beside the keys whose cross-checks read another (#236): the
+      # generated descriptions draw a struct at :status about once in 40, and order: or
+      # values: beside it rarer still, so seed 112837 was the first to reach it.
+      for key <- keys, companion <- struct_companions() do
+        description = Map.put(companion, key, struct)
+
+        answers(fn -> Schema.new(%{named => description}) end, fn ->
+          Schema.new!(%{named => description})
+        end)
+
+        answers(fn -> Schema.from_map([[named, description]]) end, fn ->
+          Schema.from_map!([[named, description]])
+        end)
+      end
 
       answers(fn -> Schema.new(fields) end, fn -> Schema.new!(fields) end)
 

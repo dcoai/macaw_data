@@ -508,12 +508,14 @@ defmodule Macaw.Data.Schema do
 
   # Every state `status` names is one of `order`'s, when the description gives both; and
   # with `values`, every state `order` lists and `status` names is one of them (visualize D-194).
+  # Each reads a status only as `key/4` accepts one, a plain map: a struct is a map to
+  # `is_map/1`, and is the status's own fault, `{:type, :status}`, never enumerated (#236).
   defp unordered(name, description) do
     in_order(name, description) ++ in_values(name, description)
   end
 
   defp in_order(name, %{order: order, status: status})
-       when is_proper_list(order) and is_map(status) do
+       when is_proper_list(order) and is_map(status) and not is_struct(status) do
     order = Enum.map(order, &spell/1)
 
     for {state, _role} <- status,
@@ -540,7 +542,7 @@ defmodule Macaw.Data.Schema do
 
     status =
       case Map.get(description, :status) do
-        status when is_map(status) ->
+        status when is_map(status) and not is_struct(status) ->
           for {state, _role} <- status,
               spell(state) not in values,
               do: {[name, :status, state], :not_in_values}
@@ -775,7 +777,7 @@ defmodule Macaw.Data.Schema do
 
   defp entry?(v), do: is_map(v) and not is_struct(v)
 
-  defp entry(entry, path) when is_map(entry) do
+  defp entry(entry, path) when is_map(entry) and not is_struct(entry) do
     missing = if Map.has_key?(entry, :value), do: [], else: [{path ++ [:value], :required}]
     missing ++ Enum.flat_map(entry, fn {key, value} -> entry_key(key, value, path ++ [key]) end)
   end

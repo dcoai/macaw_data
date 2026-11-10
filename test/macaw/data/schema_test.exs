@@ -232,6 +232,29 @@ defmodule Macaw.Data.SchemaTest do
                [{[:s, :status, :warning], :not_in_values}]
     end
 
+    # A struct is a map to `is_map/1`, and neither cross-check enumerates it: it is the
+    # status's fault alone, beside order: or values: as without them (#236).
+    @tag verifies: "schema-values"
+    test "a struct status beside order: or values: is its fault, never a raise" do
+      now = ~U[2026-01-01 00:00:00Z]
+
+      assert faults(%{a: %{status: now, order: []}}) ==
+               [
+                 {[:a, :order], {:type, :order}},
+                 {[:a, :status], {:type, :status}},
+                 {[:a, :type], :required}
+               ]
+
+      assert faults(%{a: %{type: :category, values: ["x"], status: now}}) ==
+               [{[:a, :status], {:type, :status}}]
+
+      assert faults(%{a: %{type: :category, values: ["x"], order: ["x"], status: ~D[2026-01-01]}}) ==
+               [{[:a, :status], {:type, :status}}]
+
+      assert Schema.from_map([["a", %{"type" => "category", "status" => now, "order" => ["x"]}]]) ==
+               {:error, [{["a", :status], {:type, :status}}]}
+    end
+
     @tag verifies: "schema-version"
     test "values do not move the version of a schema that does not use them" do
       assert Schema.version(Schema.new!(%{v: %{type: :number}})) ==

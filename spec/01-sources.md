@@ -415,10 +415,10 @@ A declared value may say more than that it exists, as a map in place of the bare
 - **Distinct by value.** The entries' values, bare and map alike, are distinct: `["ok", %{value: "ok", name: "OK"}]` lists `"ok"` twice, `:duplicate` at the later one's index.
 - **An entry that says nothing is its value.** `new/1` keeps `%{value: v}` with neither a `name` nor a `color` as the bare `v`, so the two spellings are one schema of one version.
 - **Reading them.** `values/2` is the field's bare values in their declared order, `nil` when the field declares none (an open set). `value_names/2` maps each value with a `name` to its name, and `value_colors/2` each value with a `color` to its color, the term the schema holds; each is `%{}` when none has one. `fetch/3` of `:values` answers the list as declared, entries included.
-- **Checked against `order` and `status`.** With `values`, every state `order` lists and `status` names is one of them, compared with the bare values; with `order`, every state `status` names is one of `order`'s.
+- **Checked against `order` and `status`.** With `values`, every state `order` lists and `status` names is one of them, compared with the bare values; with `order`, every state `status` names is one of `order`'s. Only a status `status:` accepts is checked, a plain map: any other, a struct among them, is its own `{[name, :status], {:type, :status}}` and is never read beside `order` or `values` (macaw_data#236).
 
 ```test:schema-values
-values may be entries with a name and a color, read back by values/2, value_names/2 and value_colors/2 by either spelling; an entry with only its value is that value, one version; every fault of an entry by path; order and status are checked against the bare values
+values may be entries with a name and a color, read back by values/2, value_names/2 and value_colors/2 by either spelling; an entry with only its value is that value, one version; every fault of an entry by path; order and status are checked against the bare values, and a struct status beside them is the status's fault, never a raise
 ```
 
 ### 1.4 Identity {#sources-schema-identity}
