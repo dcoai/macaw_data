@@ -8,6 +8,8 @@ defmodule Macaw.Data.NativeTest do
   alias Macaw.Data.Native
   alias Macaw.Data.Native.Toolchain
 
+  doctest Native, only: [enter: 1]
+
   # The panicking kernel exists where the build has the toolchain.
   @panics Code.ensure_loaded?(Macaw.Data.Test.NativePanic)
 
@@ -188,6 +190,75 @@ defmodule Macaw.Data.NativeTest do
                assert_raise RuntimeError, fn -> Native.elixir(fn -> raise "inner" end) end
                {inner, Native.active?() == Native.loaded?(), Native.scheduler(big)}
              end) == {{false, :normal}, true, :normal}
+    end
+  end
+
+  describe "a host's counted process" do
+    # macaw_data#224: a host counting reductions in a process of its own enters the scope
+    # there, as `Macaw.Data.Test.Work` does; `elixir/1` and `normal_schedulers/1` would
+    # do the work in another process.
+    defp in_process(fun) do
+      parent = self()
+      tag = make_ref()
+      spawn_link(fn -> send(parent, {tag, fun.()}) end)
+      receive do: ({^tag, answer} -> answer)
+    end
+
+    # A scope the type checker can't see, so the refused call compiles without a warning.
+    defp opaque(term), do: :erlang.binary_to_term(:erlang.term_to_binary(term))
+
+    @tag verifies: "operations-native-enter"
+    test "enter/1 sets the scope's flag for the rest of a spawned process, never the caller's" do
+      big = Native.sync_rows() + 1
+      before = flags()
+
+      assert in_process(fn ->
+               :ok = Native.enter(:elixir)
+               {Native.active?(), Native.scheduler(big)}
+             end) == {false, :dirty}
+
+      assert in_process(fn ->
+               :ok = Native.enter(:normal_schedulers)
+
+               {Native.active?() == Native.loaded?(), Native.scheduler(big),
+                Native.finish_scheduler(Native.finish_buckets() + 1), Native.entry_limit()}
+             end) == {true, :normal, :normal, 0}
+
+      assert flags() == before
+    end
+
+    @tag verifies: "operations-native-enter"
+    test "enter/1 keeps the flag the process already holds, from a scope or an earlier enter/1" do
+      big = Native.sync_rows() + 1
+
+      assert in_process(fn ->
+               :ok = Native.enter(:elixir)
+               :ok = Native.enter(:normal_schedulers)
+               {Native.active?(), Native.scheduler(big)}
+             end) == {false, :normal}
+
+      assert Native.normal_schedulers(fn ->
+               in_process(fn ->
+                 :ok = Native.enter(:normal_schedulers)
+                 Native.scope!(:elixir, fn -> {Native.active?(), Native.scheduler(big)} end)
+               end)
+             end) == {false, :normal}
+
+      # Entered inside a scope, the process holds that scope's flag too.
+      assert Native.elixir(fn ->
+               :ok = Native.enter(:normal_schedulers)
+               {Native.active?(), Native.scheduler(big)}
+             end) == {false, :normal}
+    end
+
+    @tag verifies: "operations-native-enter"
+    test "enter/1 refuses a scope outside the type, as scope/2 does, and sets nothing" do
+      # On main before #224, `enter(:bogus)` put `{nil, true}` in the dictionary and
+      # answered `:ok`, so a host's typo counted on the wrong path with no sign.
+      assert in_process(fn ->
+               assert_raise FunctionClauseError, fn -> Native.enter(opaque(:bogus)) end
+               for {key, _} <- Process.get(), match?({Native, _}, key) or key == nil, do: key
+             end) == []
     end
   end
 

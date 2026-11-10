@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+The next release is **0.16.0**: it adds public API.
+
+### Changes
+
+- **New: `Macaw.Data.Native.enter/1` is documented, the public entry for a host's own counted process** (#224, #237, spec/04 §1.7). Since 0.14.0 `Native.elixir/1` and `normal_schedulers/1` run their function in a process of their own, so a host that counts reductions in a spawned process, as visualize's `Visualize.Work.reductions/2` does, enters the scope in that process instead. `enter(scope)` puts the flags of `scope`, and whichever of the two the process already holds, in the calling process for the rest of its life: it is only for a process that ends with the scope, and `scope/2` is the scope for any other caller, since nothing clears the flag. It now refuses a scope outside `:elixir | :normal_schedulers` with a `FunctionClauseError`, as `scope/2` does; `enter(:bogus)` put `{nil, true}` in the caller's dictionary and answered `:ok`, so a typo counted on the wrong path with no sign.
+
 ## v0.15.0 (2026-11-10)
 
 **A ceiling that refuses a budget it can't use, many rows of a table read by index in one gather, and a push drain that reads each incoming row once** (#199, #205, #215). A budget that is no positive integer is now refused, which is breaking, and there is new public API, so this is a minor.

@@ -146,12 +146,31 @@ defmodule Macaw.Data.Native do
     end
   end
 
-  @doc false
-  # The flags of `scope` for the rest of the calling process: only for a process that ends
-  # with the scope, as `Macaw.Data.Test.Work`'s counted run does; `scope/2` is the scope
-  # for any other caller.
+  @doc """
+  The flags of `scope`, and whichever of the two the caller already holds, for the rest of
+  the calling process: only for a process that ends with the scope, such as a counter's
+  spawned run. `scope/2` is the scope for any other caller, since nothing clears the flag.
+
+  A host that counts reductions in a process of its own enters the scope there, since
+  `elixir/1` and `normal_schedulers/1` run their function in another process, whose work
+  the count would miss (spec/04 §1.7, macaw_data#224). `Macaw.Data.Test.Work`'s counted
+  run does the same. A scope outside `t:scope/0` is a `FunctionClauseError`, as at
+  `scope/2`.
+
+      iex> parent = self()
+      iex> spawn(fn ->
+      ...>   :ok = Macaw.Data.Native.enter(:elixir)
+      ...>   :ok = Macaw.Data.Native.enter(:normal_schedulers)
+      ...>   big = Macaw.Data.Native.sync_rows() + 1
+      ...>   send(parent, {:counted, Macaw.Data.Native.active?(), Macaw.Data.Native.scheduler(big)})
+      ...> end)
+      iex> receive do: ({:counted, active?, scheduler} -> {active?, scheduler})
+      {false, :normal}
+      iex> Macaw.Data.Native.scheduler(Macaw.Data.Native.sync_rows() + 1)
+      :dirty
+  """
   @spec enter(scope()) :: :ok
-  def enter(scope) do
+  def enter(scope) when scope in [:elixir, :normal_schedulers] do
     Enum.each(flags(scope), fn {key, value} -> Process.put(key, value) end)
   end
 
