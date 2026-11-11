@@ -1,8 +1,16 @@
 # Changelog
 
-## Unreleased
+## v0.16.0 (2026-11-11)
 
-The next release is **0.16.0**: it adds public API.
+**A documented entry for a host's own counted process, packed `:point` and `:color` columns, and a drain into a holding laid by row count that joins its rows after the last chunk's** (#224, #231, #236, #238). `Macaw.Data.Native.enter/1` is new public API and now refuses a scope it doesn't know, so this is a minor.
+
+### Upgrading from 0.15.x
+
+- **New: `Macaw.Data.Native.enter/1`** is the public entry for a host that counts reductions in a process it spawned: `enter(scope)` puts `scope`'s flags in the calling process for the rest of its life, so call it only in a process that ends with the scope, and use `scope/2` anywhere else.
+- **Breaking for a typo only: `enter/1` raises `FunctionClauseError` for a scope outside `:elixir | :normal_schedulers`,** as `scope/2` does. `enter(:bogus)` answered `:ok` and left the process counting on the wrong path. A caller passing `:elixir` or `:normal_schedulers` changes nothing.
+- **`:point` and `:color` columns are packed,** and a drain into a holding laid by row count joins its rows after the last chunk's. Every answer, chunk id and digest is the one 0.15.0 gives; `row/2` on such a column costs the same wherever the row lies, and digests and drains cost a fraction of what they did. No call changes; the tables are below.
+- **`Macaw.Data.Schema.new/1` and `from_map/1` answer a struct `status:` beside `order:` or `values:` as `{[name, :status], {:type, :status}}`,** where they raised `Protocol.UndefinedError`. A caller that rescued nothing gets a fault where it crashed.
+- The spec names no versions (#238). Nothing in the package changes.
 
 ### Changes
 
@@ -72,7 +80,6 @@ The next release is **0.16.0**: it adds public API.
 - **CI: the family's current `ci/raises.exs`** (#223). The family's raise check counts a raise inside a `__using__` or `__before_compile__` quote as compile time since 2026-11-09, so `mix hex.publish`'s check against the family reference refused 0.14.0 until it was published with the earlier copy. The new copy finds the same raise sites in `lib/`, every one allowlisted; `ci/` is not in the package.
 
 ## v0.14.0 (2026-11-10)
- (2026-11-10)
 
 **macaw_layers 0.5.0, native kernels that answer their faults as terms, a push drain that costs the rows an increment brings, and a table whose kernel digest is its contents** (#101, #202, #204, #216, #218, #220). An adopter takes macaw_layers 0.5.0 with it, a few calls that raised now answer faults, `Macaw.Data.Native.elixir/1` and `normal_schedulers/1` run their function in a process of its own, and there is new public API, so this is a minor.
 
