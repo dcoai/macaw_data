@@ -67,8 +67,9 @@ defmodule Macaw.Data.Source.Conformance.Pushes do
 
   @doc false
   # The subscription's snapshot fetched as a holder fetches it on handoff (spec/01 §4.1):
-  # the first request, no budget, naming the subscription. `{:ok, resolution}`, its
-  # `served.resolution`, or the findings of a fetch that answers no delivery.
+  # the first request, no budget, naming the subscription. `{:ok, resolution, position}`,
+  # its `served.resolution` and `served.position`, or the findings of a fetch that answers
+  # no delivery.
   def subscribed_fetch(source, description, ref, o) do
     ask = List.first(o.requests) || []
     probe = {:subscribed, ask}
@@ -76,7 +77,7 @@ defmodule Macaw.Data.Source.Conformance.Pushes do
     with {:ok, request} <- subscribed_request(ask, ref, o),
          {:ok, {:ok, %Delivery{served: served}}} when is_map(served) <-
            call(fn -> Source.fetch(source, description, request) end, {:fetch, probe}, o) do
-      {:ok, Map.get(served, :resolution)}
+      {:ok, Map.get(served, :resolution), Map.get(served, :position)}
     else
       {:error, {:request, faults}} -> [{:probe, ask, faults}]
       {:ok, {:error, {:bad_fetch, other}}} -> [{:not_a_delivery, probe, other}]
@@ -98,8 +99,11 @@ defmodule Macaw.Data.Source.Conformance.Pushes do
   # stating its position, and the increments numbered one past it, or from 1 with none,
   # each one past the last (spec/01 §4.1); and every increment at the resolution of the
   # subscription's first snapshot (§4.3). `before` arrived before the subscription's own
-  # fetch, whose answer `fetched` is (`{:ok, resolution}`, or findings), and `messages`
-  # after it: the first snapshot in that order fixes the resolution.
+  # fetch, whose answer `fetched` is (`{:ok, resolution, position}`, or findings), and
+  # `messages` after it: the first snapshot in that order fixes the resolution. The
+  # fetched snapshot states its position as a pushed one does (§3, §4.1), and the
+  # increments after it are numbered past it; one older than what is numbered already is
+  # stale, which a holder drops, so the numbering goes on from the later of the two.
   def sequence(handshake, before, fetched, messages, o) do
     {known, faults} =
       case handshake do
@@ -112,8 +116,15 @@ defmodule Macaw.Data.Source.Conformance.Pushes do
 
     state =
       case fetched do
-        {:ok, resolution} -> held(state, resolution)
-        findings -> %{state | faults: state.faults ++ findings}
+        {:ok, resolution, p} when is_integer(p) and p >= 0 ->
+          %{held(state, resolution) | next: max(state.next, p + 1)}
+
+        {:ok, resolution, p} ->
+          state = held(state, resolution)
+          %{state | faults: state.faults ++ [{:subscribed_position, p}]}
+
+        findings ->
+          %{state | faults: state.faults ++ findings}
       end
 
     state = Enum.reduce(messages, state, &message(&1, &2, o))

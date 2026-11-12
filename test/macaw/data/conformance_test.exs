@@ -141,6 +141,47 @@ defmodule Macaw.Data.ConformanceTest do
     assert [] == Conformance.check(:push, Broken.new(), @opts)
   end
 
+  @tag verifies: "conformance-push-position"
+  test "a snapshot fetched for the subscription states its position; no other answer states one" do
+    # Fetched for the subscription, an answer stating no position is a push finding, and
+    # one stating a position it was not asked for is a deliveries finding on every probe.
+    assert [{:push, {:subscribed_position, nil}} = finding] =
+             Conformance.check(:push, Broken.new(:position_unstated), @opts)
+
+    assert Conformance.format(finding) =~ "fetched for the subscription"
+
+    findings = Conformance.check(:deliveries, Broken.new(:position_unasked), @opts)
+    assert findings != []
+    assert Enum.all?(findings, &match?({:deliveries, {:position, {_ask, _budget}, 0}}, &1))
+    assert Conformance.format(hd(findings)) =~ "not taken for a subscription"
+
+    # The increments after a fetched snapshot are numbered past its position: one ahead of
+    # what it reflects leaves them numbered at or before it.
+    assert {:push, {:numbering, 1_001, 1}} in Conformance.check(
+             :push,
+             Broken.new(:snapshot_ahead),
+             @opts
+           )
+
+    # The honest source states the count of increments sent to the subscription, and none
+    # to any other fetch.
+    broken = Broken.new()
+    {:ok, ref} = Broken.subscribe(broken, self())
+    Broken.emit(broken)
+    Broken.emit(broken)
+    {:ok, description} = Broken.describe(broken, nil)
+    now = DateTime.utc_now()
+    subscribed = Macaw.Data.Source.Request.new!(now: now, subscription: ref)
+    {:ok, snapshot} = Macaw.Data.Source.fetch(broken, description, subscribed)
+
+    {:ok, answer} =
+      Macaw.Data.Source.fetch(broken, description, Macaw.Data.Source.Request.new!(now: now))
+
+    assert {snapshot.served.position, answer.served.position} == {2, nil}
+    assert [] == Conformance.check(:push, Broken.new(), @opts)
+    assert [] == Conformance.check(:deliveries, Broken.new(), @opts)
+  end
+
   @tag verifies: "conformance-monitor"
   test "the monitor check: honest sources pass; a snapshot ahead, rows that do not pack and a moving answer fail" do
     assert Conformance.check(:monitor, Broken.new(), @opts) == []
@@ -186,6 +227,8 @@ defmodule Macaw.Data.ConformanceTest do
     data_before_schema: {:push, :before_schema},
     misnumbered: {:push, :numbering},
     resolution_drift: {:push, :resolution},
+    position_unstated: {:push, :subscribed_position},
+    position_unasked: {:deliveries, :position},
     raises: {:errors, :raised},
     ticks_as_time: {:deliveries, :window_value},
     no_window_field: {:describe, :no_window_field},

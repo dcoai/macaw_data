@@ -60,7 +60,8 @@ defmodule Macaw.Data.Source.Conformance.Deliveries do
           instants(rows, probe, schema, time) ++
           identities(rows, probe, schema) ++
           outside(rows, probe, time, served) ++
-          resolution(rows, probe, schema, time, delivery.served.resolution)
+          resolution(rows, probe, schema, time, delivery.served.resolution) ++
+          position(probe, delivery.served.position)
 
       # The clauses that compare against a second fetch need the rows' window field to
       # hold values of its type, and a range window to compare over.
@@ -76,6 +77,12 @@ defmodule Macaw.Data.Source.Conformance.Deliveries do
       end
     end
   end
+
+  # A probe names no subscription, so its answer states no position (spec/01 §3): one
+  # stated has no subscription's numbering to belong to, and a holder handed the answer
+  # would take it for its own.
+  defp position(_probe, nil), do: []
+  defp position(probe, position), do: [{:position, probe, position}]
 
   # The request a probe asks, as the given viewer, at the run's `now`.
   defp request({ask, budget}, viewer, o),

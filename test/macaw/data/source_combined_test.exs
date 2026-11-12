@@ -229,6 +229,34 @@ defmodule Macaw.Data.SourceCombinedTest do
       assert Source.subscribe(Combined.new!([signal]), self()) == {:error, :no_push}
     end
 
+    @tag verifies: "combined-push"
+    test "a combination pushing through its first part passes every check, its snapshot at that part's position" do
+      alias Macaw.Data.Test.Sources.Broken
+      live = Broken.new()
+      combined = Combined.new!([live, Broken.new()])
+
+      # No budget: a part honoring one reduces rows the combination does not record
+      # (macaw_data#273).
+      assert [] ==
+               Conformance.check(combined,
+                 requests: [[], [window: [2, 10]], [window: [nil, 6]]],
+                 budgets: [nil],
+                 push: fn _combined -> Broken.emit(live) end,
+                 quiet: 30
+               )
+
+      {:ok, ref} = Source.subscribe(combined, self())
+      Broken.emit(live)
+      {:ok, description} = describe(combined)
+      request = Request.new!(now: @now, window: [0, 30], subscription: ref)
+
+      assert {:ok, %Delivery{served: %{position: 1}}} =
+               Source.fetch(combined, description, request)
+
+      assert {:ok, %Delivery{served: %{position: nil}}} =
+               Source.fetch(combined, description, %{request | subscription: nil})
+    end
+
     @tag verifies: "combined-faults"
     test "new/2 refuses what is no list of parts, a part that is no source, and options" do
       assert Combined.new([]) == {:error, [{[], {:type, :parts}}]}

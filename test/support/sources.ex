@@ -11,8 +11,10 @@ defmodule Macaw.Data.Test.Sources do
     window field. It honors a numeric window, a budget (every `k`-th row,
     `reduced_by: :source`, the resolution `k`), `as_of` and push, declares itself viewer
     independent, and `emit/1` pushes one new row under a new version of its schema, the
-    schema first. `:stale` is no flaw, as `:identified` is not: it answers honestly from a
-    store it says it could not refresh, `served.stale: true`.
+    schema first. A fetch for a subscription states its position, the count of increments
+    sent to it; any other answer states none. `:stale` is no flaw, as `:identified` is
+    not: it answers honestly from a store it says it could not refresh,
+    `served.stale: true`.
     """
     @behaviour Macaw.Data.Source
 
@@ -41,6 +43,8 @@ defmodule Macaw.Data.Test.Sources do
       :snapshot_ahead,
       :resolution_lie,
       :resolution_drift,
+      :position_unstated,
+      :position_unasked,
       :window_overrun,
       :budget_overrun,
       :push_undeclared,
@@ -302,8 +306,7 @@ defmodule Macaw.Data.Test.Sources do
             resolution: if(flaw == :resolution_lie, do: 2, else: step),
             capped: flaw == :capped_lie and from != nil,
             stale: flaw == :stale,
-            # A snapshot claiming increments it does not reflect: a holder drops them.
-            position: if(flaw == :snapshot_ahead and request.subscription != nil, do: 1_000),
+            position: position(source, flaw, request.subscription),
             reduced_by: reduced_by
           ] ++ reducer_claim(flaw),
         origin: origin,
@@ -315,6 +318,17 @@ defmodule Macaw.Data.Test.Sources do
       )
       |> stale_fact(flaw)
     end
+
+    # A snapshot for a subscription states the number of the last increment sent to it,
+    # `0` for none, and any other answer none (spec/01 §3, §4.1). Three flaws break it: a
+    # snapshot claiming increments it does not reflect, which a holder drops; one stating
+    # none, which a holder refuses; and a position on every answer, whatever was asked.
+    defp position(_source, :snapshot_ahead, ref) when ref != nil, do: 1_000
+    defp position(_source, :position_unstated, _ref), do: nil
+    defp position(_source, flaw, nil) when flaw != :position_unasked, do: nil
+
+    defp position(%__MODULE__{agent: agent}, _flaw, ref),
+      do: Agent.get(agent, &Map.get(&1.seqs, ref, 0))
 
     # A delivery built by hand around `Delivery.new/2`, its `stale` not a boolean.
     defp stale_fact(delivery, :stale_not_boolean),

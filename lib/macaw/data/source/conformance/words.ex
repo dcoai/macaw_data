@@ -105,6 +105,11 @@ defmodule Macaw.Data.Source.Conformance.Words do
     do:
       "#{probe(probe)}: reduced_with is #{inspect(reducer)}, but the source did not reduce the rows (reduced_by is not :source)"
 
+  def words({:position, probe, position}),
+    do:
+      "#{probe(probe)}: served.position is #{inspect(position)} on an answer not taken for a " <>
+        "subscription, which states none (nil): no subscription's numbering holds it"
+
   def words({:reduced_by, probe, by}),
     do: "#{probe(probe)}: reduced_by is #{inspect(by)}, which is not true of this delivery"
 
@@ -256,6 +261,12 @@ defmodule Macaw.Data.Source.Conformance.Words do
     do:
       "a pushed snapshot states the position #{inspect(got)}, not the number of the last " <>
         "increment it reflects (served.position)"
+
+  def words({:subscribed_position, got}),
+    do:
+      "the snapshot fetched for the subscription states the position #{inspect(got)}, not " <>
+        "the number of the last increment it reflects (served.position, 0 for none): a " <>
+        "holder refetching after a gap holds nothing"
 
   def words({:before_schema, version}),
     do: "a delivery naming #{inspect(version)} arrived before that version's schema"
