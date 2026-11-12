@@ -25,6 +25,7 @@ The next release is **0.17.0**: it adds public API (a request's reducer, a serve
   | `$,.2f` | 161,211 r, 6.37 ms | 122,023 r, 3.26 ms | 13,301 r, 0.35 ms | 4,007 r, 0.060 ms |
 
   The property found `f` and `%` raising `ArgumentError` for a float past 10²⁵⁵ (the BIF writes at most 256 characters); such a float is now written from its exact integer digits.
+- **New: `Macaw.Data.Format.parse_time/2` and `Macaw.Data.Format.time/2`, a strftime pattern read once and every kind of time written by it** (#251, #254, spec/05 §5). The directives are visualize's `Visualize.Format.time/2` table, written byte for byte as it writes them over its cases (an unknown directive and a trailing `%` are text); the ones `Calendar.strftime/3` has are written by it, `%L`, `%U`, `%w`, `%Z`, `%z` and `%p` by this module. A UTC or zoned `DateTime`, a `NaiveDateTime`, a `Date` (midnight, no zone) and integer Unix microseconds (UTC) are all written; any other value is the locale's `NaN`. `Macaw.Data.Format.Locale` gains `periods`, `days`, `short_days`, `months` and `short_months`. 1,000 times by `%Y-%m-%d %H:%M`: 87,677 r, 0.78 ms, against `Calendar.strftime/2`'s 83,677 r, 0.73 ms and visualize's 258,419 r, 2.84 ms.
 
 ## v0.16.0 (2026-11-11)
 

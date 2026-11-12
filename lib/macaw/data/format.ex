@@ -26,7 +26,7 @@ defmodule Macaw.Data.Format do
   """
 
   alias Macaw.Data.{Error, Fault, Options, Unit}
-  alias Macaw.Data.Format.{Locale, Number}
+  alias Macaw.Data.Format.{Locale, Number, Time}
 
   @enforce_keys [:specifier]
   defstruct specifier: nil,
@@ -126,6 +126,59 @@ defmodule Macaw.Data.Format do
   def number(%__MODULE__{} = format, value), do: Number.write(format, value)
 
   @doc """
+  Reads a strftime pattern into a time's format (spec/05 §5): `{:ok, format}`, or
+  `{:error, faults}` for a term that is no string (`{[], {:type, :pattern}}`) or options
+  `parse/2` refuses. Every string is a pattern: a `%` before a character that is no
+  directive is written as it stands.
+
+  ## Options
+
+  - `:locale` - a `Macaw.Data.Format.Locale`, default `Macaw.Data.Format.Locale.english/0`
+
+  ## Examples
+
+      iex> {:ok, format} = Macaw.Data.Format.parse_time("%Y-%m-%d %H:%M")
+      iex> Macaw.Data.Format.time(format, ~U[2026-11-12 08:05:00Z])
+      "2026-11-12 08:05"
+
+  """
+  @spec parse_time(term(), keyword()) :: {:ok, Time.t()} | {:error, [fault(), ...]}
+  def parse_time(pattern, opts \\ []) do
+    {locale, option_faults} = locale(opts)
+
+    case {is_binary(pattern), option_faults} do
+      {true, []} -> {:ok, Time.read(pattern, locale)}
+      {true, faults} -> {:error, faults}
+      {false, faults} -> {:error, [{[], {:type, :pattern}} | faults]}
+    end
+  end
+
+  @doc "As `parse_time/2`, the format alone, raising `Macaw.Data.Error` with the faults in `format_error/1`'s words."
+  @spec parse_time!(term(), keyword()) :: Time.t()
+  def parse_time!(pattern, opts \\ []) do
+    case parse_time(pattern, opts) do
+      {:ok, format} -> format
+      {:error, faults} -> raise Error, reason: faults, what: "not a time format", words: &words/1
+    end
+  end
+
+  @doc """
+  Writes a time by a time's format (spec/05 §5), as visualize's `Visualize.Format.time/2`
+  writes it: a `DateTime` by its own wall clock and zone, a `NaiveDateTime` and a `Date`
+  (at midnight) with no zone, an integer as Unix microseconds in UTC. Any other value,
+  and an integer past a `DateTime`'s range, is the locale's not-a-number.
+
+      iex> format = Macaw.Data.Format.parse_time!("%a %e %b %I:%M %p [%Z]")
+      iex> Macaw.Data.Format.time(format, ~N[2024-03-03 14:05:09])
+      "Sun  3 Mar 02:05 PM []"
+      iex> Macaw.Data.Format.time(format, 1_709_474_709_000_000)
+      "Sun  3 Mar 02:05 PM [UTC]"
+
+  """
+  @spec time(Time.t(), term()) :: String.t()
+  def time(%Time{} = format, value), do: Time.write(format, value)
+
+  @doc """
   The words of a reason this module answers, for a person (spec/00 §5).
 
       iex> Macaw.Data.Format.format_error({:width, 1024})
@@ -146,6 +199,8 @@ defmodule Macaw.Data.Format do
   def words({:type, :currency}), do: "must be {prefix, suffix}, two strings"
   def words({:type, :symbols}), do: "must be a map of ISO 4217 codes to strings"
   def words({:unknown_currency, _code} = reason), do: Unit.format_error(reason)
+  def words({:names, n}), do: "must be a list of #{n} strings"
+  def words({:type, :pattern}), do: "must be a strftime pattern, a string"
   def words(_reason), do: nil
 
   # -- options -------------------------------------------------------------------------

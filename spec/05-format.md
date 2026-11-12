@@ -57,8 +57,11 @@ a tie rounds away from zero on the exact double, as JavaScript does; a negative 
 | `nan` | `"NaN"` | what a value that is no number is written as |
 | `percent` | `"%"` | the percent sign of `%` and `p` |
 | `symbols` | `USD` `$`, `EUR` `€`, `GBP` `£`, `JPY` `¥` | each ISO 4217 code ([03 §4](03-units.md#units-currency)) the locale writes by a symbol; any other is written by its code |
+| `periods` | `AM`, `PM` | a time's period on a twelve-hour clock (§5) |
+| `days`, `short_days` | `Sunday` … `Saturday`, `Sun` … `Sat` | the weekdays from Sunday, as d3's locale lists them (§5) |
+| `months`, `short_months` | `January` … `December`, `Jan` … `Dec` | the months (§5) |
 
-`Macaw.Data.Format.Locale.english/0` is the default. **Its minus is the hyphen-minus,** as visualize writes it, where d3's default is `−` (U+2212): text a reader copies into a field reads back as a number. `Macaw.Data.Format.Locale.new(fields)` builds a locale from a keyword list or a map of these fields, each one absent being English's, and answers `{:ok, locale}` or `{:error, faults}`: a key it does not take is `{[key], :unknown_key}`; a field of the wrong kind `{[key], {:type, kind}}` (`:text` for the strings, `:grouping` for a list of positive integers, `:currency` for a pair of strings, `:symbols` for a map); a symbol under a code not in the ISO table `{[:symbols, code], {:unknown_currency, code}}`; fields that are neither a keyword list nor a map, a list holding anything but pairs among them, `{[], {:type, :keyword}}`. `new!/1` raises them. A locale is the viewer's choice, as the unit system is ([03 §12](03-units.md#quantities-systems)): nothing is derived from it, and it never changes the data.
+`Macaw.Data.Format.Locale.english/0` is the default. **Its minus is the hyphen-minus,** as visualize writes it, where d3's default is `−` (U+2212): text a reader copies into a field reads back as a number. `Macaw.Data.Format.Locale.new(fields)` builds a locale from a keyword list or a map of these fields, each one absent being English's, and answers `{:ok, locale}` or `{:error, faults}`: a key it does not take is `{[key], :unknown_key}`; a field of the wrong kind `{[key], {:type, kind}}` (`:text` for the strings, `:grouping` for a list of positive integers, `:currency` for a pair of strings, `:symbols` for a map); a list of names of the wrong length or holding anything but strings `{[key], {:names, n}}`, `n` the names it holds (2 periods, 7 days, 12 months); a symbol under a code not in the ISO table `{[:symbols, code], {:unknown_currency, code}}`; fields that are neither a keyword list nor a map, a list holding anything but pairs among them, `{[], {:type, :keyword}}`. `new!/1` raises them. A locale is the viewer's choice, as the unit system is ([03 §12](03-units.md#quantities-systems)): nothing is derived from it, and it never changes the data.
 
 ```test:format-locale-definition
 english/0 is the table's English; new/1 takes a keyword list or a map over English, and writes d3's outputs for another locale's decimal, thousands, grouping, currency, minus, nan and percent; a key it does not take, a field of the wrong kind, a symbol under an unknown code and fields that are neither are faults, and new!/1 raises them
@@ -87,4 +90,44 @@ for generated floats and integers, signed zeros, values that round to zero and v
 
 ```test:format-cost-budget
 1,000 values written by ,.2f, d, .0% and $,.2f each cost at most their budget in reductions
+```
+
+## 5. Times {#format-time}
+
+**A time's format is a strftime pattern, read once into data too** (macaw_data#254). `Macaw.Data.Format.parse_time(pattern, opts)` answers `{:ok, %Macaw.Data.Format.Time{}}`, a struct with no function in it holding the pattern, its directives read and the locale, or `{:error, faults}`: a term that is no string is `{[], {:type, :pattern}}`, and the options are `parse/2`'s (§1). `parse_time!/2` raises them. Every string is a pattern: a `%` before a character that is no directive below is written as it stands, the `%` included, and so is a `%` that ends the pattern.
+
+| Directive | Writes |
+|---|---|
+| `%Y` | the year, four digits at least |
+| `%y` | the year's last two digits |
+| `%m` | the month, `01` to `12` |
+| `%d` | the day of the month, `01` to `31` |
+| `%e` | the day of the month, padded with a space, ` 1` to `31` |
+| `%j` | the day of the year, `001` to `366` |
+| `%H` | the hour, `00` to `23` |
+| `%I` | the hour on a twelve-hour clock, `01` to `12` |
+| `%M` | the minute, `00` to `59` |
+| `%S` | the second, `00` to `60` |
+| `%L` | the millisecond, `000` to `999` |
+| `%p` | the locale's period, `AM` or `PM` |
+| `%a`, `%A` | the locale's short and full weekday name |
+| `%b`, `%B` | the locale's short and full month name |
+| `%U` | the week of the year, Sunday its first day, `00` to `53` |
+| `%w` | the weekday as a number, Sunday `0` |
+| `%Z` | the zone's abbreviation, empty for a time with no zone |
+| `%z` | the zone's offset from UTC with daylight time, `+hhmm`, empty for a time with no zone |
+| `%%` | a `%` |
+
+These are visualize's directives, and **`Macaw.Data.Format.time(format, value)` writes them as visualize's `Visualize.Format.time/2` does**, byte for byte over visualize's cases. It writes every kind of time macaw_data holds ([01 §1.1](01-sources.md#sources-table)): a `DateTime` by its own wall clock and zone, a UTC one and one in any other zone alike; a `NaiveDateTime`, which has no zone; a `Date`, its time of day midnight and no zone; and an integer, the microseconds since the Unix epoch a packed time column's instants are (`Table.Chunk.instants/4`), as a UTC `DateTime`. Any other value, and an integer past a `DateTime`'s range, is the locale's not-a-number. The directives `Calendar.strftime/3` has are written by it, given the locale's names, and the rest (`%L`, `%U`, `%w`, `%Z` and `%z`, and `%p`, whose names strftime would upper-case) by this module.
+
+**A pattern costs strftime's call for each of its runs.** The pattern is read once, its runs decided then (a run naming a day or a month under another locale's names is given them; any other is strftime's own), so a pattern of strftime's directives alone is one call: 1,000 UTC `DateTime`s by `%Y-%m-%d %H:%M` cost 87,677 reductions and 0.78 ms, against 83,677 and 0.73 ms for `Calendar.strftime/2` alone and 258,419 and 2.84 ms for visualize's port; by `%H:%M:%S.%L %Z`, two runs and two directives of this module's, 133,703 and 1.34 ms against visualize's 225,272 and 2.57 ms (median of 15, load 6).
+
+**The locale names the periods, the days and the months** ([§3](#format-locale)): `periods` (`AM`, `PM`), `days` and `short_days` (from Sunday, as d3's locale lists them), `months` and `short_months`, English's by default.
+
+```test:format-time-conformance
+every case of visualize's Format.time/2 tests writes byte for byte what visualize writes: the original and the extended directives, %% and one pass, midnight and noon, a date's zero time and no zone, a naive time's no zone, %U from the first Sunday, an unknown directive and a trailing %, an offset off the hour, and a zone's abbreviation across a daylight-saving change
+```
+
+```test:format-time-kinds
+a UTC and a zoned DateTime, a NaiveDateTime, a Date and integer microseconds are written by their own fields, the integer as UTC; any other value and an integer past a DateTime's range are NaN; another locale's names are written; parse_time/2 refuses a term that is no string and options parse/2 refuses, and parse_time!/2 raises them
 ```

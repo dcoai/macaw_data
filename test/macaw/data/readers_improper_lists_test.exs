@@ -328,11 +328,19 @@ defmodule Macaw.Data.ReadersImproperListsTest do
   # (dco-tek/macaw/macaw_layers#37). A decoded document can't hold one.
 
   @tag verifies: "data-errors-readers"
-  test "Format.parse/2 and Format.Locale.new/1: their options, fields and grouping" do
+  test "Format.parse/2, parse_time/2 and Format.Locale.new/1: their options, fields and names" do
     locale = Format.Locale.english()
 
     assert raised(improper(locale: locale), fn opts ->
              answers(fn -> Format.parse(",.2f", opts) end, fn -> Format.parse!(",.2f", opts) end)
+
+             answers(fn -> Format.parse_time("%Y", opts) end, fn ->
+               Format.parse_time!("%Y", opts)
+             end)
+           end) == []
+
+    assert raised(improper(periods: ["a", "p"], months: locale.months), fn fields ->
+             answers(fn -> Format.Locale.new(fields) end, fn -> Format.Locale.new!(fields) end)
            end) == []
 
     assert raised(improper(grouping: [3, 2], currency: ["$", ""], decimal: "."), fn fields ->

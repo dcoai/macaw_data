@@ -419,13 +419,19 @@ defmodule Macaw.Data.ReadersNeverRaiseTest do
   defp specifier do
     one_of([
       leaf(),
-      map(list_of(member_of(@specifier_characters), max_length: 8), &Enum.join/1)
+      map(list_of(member_of(@specifier_characters), max_length: 8), &Enum.join/1),
+      map(
+        list_of(member_of(~w(%Y %m %d %e %L %p %U %w %Z %z %Q % %% x é)), max_length: 6),
+        &Enum.join/1
+      )
     ])
   end
 
   @tag verifies: "data-errors-readers"
-  property "Format.parse/2 and Format.Locale.new/1 answer any specifier and fields as a value or faults" do
-    keys = [:decimal, :thousands, :grouping, :currency, :minus, :nan, :percent, :symbols, :locale]
+  property "Format.parse/2, parse_time/2 and Format.Locale.new/1 answer any text and fields as a value or faults" do
+    keys =
+      [:decimal, :thousands, :grouping, :currency, :minus, :nan, :percent, :symbols, :locale] ++
+        [:periods, :days, :short_days, :months, :short_months]
 
     check all(
             text <- specifier(),
@@ -441,6 +447,15 @@ defmodule Macaw.Data.ReadersNeverRaiseTest do
       end
 
       answers(fn -> Format.Locale.new(fields) end, fn -> Format.Locale.new!(fields) end)
+
+      with {:ok, time} <-
+             answers(fn -> Format.parse_time(text, opts) end, fn ->
+               Format.parse_time!(text, opts)
+             end) do
+        # What parse_time/2 accepts writes any value without raising.
+        for value <- [~U[2026-01-01 00:00:00Z], ~D[2026-01-01], -1, 10 ** 30, nil],
+            do: assert(is_binary(Format.time(time, value)))
+      end
 
       with {:ok, locale} <-
              answers(fn -> Format.Locale.new(symbols: symbols) end, fn ->
@@ -466,7 +481,7 @@ defmodule Macaw.Data.ReadersNeverRaiseTest do
   @tag verifies: "data-errors-readers"
   test "every reader spec/00 §5 names exports its ! twin at its arity" do
     readers = named_readers()
-    assert length(readers) == 26
+    assert length(readers) == 27
 
     for {module, name, arity} <- readers do
       assert Code.ensure_loaded?(module), inspect(module)

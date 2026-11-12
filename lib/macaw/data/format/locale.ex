@@ -12,6 +12,9 @@ defmodule Macaw.Data.Format.Locale do
   | `nan` | `"NaN"` | a value that is no number |
   | `percent` | `"%"` | the percent sign of the `%` and `p` types |
   | `symbols` | `USD` `$`, `EUR` `€`, `GBP` `£`, `JPY` `¥` | the ISO 4217 codes written by a symbol |
+  | `periods` | `AM`, `PM` | a time's period on a twelve-hour clock |
+  | `days`, `short_days` | `Sunday` … `Saturday`, `Sun` … `Sat` | the weekdays, from Sunday |
+  | `months`, `short_months` | `January` … `December`, `Jan` … `Dec` | the months |
 
   A locale is the viewer's choice, as the unit system is: nothing is derived from it.
 
@@ -32,7 +35,13 @@ defmodule Macaw.Data.Format.Locale do
             minus: "-",
             nan: "NaN",
             percent: "%",
-            symbols: @english
+            symbols: @english,
+            periods: ~w(AM PM),
+            days: ~w(Sunday Monday Tuesday Wednesday Thursday Friday Saturday),
+            short_days: ~w(Sun Mon Tue Wed Thu Fri Sat),
+            months:
+              ~w(January February March April May June July August September October November December),
+            short_months: ~w(Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec)
 
   @type t :: %__MODULE__{
           decimal: String.t(),
@@ -42,11 +51,18 @@ defmodule Macaw.Data.Format.Locale do
           minus: String.t(),
           nan: String.t(),
           percent: String.t(),
-          symbols: %{String.t() => String.t()}
+          symbols: %{String.t() => String.t()},
+          periods: [String.t()],
+          days: [String.t()],
+          short_days: [String.t()],
+          months: [String.t()],
+          short_months: [String.t()]
         }
 
   @texts [:decimal, :thousands, :minus, :nan, :percent]
-  @keys [:decimal, :thousands, :grouping, :currency, :minus, :nan, :percent, :symbols]
+  @names %{periods: 2, days: 7, short_days: 7, months: 12, short_months: 12}
+  @keys [:decimal, :thousands, :grouping, :currency, :minus, :nan, :percent, :symbols] ++
+          [:periods, :days, :short_days, :months, :short_months]
 
   @doc """
   English, the default: `.` and `,`, groups of three, `$`, the hyphen-minus.
@@ -64,6 +80,7 @@ defmodule Macaw.Data.Format.Locale do
 
   A key it does not take is `{[key], :unknown_key}`; a field of the wrong kind
   `{[key], {:type, kind}}`, `kind` being `:text`, `:grouping`, `:currency` or `:symbols`; a
+  list of names of the wrong length or holding anything but strings `{[key], {:names, n}}`; a
   symbol under a code not in the ISO table `{[:symbols, code], {:unknown_currency, code}}`;
   fields that are neither a keyword list nor a map `{[], {:type, :keyword}}`.
 
@@ -126,6 +143,15 @@ defmodule Macaw.Data.Format.Locale do
   end
 
   defp field_faults({:symbols, _value}), do: [{[:symbols], {:type, :symbols}}]
+
+  defp field_faults({key, value}) when is_map_key(@names, key) do
+    n = Map.fetch!(@names, key)
+
+    if Macaw.Data.Lists.proper?(value) and length(value) == n and Enum.all?(value, &is_binary/1),
+      do: [],
+      else: [{[key], {:names, n}}]
+  end
+
   defp field_faults({key, _value}), do: [{[key], :unknown_key}]
 
   defp symbol_fault(code, symbol) when is_binary(code) and is_binary(symbol) do
