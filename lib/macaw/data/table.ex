@@ -828,16 +828,17 @@ defmodule Macaw.Data.Table do
       else: with_chunks(table, Enum.map(whole(table), &Chunk.compact/1), table.next)
   end
 
+  # Rebuilt from its own values, the same rows in the same order: `new/2` marks only an
+  # origin's window field, so the column the table is known to be sorted by is carried
+  # over (macaw_data#260).
   def compact(%__MODULE__{origin: origin} = table) do
     if canonical?(table.chunks, origin) do
       table
     else
-      opts = []
-
       {:ok, compacted} =
-        new(for({name, type} <- header(table), do: {name, type, column(table, name)}), opts)
+        new(for({name, type} <- header(table), do: {name, type, column(table, name)}))
 
-      compacted
+      %__MODULE__{compacted | sorted: table.sorted}
     end
   end
 
