@@ -2,10 +2,11 @@
 
 ## Unreleased
 
-The next release is **0.17.0**: it adds public API (a request's reducer, a served fact, finishing through a cache, `Macaw.Data.Table.Chunk.pick/5`) and changes behavior (a source's table by row count now refuses rows out of its window field's order).
+The next release is **0.17.0**: it adds public API (a request's reducer, a served fact, finishing through a cache, `Macaw.Data.Table.Chunk.pick/5`, the shipped sources) and changes behavior (a source's table by row count now refuses rows out of its window field's order).
 
 ### Changes
 
+- **New: `Macaw.Data.Source.Signal`, generated sources whose rows are a pure function of the tick** (#250, #263, spec/01 §10.1; from visualize's `Visualize.Signals` and `Visualize.Feed.Signals`). `Macaw.Data.Source.Signal.new/3` answers `{:ok, signal}` or every fault at once (`new!/3` raises them) for a kind (`:sine`, `:square`, `:random`, `:discrete`), its fields (the tick first) and the wave's `window:`, `period:`, `min:`, `max:` and `seed:`; `Macaw.Data.Source.Signal.rows/2` and `rows/3` are visualize's rows for the same tick, bit for bit. As a pull source it honors `:window` over ticks up to the present tick, fixed (`tick:`, `Macaw.Data.Source.Signal.at/2`) or read from the request's `now` (`every:`, `origin:`), capped past `limit:`, its rows a chunked table of the signal's origin. It passes the conformance kit, and `new/3` joins spec/00 §5's readers.
 - **New: finishing reduces a table chunk by chunk through the caller's cache** (#247, #259, spec/01 §2.4, spec/04 §1.5; from visualize's frame-time work). `Macaw.Data.Source.Finish.reduce/5` given a `Macaw.Data.Operations.Cache` in the reducer name's place, and the new `Macaw.Data.Source.Finish.finish/5` given one after its options, answer `{:ok, delivery, cache}`: a table's series are reduced by `m4` or `lttb` from per-chunk ladder partials the cache holds by chunk id and version, folded into a coarser level when the extent or count calls for one, so a warm call costs the chunks that changed and the merge. **The answer is the whole reduction's**, rows, chunk names and served facts, held by a property over generated tables, series, gaps, chunkings and cut views. Any other delivery, reducer or window field reduces whole, the cache as it was. On visualize#998's loop (50,000 readings, one 1,000-row frame, the newest 50,000 seconds to 1,000):
 
   | Reducer, path | Whole | Warm, through the cache |

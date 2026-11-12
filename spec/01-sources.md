@@ -1345,3 +1345,26 @@ use writes one test per check into each describe block, refuses a missing source
 ```test:conformance-load
 idle and with every scheduler saturated the verdicts agree: a correct source passes, a budget of one reduction fails describe while a generous one passes, an endless fetch is stopped at its budget, a blocked one is hung at the bound, and work in another process counts only when that process is named
 ```
+
+## 10. Sources macaw_data ships {#sources-shipped}
+
+The sources every host reaches for first, built on the contract alone, each passing the kit (§9). They are ported from visualize's feeds, so visualize adopts them in place of its own (visualize's overlap review, macaw_data#248 to #250). Each constructor answers `{:ok, source}` or every fault at once, with a `!` twin ([00 §5](00-overview.md#data-errors)).
+
+### 10.1 Generated signals {#sources-signal}
+
+**`Macaw.Data.Source.Signal`: rows that are a pure function of the tick** (macaw_data#250), so a design under construction moves and replays without a host supplying any data.
+- **A signal** is a kind, `:sine`, `:square`, `:random` or `:discrete`, its fields, the first the tick and the rest values, and a wave's shape: `window` (rows in a tick's own window, 24), `period` (12), `min` and `max` (0 and 100) and `seed` (0). `rows(signal, tick)` is one row a tick from `tick − window + 1` to `tick`, none below zero; `rows(signal, from, to)` one row a tick over a span. Each value column follows its kind, shifted from the last so no two columns are one line: a sine between `min` and `max` from the midpoint; a square at `max` the first half of each period; a random value drawn from a stream of its own per seed, column and tick, so a tick's value never depends on the window it is seen through; a discrete count from `min` that wraps past `max`. The rows are visualize's for the same tick, bit for bit.
+- **As a source** it is pulled, never pushed, and honors `:window`. Its present tick is fixed (`tick:`), or read from the request's `now`, `every:` milliseconds a tick from `origin:` (the Unix epoch by default): one request with one `now` has one answer (§2.3). Its schema describes the tick as the `:number` window field labeled `"Tick"`, every other field `:number`, under `describe:`'s descriptions merged field by field. A window is ticks, served up to the present tick, at most `limit:` rows (10,000) and `capped` beyond; a window that is not ticks is `{:error, {:window, window}}`. Its rows are a chunked table of the signal's origin, a tick its resolution, so a tick's row sits in one chunk on every fetch.
+- **Its faults** are `{[:kind], {:enum, kinds}}`, `{[:fields], {:type, :fields}}` for anything but distinct atom or string names, at least one, `{[key], {:type, type}}` for an option of the wrong type, `{[key], :unknown_key}` for one it does not take, and the schema's faults under `[:describe]`.
+
+```test:signal-rows
+the rows are visualize's for the same tick, bit for bit, for every kind; a sine starts at the midpoint, a square alternates each half period, a random replays under its seed and a tick's value never depends on the window, a discrete counts and wraps
+```
+
+```test:signal-source
+the present is the fixed tick or the request's now counted from the origin, a window is ticks served up to it and capped past the limit, a window that is not ticks is the source's error; the kit passes for a fixed and a clocked signal; one request, one now, one answer, a tick's row the same through every window (property)
+```
+
+```test:signal-faults
+a bad kind, fields or option is each its fault, every one at once, an unknown option and a description the schema refuses too; new!/3 raises them in words
+```

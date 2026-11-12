@@ -478,6 +478,27 @@ defmodule Macaw.Data.ReadersNeverRaiseTest do
     end
   end
 
+  @tag verifies: "data-errors-readers"
+  property "Source.Signal.new/3 answers any kind, fields and options as a value or faults" do
+    alias Macaw.Data.Source.Signal
+
+    keys = [:window, :period, :min, :max, :seed, :describe, :tick, :every, :origin, :limit]
+
+    check all(
+            kind <- one_of([member_of(Signal.kinds()), leaf()]),
+            fields <-
+              one_of([list_of(one_of([atom(:alphanumeric), leaf()]), max_length: 4), leaf()]),
+            opts <- options(keys)
+          ) do
+      with {:ok, signal} <-
+             answers(fn -> Signal.new(kind, fields, opts) end, fn ->
+               Signal.new!(kind, fields, opts)
+             end) do
+        assert is_list(Signal.rows(signal, 3))
+      end
+    end
+  end
+
   # The readers spec/00 §5 names, from the sentence itself, so neither can move alone
   # (#185): one that answers values has a twin at its arity, raising exactly its faults.
   defp named_readers do
@@ -493,7 +514,7 @@ defmodule Macaw.Data.ReadersNeverRaiseTest do
   @tag verifies: "data-errors-readers"
   test "every reader spec/00 §5 names exports its ! twin at its arity" do
     readers = named_readers()
-    assert length(readers) == 28
+    assert length(readers) == 29
 
     for {module, name, arity} <- readers do
       assert Code.ensure_loaded?(module), inspect(module)
