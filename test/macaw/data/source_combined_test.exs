@@ -892,4 +892,147 @@ defmodule Macaw.Data.SourceCombinedTest do
                )
     end
   end
+
+  # Rows a `step` apart from `first` to 100 over the number window field `t`, honoring
+  # windows, stating `resolution:` (the step by default).
+  defmodule Grid do
+    @moduledoc false
+    @behaviour Macaw.Data.Source
+    alias Macaw.Data.{Delivery, Schema, Window}
+    alias Macaw.Data.Source.{Description, Request}
+
+    defstruct [:first, :step, :resolution, schema: nil]
+
+    @schema Schema.new!(%{t: %{type: :number, window: true}, v: %{type: :number}})
+
+    def new(first, step, opts \\ []),
+      do: struct!(__MODULE__, [first: first, step: step, resolution: step] ++ opts)
+
+    @impl true
+    def describe(%__MODULE__{} = g, _context),
+      do: {:ok, %Description{schema: g.schema || @schema, supports: [:window]}}
+
+    @impl true
+    def fetch(%__MODULE__{first: first, step: step} = g, %Request{window: window}) do
+      [from, to] = if is_list(window), do: window, else: [nil, nil]
+
+      if Enum.all?([from, to], &(&1 == nil or is_number(&1))) do
+        rows = for t <- first..100//step, Window.within?(t, [from, to]), do: %{t: t, v: t}
+
+        Delivery.new(rows,
+          served: [
+            window: [Window.latest(from, first), Window.earliest(to, 100)],
+            resolution: g.resolution
+          ],
+          schema: Schema.version(g.schema || @schema)
+        )
+      else
+        {:error, {:window, window}}
+      end
+    end
+  end
+
+  describe "the union's resolution" do
+    @tag verifies: "combined-resolution"
+    test "a later part keeping rows finer than the first's resolution, or at none, is the fault" do
+      live = Grid.new(60, 10)
+      fault = {:combined_resolution, 1, 1, 10}
+      assert fetch(Combined.new!([live, Grid.new(0, 1)]), [0, 100]) == {:error, fault}
+
+      assert Combined.format_error(fault) =~
+               "part 1 serves rows at 1, finer than the first part's resolution 10"
+
+      # Its position among the parts, behind one that combines.
+      parts = [live, Grid.new(30, 10), Grid.new(0, 5)]
+      assert fetch(Combined.new!(parts), [0, 100]) == {:error, {:combined_resolution, 2, 5, 10}}
+
+      # A part stating no resolution, or a name with no span over a number field, has no
+      # spacing to compare.
+      for theirs <- [nil, :minute] do
+        history = Grid.new(0, 10, resolution: theirs)
+
+        assert fetch(Combined.new!([live, history]), [0, 100]) ==
+                 {:error, {:combined_resolution, 1, theirs, 10}}
+      end
+    end
+
+    @tag verifies: "combined-resolution"
+    test "a coarser or equal later part combines, the first's resolution the union's" do
+      for history <- [Grid.new(0, 20), Grid.new(0, 10), Grid.new(0, 10, resolution: 10.0)] do
+        assert {:ok, d} = fetch(Combined.new!([Grid.new(60, 10), history]), [0, 100])
+        assert d.served.resolution == 10
+
+        assert column(d, :t) ==
+                 Enum.to_list(Enum.filter(history.first..50//history.step, &(&1 < 60))) ++
+                   Enum.to_list(60..100//10)
+      end
+
+      # A part that kept no rows says nothing of the union's spacing.
+      assert {:ok, d} = fetch(Combined.new!([Grid.new(60, 10), Grid.new(0, 1)]), [60, 100])
+      assert d.served.resolution == 10
+      assert {:ok, _} = fetch(Combined.new!([Grid.new(60, 10), Grid.new(200, 1)]), [0, 100])
+
+      # A first part stating no resolution claims none, so any later part combines.
+      assert {:ok, %{served: %{resolution: nil}}} =
+               fetch(Combined.new!([Grid.new(60, 10, resolution: nil), Grid.new(0, 1)]), [0, 100])
+    end
+
+    @tag verifies: "combined-resolution"
+    test "a named resolution over a time field, and a later part in other units, compare by spacing" do
+      t0 = ~U[2026-11-01 00:00:00Z]
+      time = Schema.new!(%{t: %{type: :time, window: true}, v: %{type: :number}})
+
+      part = fn first, step, resolution ->
+        answer = fn %Request{window: [from, to]} ->
+          rows =
+            for s <- first..3600//step,
+                at = DateTime.add(t0, s),
+                Window.within?(at, [from, to]),
+                do: %{t: at, v: s}
+
+          {rows,
+           [window: [Window.latest(from, DateTime.add(t0, first)), to], resolution: resolution]}
+        end
+
+        Scripted.new(schema: time, supports: [:window], rows: answer)
+      end
+
+      window = [t0, DateTime.add(t0, 3600)]
+      live = part.(1800, 60, :minute)
+
+      assert {:ok, %{served: %{resolution: :minute}}} =
+               fetch(Combined.new!([live, part.(0, 600, 600)]), window)
+
+      assert {:ok, _} = fetch(Combined.new!([live, part.(0, 3600, :hour)]), window)
+
+      assert fetch(Combined.new!([live, part.(0, 1, :second)]), window) ==
+               {:error, {:combined_resolution, 1, :second, :minute}}
+
+      assert fetch(Combined.new!([live, part.(0, 30, 30)]), window) ==
+               {:error, {:combined_resolution, 1, 30, :minute}}
+
+      # A history in s behind live data in ms: its resolution read in ms.
+      ms = Schema.new!(%{t: %{type: :number, window: true, unit: "ms"}, v: %{type: :number}})
+      s = Schema.new!(%{t: %{type: :number, window: true, unit: "s"}, v: %{type: :number}})
+      live = Grid.new(60_000, 10_000, schema: ms, resolution: 10_000)
+
+      assert {:ok, %{served: %{resolution: 10_000}}} =
+               fetch(Combined.new!([live, Grid.new(0, 10, schema: s)]), [0, 100_000])
+
+      assert fetch(Combined.new!([live, Grid.new(0, 5, schema: s)]), [0, 100_000]) ==
+               {:error, {:combined_resolution, 1, 5000.0, 10_000}}
+    end
+
+    @tag verifies: "combined-resolution"
+    test "the kit finds a finer history the combination's fault, and passes a coarser one" do
+      requests = [[], [window: [0, 100]], [window: [20, 70]]]
+      finer = Combined.new!([Grid.new(60, 10), Grid.new(0, 1)])
+      findings = Conformance.check(finer, requests: requests, budgets: [nil])
+      assert findings != []
+      assert Enum.all?(findings, &(inspect(&1) =~ "combined_resolution"))
+
+      coarser = Combined.new!([Grid.new(50, 1), Grid.new(0, 10)])
+      assert Conformance.check(coarser, requests: requests, budgets: [nil, 5]) == []
+    end
+  end
 end

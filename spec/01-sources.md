@@ -1444,6 +1444,7 @@ a bad kind, fields or option is each its fault, every one at once, an unknown op
   - **`capped`, when the oldest part asked stops short of the window's `from`, or says it is capped:** no later part stands behind it. A fresher part's cut is handed on to the next, which serves it.
   - **`complete_until`, the least claim of every part asked,** a later part's read in the first's units, and none when any part claims none: below it no part expects a change. A snapshot taken for a subscription, its `position` stated, claims the first part's: one subscription's claim never moves back (§4.4), and its increments are the first part's.
   - **`position` and `resolution`, the first part's,** its subscription's (§4.1, §4.3).
+  - **No later part's rows are finer than that resolution** (macaw_data#278). A resolution is one fact of an answer, and a subscription keeps one (§4.3), so the union states the first part's and its rows must not lie closer together than it says (§3, the kit's `:deliveries`). Where the first part's resolution has a spacing (a positive number in the window field's units, seconds over a `:time` field, or `:second`, `:minute`, `:hour`, `:day` or `:week` over a `:time` field, as the kit reads it), every later part that kept rows states a resolution at least as wide, a number read in the first's units; one finer, or one with no spacing to compare (none, or a name the field has no span for), is `{:error, {:combined_resolution, position, theirs, first}}`. A coarser history, a rollup behind raw live data, combines. A part that kept no rows says nothing of the union's spacing, and a first part stating no resolution claims none, so any later part combines behind it. Resolution is known only per answer, never described, so the fetch is the earliest it can fail; stating the finest instead would tell a pull and a subscribed reader of one relation two spacings, and coarsening a finer part's rows would need an aggregation per field no part asked for.
   - **`window`, routed** as above.
   - **None of `reduced_by`, `reduced_with` and `ordered`:** no part is asked a budget, a reducer or an order, so what a part says of them is no fact of the union, and finishing states them of the union. **No `origin`:** a part's names that part and the request it was asked.
   - The schema's version is the first part's, and `names` and `types` the concatenated rows' own. A part's fact that no delivery takes, a `stale` that is no boolean, say, is not dropped: it is `{:error, {:combined_delivery, faults}}`.
@@ -1472,6 +1473,10 @@ a stale part, the freshest or the history, rows or none, makes the combination s
 
 ```test:combined-description
 a combination takes the first part's parameters, and fetch/3 asks every part a value given; a later part lacking one, or taking less of it, is the combined_params fault from describe and fetch; it is viewer independent only when every part is, and its lateness, idle_after and chunk_span are the first part's; a combination of parameterized, viewer-independent parts passes the kit with a request naming a parameter
+```
+
+```test:combined-resolution
+a later part keeping rows finer than the first part's resolution, by a number, a name over a time field or after converting its units, or stating no resolution behind one that does, is the combined_resolution fault, worded; a coarser or equal part combines and the first's resolution is the union's; a part keeping no rows and a first part stating none impose nothing; the kit finds the fault for a finer history and passes a coarser one
 ```
 
 ```test:combined-faults

@@ -46,6 +46,11 @@ defmodule Macaw.Data.Source.Combined do
   are none: no part is asked a budget, a reducer or an order, finishing states them of the
   union, and a part's origin names that part.
 
+  **No later part's rows are finer than the first part's resolution**, the union's: where
+  it has a spacing (a number, or a name such as `:minute` over a `:time` field), a later
+  part keeping rows at a finer resolution, read in the first's units, or at none, is
+  `{:error, {:combined_resolution, position, theirs, first}}`. A coarser history combines.
+
   **Parts that deliver tables are concatenated at the seam as tables**: each kept run of a
   part's table is a slice of it, and the combination's rows are one `Macaw.Data.Table` of
   their chunks, copied nowhere, when every part kept a table of the same columns. A part
@@ -335,7 +340,7 @@ defmodule Macaw.Data.Source.Combined do
          {:ok, delivery} <- read(delivery, reading, spelling, length(kept)),
          {:ok, rows} <- seam(delivery, time, from, upper, length(kept)) do
       served = served_from(delivery, rows, time)
-      kept = [%{kept: rows, delivery: delivery, from: served} | kept]
+      kept = [%{kept: rows, delivery: delivery, from: served, position: length(kept)} | kept]
       spelling = spelling || spelling(delivery)
       # The subscription is the first part's alone: a later part's fetch is no snapshot
       # for it.
@@ -381,8 +386,9 @@ defmodule Macaw.Data.Source.Combined do
     with {:ok, rows} <- part_rows(delivery, i),
          {:ok, rows} <- convert_rows(rows, reading, spelling || %{}, i),
          {:ok, window} <- served_window(delivery.served.window, reading.window, i),
-         {:ok, claim} <- served_claim(delivery.served.complete_until, reading.window, i) do
-      served = %{delivery.served | window: window, complete_until: claim}
+         {:ok, claim} <- served_claim(delivery.served.complete_until, reading.window, i),
+         {:ok, resolution} <- served_resolution(delivery.served.resolution, reading.window, i) do
+      served = %{delivery.served | window: window, complete_until: claim, resolution: resolution}
       {:ok, %{delivery | rows: rows, names: nil, served: served}}
     end
   end
@@ -398,6 +404,17 @@ defmodule Macaw.Data.Source.Combined do
   end
 
   defp served_claim(claim, nil, _i), do: {:ok, claim}
+
+  # A later part's resolution (spec/01 §3), a spacing in its window field's units when a
+  # number, in the first's; a name (`:minute`) is the same in either.
+  defp served_resolution(r, {_to_theirs, to_ours}, i) when is_number(r) do
+    case value(r, to_ours) do
+      {:ok, r} -> {:ok, r}
+      {:error, reason} -> {:error, {:combined_part, i, [{[:served, :resolution], reason}]}}
+    end
+  end
+
+  defp served_resolution(r, _window, _i), do: {:ok, r}
 
   defp served_window(window, {_to_theirs, to_ours}, i), do: bounds(window, to_ours, i)
   defp served_window(window, nil, _i), do: {:ok, window}
@@ -526,7 +543,51 @@ defmodule Macaw.Data.Source.Combined do
   defp covered?(served, from),
     do: Window.comparable?(served, from) and Window.compare(served, from) != :gt
 
-  defp combined([oldest | _] = kept, from, schema) do
+  defp combined(kept, from, schema) do
+    with :ok <- spaced(kept, schema), do: union(kept, from, schema)
+  end
+
+  # The union's resolution is the first part's, its subscription's (spec/01 §4.3), so no
+  # later part's rows may lie closer together than it says (§3, the kit's `:deliveries`):
+  # where the first's resolution has a spacing, each later part that kept rows states one
+  # at least as wide, read in the first's units, else `{:error, {:combined_resolution,
+  # position, theirs, first}}`. A part that kept no rows says nothing of the union's
+  # spacing, and a first part stating none claims none.
+  defp spaced(kept, schema) do
+    %{delivery: %{served: %{resolution: first}}} = List.last(kept)
+    {:ok, type} = Schema.fetch(schema, Schema.window_field(schema), :type)
+
+    case spacing(first, type) do
+      nil ->
+        :ok
+
+      step ->
+        kept
+        |> Enum.reverse()
+        |> Enum.drop(1)
+        |> Enum.find_value(:ok, fn %{kept: rows, position: position, delivery: delivery} ->
+          theirs = delivery.served.resolution
+          spacing = spacing(theirs, type)
+
+          if not empty?(rows) and (spacing == nil or spacing < step * (1 - 1.0e-9)),
+            do: {:error, {:combined_resolution, position, theirs, first}}
+        end)
+    end
+  end
+
+  @spans %{second: 1, minute: 60, hour: 3600, day: 86_400, week: 604_800}
+
+  # A resolution's spacing in the window field's units, as the conformance kit reads it:
+  # a positive number itself (seconds over a `:time` field), a name over a `:time` field
+  # its seconds; `nil` for none, a name over a `:number` field, or anything else.
+  defp spacing(r, _type) when is_number(r) and r > 0, do: r
+  defp spacing(r, :time) when is_atom(r), do: Map.get(@spans, r)
+  defp spacing(_r, _type), do: nil
+
+  defp empty?({:rows, rows}), do: rows == []
+  defp empty?({:table, table}), do: Table.size(table) == 0
+
+  defp union([oldest | _] = kept, from, schema) do
     freshest = List.last(kept)
 
     answers = Enum.map(kept, & &1.delivery.served)
@@ -656,6 +717,11 @@ defmodule Macaw.Data.Source.Combined do
         {position, name, :missing} -> "part #{position} lacks #{inspect(name)}"
         {position, name, {:narrower, _, _}} -> "part #{position} takes less of #{inspect(name)}"
       end)
+  end
+
+  def words({:combined_resolution, position, theirs, first}) do
+    "part #{position} serves rows at #{inspect(theirs)}, finer than the first part's " <>
+      "resolution #{inspect(first)} or not comparable with it"
   end
 
   def words({:combined_part, i, faults}),
