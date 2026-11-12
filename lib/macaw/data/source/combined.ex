@@ -22,11 +22,14 @@ defmodule Macaw.Data.Source.Combined do
   and fields only the later schema describes dropped. The first part's rows are never
   touched.
 
-  A combination honors `:window`, and pushes when its first part does: its subscription is
-  the first's, its pushes pass through unchanged. Its request goes to every part with only
-  the window routed, a region and `latest` left to finishing over the union, and its
-  `subscription` to the first alone. Its delivery carries the first part's `position`,
-  `complete_until` and `resolution`.
+  A combination honors `:window`, pushes when its first part does (its subscription is the
+  first's, its pushes pass through unchanged), and honors `:as_of` when every part does.
+  Its request goes to every part with only the window routed, and its `subscription` to
+  the first alone. What finishing does over the union no part is asked: a region,
+  `latest`, an order, a budget and its reducer (macaw_data#273), since a part's own cut
+  is no cut of the union. `as_of`, `params`, `viewer` and `now` reach every part as they
+  are. Its delivery carries the first part's `position`, `complete_until` and
+  `resolution`.
 
   **Parts that deliver tables are concatenated at the seam as tables**: each kept run of a
   part's table is a slice of it, and the combination's rows are one `Macaw.Data.Table` of
@@ -128,7 +131,9 @@ defmodule Macaw.Data.Source.Combined do
          :ok <- has_window(schema) do
       time = Schema.window_field(schema)
       readings = Enum.map(described, &reading(&1, schema.version, schema, time))
-      supports = [:window | Enum.filter(supports, &(&1 == :push))]
+      # `:as_of` when every part answers as of the instant asked, so the union does too.
+      as_of = if Enum.all?(described, &(:as_of in &1.supports)), do: [:as_of], else: []
+      supports = [:window | Enum.filter(supports, &(&1 == :push))] ++ as_of
       {:ok, %Description{schema: schema, supports: supports}, described, readings}
     end
   end
@@ -220,10 +225,13 @@ defmodule Macaw.Data.Source.Combined do
   def fetch(%__MODULE__{parts: parts}, %Request{} = request) do
     with {:ok, %Description{schema: schema}, described, readings} <- resolve(parts) do
       time = Schema.window_field(schema)
-      # Only the window is routed; a region and `latest` are finished over the union, so a
-      # part is asked neither.
+      # Only the window is routed. What finishing does over the union no part is asked: a
+      # region, `latest`, an order, a budget and its reducer. A part's own cut is no cut of
+      # the union (macaw_data#273): it would reduce its slice alone, to the whole budget,
+      # and the combination could not say so. `as_of`, `params`, `viewer` and `now` say
+      # which relation is read, and reach every part as they are.
       [from, to] = request.window || [nil, nil]
-      asked = %{request | region: nil, latest: false}
+      asked = %{request | region: nil, latest: false, order: [], budget: nil, reduce: nil}
 
       route(
         Enum.zip([parts, described, readings]),

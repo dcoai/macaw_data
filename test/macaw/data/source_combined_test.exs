@@ -235,12 +235,13 @@ defmodule Macaw.Data.SourceCombinedTest do
       live = Broken.new()
       combined = Combined.new!([live, Broken.new()])
 
-      # No budget: a part honoring one reduces rows the combination does not record
-      # (macaw_data#273).
+      assert {:ok, %Description{supports: [:window, :push, :as_of]}} = describe(combined)
+
+      # Its parts honor a budget, asked of none of them (macaw_data#273).
       assert [] ==
                Conformance.check(combined,
                  requests: [[], [window: [2, 10]], [window: [nil, 6]]],
-                 budgets: [nil],
+                 budgets: [nil, 5],
                  push: fn _combined -> Broken.emit(live) end,
                  quiet: 30
                )
@@ -255,6 +256,85 @@ defmodule Macaw.Data.SourceCombinedTest do
 
       assert {:ok, %Delivery{served: %{position: nil}}} =
                Source.fetch(combined, description, %{request | subscription: nil})
+    end
+
+    @tag verifies: "combined-request"
+    test "every part is asked the window alone, as_of as it is, and finishing works over the union" do
+      asking = fn name, range ->
+        Scripted.new(
+          schema: @schema,
+          supports: [:window, :order, :budget, :as_of],
+          rows: fn %Request{} = request ->
+            send(self(), {:asked, name, request})
+            [from, to] = request.window
+            held = Window.trim(rows(range, name), :t, [from, to])
+            {held, [window: [Window.latest(from, range.first), to]]}
+          end
+        )
+      end
+
+      combined = Combined.new!([asking.(:live, 50..100), asking.(:history, 0..100)])
+      assert {:ok, %Description{supports: [:window, :as_of]} = description} = describe(combined)
+      as_of = DateTime.add(@now, -3600)
+
+      request =
+        Request.new!(
+          now: @now,
+          window: [0, 100],
+          budget: 10,
+          order: [{:v, :desc}],
+          reduce: {"lttb", 5},
+          region: %{v: [0, 100]},
+          as_of: as_of,
+          params: %{},
+          viewer: :ann
+        )
+
+      assert {:ok, delivery} = Source.fetch(combined, description, request)
+      assert length(Delivery.rows!(delivery)) == 101
+      assert delivery.served.reduced_by == nil
+
+      for name <- [:live, :history] do
+        assert_received {:asked, ^name, asked}
+
+        assert %Request{
+                 budget: nil,
+                 order: [],
+                 reduce: nil,
+                 region: nil,
+                 latest: false,
+                 as_of: ^as_of,
+                 viewer: :ann,
+                 now: @now
+               } = asked
+      end
+
+      # Finishing orders the union and keeps its head: the hundred's first ten.
+      finish = %{request | region: nil, reduce: nil}
+      assert {:ok, delivery} = Source.fetch(combined, description, finish)
+      assert {:ok, finished} = Source.Finish.finish(delivery, description, finish)
+      assert column(finished, :t) == Enum.to_list(100..91//-1)
+      assert finished.served.ordered == :runtime
+      assert finished.served.reduced_by == :runtime
+
+      # A budget alone reduces the union once, never past the budget.
+      budget = Request.new!(now: @now, window: [0, 100], budget: 10)
+      assert {:ok, delivery} = Source.fetch(combined, description, budget)
+      assert {:ok, reduced} = Source.Finish.finish(delivery, description, budget)
+      assert length(Delivery.rows!(reduced)) == 10
+      assert reduced.served.reduced_by == :runtime
+    end
+
+    @tag verifies: "combined-request"
+    test "a combination names :as_of only when every part does" do
+      as_of = Scripted.new(schema: @schema, supports: [:window, :as_of])
+      now = Scripted.new(schema: @schema, supports: [:window, :budget])
+
+      assert {:ok, %Description{supports: [:window, :as_of]}} = describe(Combined.new!([as_of]))
+
+      for parts <- [[as_of, now], [now, as_of], [now]] do
+        assert {:ok, %Description{supports: [:window]}} = describe(Combined.new!(parts))
+      end
     end
 
     @tag verifies: "combined-faults"
