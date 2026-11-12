@@ -3,7 +3,7 @@ defmodule Macaw.Data.Source.Conformance do
   The source conformance kit: the contract of spec/01 §2–§4 as checks every source runs
   (spec/01 §9).
 
-  `check/3` runs one of eight checks against a source and answers its **findings**,
+  `check/3` runs one of nine checks against a source and answers its **findings**,
   `{check, reason}` terms, `[]` for a source that passes; `check/2` runs them all and
   `format/1` words a finding. `use Macaw.Data.Source.Conformance, opts` inside a module
   that uses `ExUnit.Case` writes one test per check that fails with the findings:
@@ -63,7 +63,7 @@ defmodule Macaw.Data.Source.Conformance do
 
   alias Macaw.Data.{Delivery, Schema, Source, Table, Window}
   alias Macaw.Data.Source.{Description, Request}
-  alias Macaw.Data.Source.Conformance.{Call, Deliveries, Pushes, Regions, Words}
+  alias Macaw.Data.Source.Conformance.{Call, Deliveries, Monitored, Pushes, Regions, Words}
 
   @checks [
     :describe,
@@ -73,7 +73,8 @@ defmodule Macaw.Data.Source.Conformance do
     :errors,
     :unsubscribe,
     :determinism,
-    :viewers
+    :viewers,
+    :monitor
   ]
 
   @defaults [
@@ -101,10 +102,11 @@ defmodule Macaw.Data.Source.Conformance do
     errors: "errors are values, not crashes",
     unsubscribe: "unsubscribing stops pushes",
     determinism: "one request, one now, one answer",
-    viewers: "a viewer-independent source answers every viewer alike"
+    viewers: "a viewer-independent source answers every viewer alike",
+    monitor: "a monitored reader is live and finished as alone"
   }
 
-  @typedoc "One of the eight checks."
+  @typedoc "One of the nine checks."
   @type check ::
           :describe
           | :deliveries
@@ -114,6 +116,7 @@ defmodule Macaw.Data.Source.Conformance do
           | :unsubscribe
           | :determinism
           | :viewers
+          | :monitor
 
   @typedoc "A fault one check found: `{check, reason}` (spec/01 §9)."
   @type finding :: {check(), term()}
@@ -166,7 +169,7 @@ defmodule Macaw.Data.Source.Conformance do
     end
   end
 
-  @doc "The eight checks, in the order `check/2` runs them."
+  @doc "The nine checks, in the order `check/2` runs them."
   @spec checks() :: [check(), ...]
   def checks, do: @checks
 
@@ -360,6 +363,13 @@ defmodule Macaw.Data.Source.Conformance do
         []
       end
     end
+  end
+
+  # -- monitor ------------------------------------------------------------------------------
+
+  defp run(:monitor, source, o) do
+    with {:ok, description} <- described(source, o),
+         do: Monitored.check(source, description, o)
   end
 
   # -- describing ----------------------------------------------------------------------------

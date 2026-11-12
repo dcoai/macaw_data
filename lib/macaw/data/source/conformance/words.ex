@@ -205,6 +205,28 @@ defmodule Macaw.Data.Source.Conformance.Words do
     do:
       "#{probe(probe)}: the source declares itself viewer independent, and two viewers got different answers"
 
+  def words({:monitor_status, probe, status}),
+    do: "#{probe(probe)}: a monitored reader of it is #{inspect(status)} after a tick, not :live"
+
+  def words({:monitor_rows, probe, got, expected}),
+    do:
+      "#{probe(probe)}: a monitored reader of it holds #{got} rows where the answer finished " <>
+        "for it alone holds #{expected}, or rows the answer does not"
+
+  def words({:monitor_push, probe, :not_held}),
+    do:
+      "#{probe(probe)}: monitored, the push made by push: arrived and the monitor holds nothing more; " <>
+        "a snapshot's position or an increment's number hides it"
+
+  def words({:monitor_push, probe, {status, errors}}),
+    do:
+      "#{probe(probe)}: monitored, after the push made by push: the reader is #{inspect(status)} " <>
+        "with errors #{inspect(errors)}"
+
+  def words({:monitor_faults, probe, faults}),
+    do:
+      "#{probe(probe)}: the monitor refuses the probe: #{Macaw.Data.Monitor.format_error(faults)}"
+
   def words({:push_refused, reason}),
     do: "the source names :push, and subscribe/2 answered {:error, #{inspect(reason)}}"
 

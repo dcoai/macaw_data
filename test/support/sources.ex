@@ -38,6 +38,7 @@ defmodule Macaw.Data.Test.Sources do
       :reduction_unrecorded,
       :runtime_claim,
       :reducer_claim,
+      :snapshot_ahead,
       :resolution_lie,
       :window_overrun,
       :budget_overrun,
@@ -166,7 +167,8 @@ defmodule Macaw.Data.Test.Sources do
       delivery =
         Delivery.new!([row(t, 1, flaw)],
           types: types(flaw),
-          served: [window: [t, t]],
+          # At the subscription's resolution, as its fetches state it (spec/01 §4.3).
+          served: [window: [t, t], resolution: 1],
           schema: Schema.version(schema)
         )
 
@@ -298,6 +300,8 @@ defmodule Macaw.Data.Test.Sources do
             resolution: if(flaw == :resolution_lie, do: 2, else: step),
             capped: flaw == :capped_lie and from != nil,
             stale: flaw == :stale,
+            # A snapshot claiming increments it does not reflect: a holder drops them.
+            position: if(flaw == :snapshot_ahead and request.subscription != nil, do: 1_000),
             reduced_by: reduced_by
           ] ++ reducer_claim(flaw),
         origin: origin,

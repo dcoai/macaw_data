@@ -65,6 +65,44 @@ defmodule Macaw.Data.ConformanceTest do
     quiet: 30
   ]
 
+  # A source whose rows do not pack under its schema: a number field holding a string.
+  defmodule Unpacked do
+    @moduledoc false
+    @behaviour Macaw.Data.Source
+    alias Macaw.Data.{Delivery, Schema}
+    defstruct []
+
+    @schema Schema.new!(%{t: %{type: :number, window: true}, v: %{type: :number}})
+
+    @impl true
+    def describe(_source, _context),
+      do: {:ok, %Macaw.Data.Source.Description{schema: @schema}}
+
+    @impl true
+    def fetch(_source, _request),
+      do: Delivery.new([%{t: 1, v: 1}, %{t: 2, v: "x"}], schema: Schema.version(@schema))
+  end
+
+  @tag verifies: "conformance-monitor"
+  test "the monitor check: honest sources pass; a snapshot ahead, rows that do not pack and a moving answer fail" do
+    assert Conformance.check(:monitor, Broken.new(), @opts) == []
+
+    findings =
+      Conformance.check(:monitor, Broken.new(:snapshot_ahead), @opts) ++
+        Conformance.check(:monitor, %Unpacked{}, @opts) ++
+        Conformance.check(:monitor, Broken.new(:clock), @opts)
+
+    assert Enum.any?(findings, &match?({:monitor, {:monitor_push, {[], nil}, :not_held}}, &1))
+
+    assert Enum.any?(
+             findings,
+             &match?({:monitor, {:monitor_status, _, {:down, {:table, _}}}}, &1)
+           )
+
+    assert Enum.any?(findings, &match?({:monitor, {:monitor_rows, _, _, _}}, &1))
+    for finding <- findings, do: assert(is_binary(Conformance.format(finding)))
+  end
+
   # Each flaw, the check it targets and the finding that names it.
   @expected [
     unstable_version: {:describe, :unstable},
@@ -79,6 +117,7 @@ defmodule Macaw.Data.ConformanceTest do
     reduction_unrecorded: {:deliveries, :unrecorded_reduction},
     runtime_claim: {:deliveries, :reduced_by},
     reducer_claim: {:deliveries, :reduced_with},
+    snapshot_ahead: {:monitor, :monitor_push},
     resolution_lie: {:deliveries, :resolution},
     window_overrun: {:supports, :window_served},
     budget_overrun: {:supports, :over_budget},

@@ -1325,7 +1325,7 @@ Every source runs **one kit**, `Macaw.Data.Source.Conformance`: the contract of 
 
 **Two layers.** `check(check, source, opts)` answers one check's **findings**, `{check, reason}` terms, `[]` for a source that passes; `check(source, opts)` runs them all, in the order of `checks/0`; `format/1` words a finding as a line a person reads. `use Macaw.Data.Source.Conformance, source: …` inside a module that uses `ExUnit.Case` writes one test per check, in a `describe` block, failing with the findings. The kit itself references no ExUnit function (`describe`, `test` and `flunk` appear only in the code `use` writes), so it loads in production. `use` refuses a missing `source:` and an unknown option at compile time; `check/3` answers its own options' faults as findings, never a raise (macaw_data#114, [00 §5](00-overview.md#data-errors)), so the test `use` writes fails with their words: `{check, {:unknown_check, checks}}` for an unknown check, `{check, {:option, key}}` for an option the kit does not take, `{check, {:request, ask}}` for a request with a key outside the seven below, and `{check, {:viewers, :two}}` for viewers that are not two.
 
-**The eight checks:**
+**The nine checks:**
 
 | Check | Holds |
 |---|---|
@@ -1337,6 +1337,7 @@ Every source runs **one kit**, `Macaw.Data.Source.Conformance`: the contract of 
 | `:unsubscribe` | after `unsubscribe/2`, a push made by `push:` delivers nothing |
 | `:determinism` | one request, one `now`: two fetches give one answer, the same rows and served terms. A row stamped after `now` arrived between them and is not compared. An answer depends on the request, never on a clock the source reads |
 | `:viewers` | a source declaring `viewer_independent` answers the two `viewers:` alike, which pooling across viewers (§6) relies on |
+| `:monitor` | each request, at each budget, read through a `Macaw.Data.Monitor` (§6.3) as one reader: a tick makes it `:live` (`{:monitor_status, probe, status}`), its delivery is the answer finished for it alone, every row without a budget and as many rows, each one the answer holds, under one (`{:monitor_rows, probe, got, expected}`); a source naming `:push`, after `push:`, keeps the reader live with no error and holds more (`{:monitor_push, probe, why}`): a snapshot claiming increments it does not reflect, or increments at another resolution than its fetches (§4.3), fail it; a probe the monitor refuses is `{:monitor_faults, probe, faults}` |
 
 **Requests.** `requests:` lists what is asked, each a keyword list of request fields among `params`, `window`, `box`, `region`, `latest`, `order` and `as_of` (`[[]]` by default), each fetched at every one of `budgets:` (`[nil, 5]`), at `now:` (the moment the check starts by default) and as the first of `viewers:`. A capability the source names that no request probes is a finding (`{:no_probe, capability}`), and so is a request the schema cannot answer (`{:probe, ask, faults}`): both are the run's to fix. **A parameter whose default is `nil`** (§2.2) is also asked given `nil`, on the first request, under `:deliveries`, whatever `requests:` names, so a source that declares one and cannot read `nil` is a finding. The other options are `context:`, `as_of:` (a day before `now` by default), `push:`, `down:`, `timeout:`, `reductions:`, `processes:` and `quiet:`.
 
@@ -1378,6 +1379,10 @@ use writes one test per check into each describe block, refuses a missing source
 
 ```test:conformance-load
 idle and with every scheduler saturated the verdicts agree: a correct source passes, a budget of one reduction fails describe while a generous one passes, an endless fetch is stopped at its budget, a blocked one is hung at the bound, and work in another process counts only when that process is named
+```
+
+```test:conformance-monitor
+every source the kit runs passes the monitor check; a snapshot claiming increments it does not reflect fails it with monitor_push; a source whose rows do not pack is a monitor_status finding; one whose answer moves between fetches is a monitor_rows finding; every finding formats as a line
 ```
 
 ## 10. Sources macaw_data ships {#sources-shipped}
