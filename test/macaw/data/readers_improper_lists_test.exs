@@ -407,6 +407,24 @@ defmodule Macaw.Data.ReadersImproperListsTest do
   end
 
   @tag verifies: "data-errors-readers"
+  test "Monitor.new/3: its readers, their asks and options" do
+    alias Macaw.Data.Monitor
+    alias Macaw.Data.Source.Signal
+
+    sources = %{a: Signal.new!(:sine, [:t, :v])}
+
+    readers = %{
+      r: [source: :a, ask: [window: [0, 9], order: [{"v", :desc}], region: %{"t" => [1, 2]}]]
+    }
+
+    assert raised(improper({readers, [every: 5]}), fn {readers, opts} ->
+             answers(fn -> Monitor.new(sources, readers, opts) end, fn ->
+               Monitor.new!(sources, readers, opts)
+             end)
+           end) == []
+  end
+
+  @tag verifies: "data-errors-readers"
   test "Push.new/3 and Finish.ceiling/2: their options" do
     assert raised(improper(cache: 1, limit: 10), fn opts ->
              ref = make_ref()

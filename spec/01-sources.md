@@ -1215,6 +1215,40 @@ the ceiling clamps a budget, reads a nil one at the ceiling and takes a page's l
 - **Fetching never blocks the caller.** It runs out of process, with a liveness bound. The first render waits for a bounded time and then draws the loading state. (visualize.md C13 gap; dcotek_web.md C13.)
 - **`now` comes from the surface.** One instant per pulse keeps windows, freshness and ages consistent. (visualize.md C1.)
 
+### 6.3 The monitor {#sources-monitor}
+
+**`Macaw.Data.Monitor`: the loop over a set of sources, as a value** (macaw_data#248), so a page, a LiveView or a board runs §6.1's rules without writing them: subscribe where a source pushes, poll where it cannot, ask each source with a request whose `now` is the owner's clock, finish each answer (§2.4), and hand each reader one delivery.
+- **It is not a process.** Its owner holds it in its state, calls `tick/2` each frame and `handle_message/2` with each message it receives, and reads `deliveries/1` and `status/1`. The process that made the monitor is the one subscribed, whichever process ticks it, so the pushes arrive in its mailbox. Describe, fetch and subscribe are the contract's calls (§2), made in the caller; running them on pages, off the caller with a liveness bound and pooled across pages, is §6.2's.
+- **Sources and readers are named.** `new(sources, readers, opts)` takes each source as a source or `{source, context}`, and each reader as the source it reads and its request fields (`ask`: `params`, `window`, `box`, `region`, `latest`, `order`, `as_of`, `viewer`, `budget`, `reduce`, §2.3). It answers `{:ok, monitor}` or every fault at once: `{[:sources], {:type, :map}}`, `{[:readers], {:type, :map}}`, `{[:sources, name], {:type, :source}}`, `{[:readers, name], {:type, :reader}}`, `{[:readers, name, :source], {:unknown_source, source}}`, `{[:readers, name, :ask, key], :unknown_key}`, `Request.new/1`'s faults under `[:readers, name, :ask]`, and an option's `{[key], {:type, type}}` or `{[key], :unknown_key}`.
+- **Readers of one source asking one request but for their budgets and reducers are one pool** (§6.1): one subscription, one holding, one fetch at `Finish.pooled/1` of their requests, the holding finished once for the request, then each reader reduced by `Finish.reduce/5` with its own request through the pool's `Operations.Cache` (§2.4), so each reader's delivery is the answer finished for that reader alone. `ask/2` moves readers' requests: a pool whose readers all move together keeps its subscription and holding, and fetches again unless it pushes and its holding answers the new window (the window field's range starting within what it holds, everything else asked the same, and under `latest` a `to` no earlier); a reader moving alone joins the pool of its new request, and an emptied pool is unsubscribed. A budget or reducer that moves refinishes from the holding, and fetches again where the source honors `:budget` and the pool's largest budget moved. `budget/2`, `put_source/3`, `remove_source/2`, `put_reader/3`, `remove_reader/2`, `refetch/1` and `stop/1` do as they say.
+- **One turn:** `tick(monitor, now: ms, at: instant)`, `now` the owner's monotonic milliseconds that polls, retries and staleness count on, `at` every request's `now`, answers `{:ok, monitor}` or its faults (`{[:now], {:type, :integer}}`, `{[:at], {:type, :datetime}}`, an unknown key) with nothing done. Every source, in name order, is described if it is not and its retry is due; every pool of it is asked its request, refused without a call when its schema cannot answer it (`{:down, {:request, faults}}`, `Window.check/2`); subscribed where the source pushes; fetched when it holds nothing, its request moved, its push asks a refetch (§4.1, §4.3) or, pulled, every `every:` milliseconds; its buffered pushes drained into its holding at once; its chunks before the window dropped (`Push.trim/2`); and finished for each reader when the holding or a reader's request changed, an unchanged pool keeping every delivery as it was.
+- **The holding is a `Source.Push`** (§4): a fetch is handed to it as a snapshot by its position, a pushed schema is cached without asking, a delivery of an unknown version asks the source once, and an unresolvable one is the pool's error, never applied.
+- **Errors and staleness are states,** never raises. `status/1` answers each reader's `:loading`, `:live`, `:stale` or `{:down, reason}`: its source's describe error, a subscribe or fetch error, a snapshot its holding could not take, or a finishing's faults (`{:finish, faults}`), the last deliveries kept meanwhile. A describe, subscribe or fetch that fails is tried again after `every:`, doubled at each failure in a row up to `backoff_max:`. A reader live and unanswered past `stale_after:` is `:stale`, and live again on the next answer. `errors/1` is each pool's last error that left it live, `held/1` each holding, `cache/1` every version a delivery names.
+
+```test:monitor-pull
+a pull source is described and fetched at the first tick and polled at its interval, described once; the monitor finishes what the source does not and does not reduce again what it reduced; every request's now is tick's at
+```
+
+```test:monitor-pool
+readers of one request share one fetch at the largest budget, each reduced its own way; each pooled reader's delivery is the source's answer finished for it alone (property over budgets, reducers and windows); readers moving together keep their pool, trimming within the holding and fetching before it; one moving alone gets a pool of its own, and an emptied pool is unsubscribed; a moved budget refetches only a pool whose source honors budgets; an unchanged holding keeps every delivery
+```
+
+```test:monitor-push
+a push source is subscribed by the owner whichever process ticks; pushes buffer and one tick drains them without a fetch; a push overlapping a fetch adds nothing twice and a gap is fetched; a pushed schema is used without asking, an unknown version asks once, an unresolvable one is an error; a push of a dropped subscription is ignored; a sliding window drops whole chunks, copying none; putting, removing and stopping unsubscribe
+```
+
+```test:monitor-states
+a source that cannot describe is down, retried with backoff, and recovers; a failed poll is down and backs off with the last delivery kept; rows that do not pack are the source's fault; a reader unanswered past stale_after is stale, and live again on the next answer
+```
+
+```test:monitor-faults
+new/3, tick/2, ask/2, budget/2, put_source/3 and put_reader/3 answer their faults, every one at once, the twins raising them in words; a request the schema cannot answer is not asked, the pool down until one that holds is set
+```
+
+```test:monitor-cost
+a tick with nothing due over ten readers costs a pinned count of reductions
+```
+
 ## 7. Credentials {#sources-credentials}
 
 <!-- surfex: deferred #108: the host maps a source name to its configuration in the page runtime -->

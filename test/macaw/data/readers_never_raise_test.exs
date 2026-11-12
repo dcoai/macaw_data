@@ -544,6 +544,51 @@ defmodule Macaw.Data.ReadersNeverRaiseTest do
     end
   end
 
+  @tag verifies: "data-errors-readers"
+  property "Monitor.new/3 answers any sources, readers and options as a value or faults" do
+    alias Macaw.Data.Monitor
+    alias Macaw.Data.Source.Signal
+
+    signal = Signal.new!(:sine, [:t, :v])
+
+    check all(
+            sources <-
+              one_of([
+                map_of(
+                  member_of([:a, :b]),
+                  one_of([constant(signal), tuple({constant(signal), leaf()}), leaf()]),
+                  max_length: 2
+                ),
+                leaf()
+              ]),
+            readers <-
+              one_of([
+                map_of(
+                  leaf(),
+                  one_of([
+                    fixed_list([
+                      tuple({constant(:source), member_of([:a, :b, :c])}),
+                      tuple(
+                        {constant(:ask), options([:window, :budget, :reduce, :latest, :nope])}
+                      )
+                    ]),
+                    leaf()
+                  ]),
+                  max_length: 2
+                ),
+                leaf()
+              ]),
+            opts <- options([:every, :backoff_max, :stale_after, :limit])
+          ) do
+      with {:ok, monitor} <-
+             answers(fn -> Monitor.new(sources, readers, opts) end, fn ->
+               Monitor.new!(sources, readers, opts)
+             end) do
+        assert {:ok, _} = Monitor.tick(monitor, now: 0, at: ~U[2026-01-01 00:00:00Z])
+      end
+    end
+  end
+
   # The readers spec/00 §5 names, from the sentence itself, so neither can move alone
   # (#185): one that answers values has a twin at its arity, raising exactly its faults.
   defp named_readers do
@@ -559,7 +604,7 @@ defmodule Macaw.Data.ReadersNeverRaiseTest do
   @tag verifies: "data-errors-readers"
   test "every reader spec/00 §5 names exports its ! twin at its arity" do
     readers = named_readers()
-    assert length(readers) == 31
+    assert length(readers) == 32
 
     for {module, name, arity} <- readers do
       assert Code.ensure_loaded?(module), inspect(module)
