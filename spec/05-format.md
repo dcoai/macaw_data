@@ -63,3 +63,28 @@ a tie rounds away from zero on the exact double, as JavaScript does; a negative 
 ```test:format-locale-definition
 english/0 is the table's English; new/1 takes a keyword list or a map over English, and writes d3's outputs for another locale's decimal, thousands, grouping, currency, minus, nan and percent; a key it does not take, a field of the wrong kind, a symbol under an unknown code and fields that are neither are faults, and new!/1 raises them
 ```
+
+## 4. Cost {#format-cost}
+
+**The common formats write through the BIFs** (macaw_data#253). A board writes hundreds of readouts a frame, so a format is not only correct but cheap. A format whose type is `f`, `%` or `d`, with no width, no `~` and the `-` sign, under any symbol, grouping and locale (`,.2f`, `.1f`, `.0%`, `d`, `,d`, `$,.2f`), writes a float, and under `d` an integer too, with one call of `:erlang.float_to_binary/2` or `Integer.to_string/1`: its digits are that call's answer, the integer digits grouped by slicing it, and the string is built once. Every other format, and every other value, takes §2's path. **The two write the same string** for every value and every such format, which a property holds against §2's path.
+
+A BIF is charged a few reductions whatever its work, so a call's cost is stated in both: for 1,000 floats (integers for `d`, ratios for `.0%`), the median of 15 runs on a box at load 12, against visualize's port of the same formats and the bare BIF.
+
+| Format | visualize's port | §2's path | This path | The BIF alone |
+|---|---|---|---|---|
+| `,.2f` | 155,384 r, 5.70 ms | 116,195 r, 2.57 ms | 13,300 r, 0.33 ms | 4,007 r, 0.060 ms |
+| `d` | 64,304 r, 4.24 ms | 62,310 r, 1.26 ms | 10,314 r, 0.23 ms | 1,007 r, 0.058 ms |
+| `.0%` | 61,721 r, 4.15 ms | 58,629 r, 1.91 ms | 12,008 r, 0.22 ms | 4,007 r, 0.060 ms |
+| `$,.2f` | 161,211 r, 6.37 ms | 122,023 r, 3.26 ms | 13,301 r, 0.35 ms | 4,007 r, 0.060 ms |
+
+So `d` and `.0%` cost under 4 times the bare BIF, and the grouped `,.2f` and `$,.2f` under 6. The other types keep §2's path: `.3s` and `.3~r` cost about 107,000 and 100,000 reductions and 3.6 ms per 1,000, against visualize's 7.5 and 10.0 ms.
+
+The suite holds each of the four to a budget in reductions, which a busy box does not move.
+
+```test:format-cost-identical
+for generated floats and integers, signed zeros, values that round to zero and values past a double's range, every format of the common shapes, under English and locales of other separators and groupings, writes the string §2's path writes
+```
+
+```test:format-cost-budget
+1,000 values written by ,.2f, d, .0% and $,.2f each cost at most their budget in reductions
+```

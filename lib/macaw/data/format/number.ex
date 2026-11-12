@@ -11,8 +11,31 @@ defmodule Macaw.Data.Format.Number do
   # The integers a double holds without overflowing: past this, JavaScript's infinity.
   @max_float trunc(1.7976931348623157e308)
   @infinity "Infinity"
+  # Every double from here on is an integer, so its digits are exact as an integer's.
+  @exact 9_007_199_254_740_992.0
 
   @spec write(Format.t(), term()) :: String.t()
+  # -- the common formats, through the BIFs (spec/05 §4) -------------------------------
+
+  # `f`, `%` and `d` with no width, no `~` and the `-` sign: the BIF's digits, the integer
+  # digits grouped by slicing them. A float past 2⁵³ takes the general path, whose
+  # digits are exact (the BIF writes at most 256 characters).
+  def write(%Format{type: "f", width: nil, trim: false, sign: "-", precision: p} = format, value)
+      when is_float(value) and value < @exact and value > -@exact,
+      do: fast(:erlang.float_to_binary(value, decimals: p), fraction(p), format)
+
+  def write(%Format{type: "%", width: nil, trim: false, sign: "-", precision: p} = format, value)
+      when is_float(value) and value < @exact / 100 and value > -@exact / 100,
+      do: fast(:erlang.float_to_binary(value * 100, decimals: p), fraction(p), format)
+
+  def write(%Format{type: "d", width: nil, trim: false, sign: "-"} = format, value)
+      when is_integer(value),
+      do: fast(Integer.to_string(value), 0, format)
+
+  def write(%Format{type: "d", width: nil, trim: false, sign: "-"} = format, value)
+      when is_float(value) and value < @exact and value > -@exact,
+      do: fast(Integer.to_string(round(value)), 0, format)
+
   def write(%Format{type: "c"} = format, value),
     do: assemble(format, format.prefix, "", text(value, format.locale) <> format.suffix)
 
@@ -86,6 +109,97 @@ defmodule Macaw.Data.Format.Number do
   defp text(value, _locale) when is_binary(value), do: value
   defp text(value, _locale) when is_number(value) or is_atom(value), do: to_string(value)
   defp text(_value, locale), do: locale.nan
+
+  # -- the common formats' digits ------------------------------------------------------
+
+  # The bytes after the integer digits: a point and `p` decimals, or none.
+  defp fraction(0), do: 0
+  defp fraction(p), do: p + 1
+
+  # A negative that rounds to zero is written without its sign.
+  defp fast(<<?-, magnitude::binary>>, fraction, format) do
+    if :binary.first(magnitude) == ?0 and zero?(magnitude),
+      do: digits(magnitude, fraction, "", format),
+      else: digits(magnitude, fraction, format.locale.minus, format)
+  end
+
+  defp fast(magnitude, fraction, format), do: digits(magnitude, fraction, "", format)
+
+  # The BIF's digits, `n` integer digits then for `f` and `%` a point and the fraction,
+  # written as one binary built from slices of known sizes. Each build starts with an
+  # empty literal segment: a build that starts with a binary variable takes the
+  # compiler's append path, which allocates a writable binary and costs more than the
+  # BIF itself.
+  defp digits(text, fraction, sign, %{
+         comma: comma,
+         prefix: prefix,
+         suffix: suffix,
+         locale: locale
+       }) do
+    n = byte_size(text) - fraction
+    text = decimal(text, n, fraction, locale.decimal)
+
+    cond do
+      comma -> grouped(text, n, sign, prefix, suffix, locale)
+      sign == "" and prefix == "" and suffix == "" -> text
+      true -> <<0::size(0), sign::binary, prefix::binary, text::binary, suffix::binary>>
+    end
+  end
+
+  defp decimal(text, _n, 0, _decimal), do: text
+  defp decimal(text, _n, _fraction, "."), do: text
+
+  defp decimal(text, n, _fraction, decimal) do
+    <<integer::binary-size(^n), ?., decimals::binary>> = text
+    <<0::size(0), integer::binary, decimal::binary, decimals::binary>>
+  end
+
+  # Threes from the right, up to the 15 digits of a double below 2⁵³ but its largest,
+  # one match and one build per size; any other grouping, and a longer integer, by §2's
+  # path.
+  defp grouped(text, n, sign, prefix, suffix, %{grouping: [3]}) when n <= 3,
+    do: <<0::size(0), sign::binary, prefix::binary, text::binary, suffix::binary>>
+
+  defp grouped(text, n, sign, prefix, suffix, %{grouping: [3], thousands: s}) when n <= 6 do
+    h = n - 3
+    <<a::binary-size(^h), b::binary-size(3), rest::binary>> = text
+
+    <<0::size(0), sign::binary, prefix::binary, a::binary, s::binary, b::binary, rest::binary,
+      suffix::binary>>
+  end
+
+  defp grouped(text, n, sign, prefix, suffix, %{grouping: [3], thousands: s}) when n <= 9 do
+    h = n - 6
+    <<a::binary-size(^h), b::binary-size(3), c::binary-size(3), rest::binary>> = text
+
+    <<0::size(0), sign::binary, prefix::binary, a::binary, s::binary, b::binary, s::binary,
+      c::binary, rest::binary, suffix::binary>>
+  end
+
+  defp grouped(text, n, sign, prefix, suffix, %{grouping: [3], thousands: s}) when n <= 12 do
+    h = n - 9
+
+    <<a::binary-size(^h), b::binary-size(3), c::binary-size(3), d::binary-size(3), rest::binary>> =
+      text
+
+    <<0::size(0), sign::binary, prefix::binary, a::binary, s::binary, b::binary, s::binary,
+      c::binary, s::binary, d::binary, rest::binary, suffix::binary>>
+  end
+
+  defp grouped(text, n, sign, prefix, suffix, %{grouping: [3], thousands: s}) when n <= 15 do
+    h = n - 12
+
+    <<a::binary-size(^h), b::binary-size(3), c::binary-size(3), d::binary-size(3),
+      e::binary-size(3), rest::binary>> = text
+
+    <<0::size(0), sign::binary, prefix::binary, a::binary, s::binary, b::binary, s::binary,
+      c::binary, s::binary, d::binary, s::binary, e::binary, rest::binary, suffix::binary>>
+  end
+
+  defp grouped(text, n, sign, prefix, suffix, locale) do
+    <<integer::binary-size(^n), rest::binary>> = text
+    sign <> prefix <> group(integer, :infinity, locale) <> rest <> suffix
+  end
 
   # -- grouping, padding, alignment ----------------------------------------------------
 
@@ -185,7 +299,13 @@ defmodule Macaw.Data.Format.Number do
   defp percent(x, _p, _write) when x > @max_float / 100, do: @infinity
   defp percent(x, p, write), do: write.(x * 100, p)
 
+  # Past 2⁵³ a double is an integer, written from its exact digits: the BIF writes at most
+  # 256 characters, and a double past 10²⁵⁵ has more.
+  defp fixed(x, p) when x >= @exact, do: Integer.to_string(trunc(x)) <> point_zeros(p)
   defp fixed(x, p), do: :erlang.float_to_binary(x, decimals: p)
+
+  defp point_zeros(0), do: ""
+  defp point_zeros(p), do: "." <> zeros(p)
 
   # JavaScript's `toExponential(p)`: `d.ddde+X`, the exponent unpadded.
   defp exponential(x, p) do

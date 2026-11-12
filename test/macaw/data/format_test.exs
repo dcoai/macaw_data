@@ -157,6 +157,10 @@ defmodule Macaw.Data.FormatTest do
       assert write(".1%", 1.0e307) == "Infinity%"
       assert write(".3s", huge) == "Infinity"
       assert write("d", huge) == "1" <> String.duplicate("0", 400)
+
+      # Past 10²⁵⁵ a double has more digits than the BIF writes (#253).
+      assert write(".2f", 1.0e300) == Integer.to_string(trunc(1.0e300)) <> ".00"
+      assert write(",.0%", -1.0e300) =~ ~r/^-100,000,000,0[\d,]+%$/
     end
 
     @tag verifies: "format-notation-digits"

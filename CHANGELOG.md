@@ -10,6 +10,16 @@ The next release is **0.17.0**: it changes behavior (a source's table by row cou
   - **Breaking: `Macaw.Data.Table.new/2` with an origin naming a window field and no span refuses rows out of that field's order,** `{[:origin, :window], {:unsorted, i}}` at the first, `nil` last, as it does in event time, and `Macaw.Data.Table.append/2` of such a table refuses earlier rows, `{:error, {:unsorted, 0}}` (a late row is `Macaw.Data.Table.apply/2`'s). A caller handing a source's table unsorted rows sorts them first.
   - **`Macaw.Data.Source.Push` holds a snapshot's rows at their instants:** the rows were ordered by the raw window value before the edge converted it, so a time given as an ISO string sorted as missing and was held out of order (with a span, refused as unsorted). They are ordered as the table holds them.
 - **New: `Macaw.Data.Format`, a d3-format specifier read once into data and applied to any number of values** (#251, #252, spec/05 §1 to §3). `Macaw.Data.Format.parse/2` answers `{:ok, %Macaw.Data.Format{}}`, a struct with no function in it, or `{:error, faults}` (`parse!/2` raises them); `Macaw.Data.Format.number/2` writes any term by it, a non-number as `NaN`. The notation is d3-format's whole grammar (fill, align, sign, `$` and `#`, zero fill, width, grouping, precision, `~`, and the `e f g r s % p d b o x X c n` types), ported from visualize's `Visualize.Format.formatter/1` and byte-identical to it over visualize's 64 d3 cases. A tie rounds away from zero on the exact double, as JavaScript does, where visualize's port rounded some to even (`.1e` of 0.125 is `1.3e-1`, `.2s` of 125 is `130`); an integer keeps its exact digits under the integer types; a width past 1,024 is refused. `Macaw.Data.Format.Locale` is a d3 locale definition (decimal, thousands, grouping, currency, minus, nan, percent, and the ISO 4217 codes written by a symbol), `Macaw.Data.Format.Locale.new/1` building one over `Macaw.Data.Format.Locale.english/0`. Both readers join spec/00 §5's list.
+- **The common formats write through the BIFs** (#251, #253, spec/05 §4). A format of type `f`, `%` or `d` with no width, no `~` and the `-` sign (`,.2f`, `.0%`, `d`, `$,.2f`) writes a float, or under `d` an integer, from one `:erlang.float_to_binary/2` or `Integer.to_string/1` call, its integer digits grouped by slicing that binary, the string built once; every other format and value keeps the general path, and a property holds the two equal. 1,000 values, median of 15 runs (load 12), against visualize's port and the bare BIF:
+
+  | Format | visualize's port | General path | Now | BIF alone |
+  |---|---|---|---|---|
+  | `,.2f` | 155,384 r, 5.70 ms | 116,195 r, 2.57 ms | 13,300 r, 0.33 ms | 4,007 r, 0.060 ms |
+  | `d` | 64,304 r, 4.24 ms | 62,310 r, 1.26 ms | 10,314 r, 0.23 ms | 1,007 r, 0.058 ms |
+  | `.0%` | 61,721 r, 4.15 ms | 58,629 r, 1.91 ms | 12,008 r, 0.22 ms | 4,007 r, 0.060 ms |
+  | `$,.2f` | 161,211 r, 6.37 ms | 122,023 r, 3.26 ms | 13,301 r, 0.35 ms | 4,007 r, 0.060 ms |
+
+  The property found `f` and `%` raising `ArgumentError` for a float past 10²⁵⁵ (the BIF writes at most 256 characters); such a float is now written from its exact integer digits.
 
 ## v0.16.0 (2026-11-11)
 
