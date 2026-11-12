@@ -1393,3 +1393,32 @@ a combination pushes when its first part does, its subscription the first part's
 ```test:combined-faults
 new/2 refuses what is no non-empty list, a part that is no source or pair, and an option; new!/2 raises the faults in words; a part that is no source is describe's not_a_source
 ```
+
+### 10.3 Telemetry {#sources-telemetry}
+
+**`Macaw.Data.Source.Telemetry`: an in-process `:telemetry` collector, one push source per metric** (macaw_data#250), so a dashboard reads Phoenix, Ecto or a host's own measurements with nothing written.
+- **The collector** is a process the host starts and supervises: `start_link(metrics: definitions)` attaches one handler for the definitions' events, judges every definition and option in the caller first, and answers `{:ok, pid}` or every fault with nothing started (`{[:metrics], :required}`, `{[:metrics], {:type, :metrics}}`, `{[:metrics, i], {:type, :metric}}` for an element that is no definition, `{[:metrics, i | path], reason}` for a fact the schema refuses or a fact key it does not take, an option's `{[key], {:type, type}}` or `{[key], :unknown_key}`). A definition is a `Telemetry.Metrics` struct read by its fields and its struct's name, so the library takes no dependency on `telemetry_metrics`. **`:telemetry` is optional** ([00 §3](00-overview.md#data-dependencies)): without it the module compiles and `start_link/1` answers `{:error, :no_telemetry}`. Options: `keep:` (rows kept per metric, 10,000), `every:` (the push interval in milliseconds, 1,000; `nil` pushes only on `flush/1`), `clock:` (microseconds, the system's by default), `name:` and `facts_key:` (`:macaw`).
+- **A metric's source** (`sources/1` by dotted name, `source/2`; two definitions of one name keyed by their kind as well) has rows `%{t: DateTime, value: v}` plus the metric's tags, and a schema saying so: `t` the `:time` window field, `value` labeled with the definition's description (else its name), in its unit as a UCUM code ([03](03-units.md)) with the quantity it implies (a counter `"1"`, a `:native` unit none), its `metric_kind` `:counter` for a counter or a sum and `:gauge` otherwise, each tag a category. The definition's `reporter_options[facts_key]` adds exactly `polarity`, `bounds`, `target` and `metric_kind`. A counter's value is the count so far for its tags, a sum's the running total, every other kind's the measurement; a definition's `keep` and a measurement function apply, and an event without the measurement is no row.
+- **Rows are stamped on receipt** by the collector's clock, strictly increasing, and the newest `keep:` kept. A window of `DateTime` bounds is honored, served up to the request's `now` and never past it, so one request with one `now` has one answer (§2.3); a window before the kept rows is capped; any other window is `{:error, {:window, window}}`, an unknown metric `{:error, {:unknown_metric, name}}`.
+- **Pushes** (§4): the schema at subscription, then every `every:` an increment of the rows new since the last flush, numbered from 1 for each subscription; a fetch under a subscription is its snapshot at the last increment's number, without the rows waiting for the next. A subscriber that exits is dropped.
+- **Calls answer values:** a collector that is gone is `{:error, :noproc}`, one that stops during a call `{:error, {:down, reason}}`, one that does not answer in time `{:error, :timeout}`; the caller is never linked to the collector's fate, and a stopped collector's handler is detached.
+
+```test:telemetry-schema
+the schema from the definitions: labels, UCUM units, the quantity, a counter's count, a tag's category, each kind's metric_kind, the facts under the facts key with an explicit metric_kind winning, another reporter's options unread; a combination keeps the telemetry source's facts in front of a history
+```
+
+```test:telemetry-rows
+a summary row is the measurement converted, a counter's the count per tag, a sum's the running total; keep and a measurement function apply and a missing measurement is no row; a window of DateTimes is honored up to now and capped before the kept rows; a window that is none and an unknown metric are errors; one request, one now, one answer
+```
+
+```test:telemetry-push
+the schema arrives first, then the rows new since the last flush, numbered from 1 per subscription, nothing after unsubscribing; a fetch under a subscription is its snapshot at its last increment without the rows waiting; a subscriber that exits is dropped; every: flushes on its own; the kit passes
+```
+
+```test:telemetry-faults
+start_link judges every definition and option in the caller, every fault at once, nothing attached; start_link! raises them in words
+```
+
+```test:telemetry-life
+calls answer values when the collector is gone and its handler is detached; a collector that stops during a call is a value, not an exit
+```

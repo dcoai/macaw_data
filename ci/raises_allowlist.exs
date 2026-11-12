@@ -12,6 +12,11 @@
 # Bad input is never a class: a function answers it with {:error, reason}.
 [
   %{
+    at: {Macaw.Data.Source.Telemetry, :start_link!, 1},
+    class: :bang,
+    reason: "start_link/1's twin: raises the faults start_link/1 answers, as Macaw.Data.Error"
+  },
+  %{
     at: {Macaw.Data.Source.Combined, :new!, 2},
     class: :bang,
     reason: "new/2's twin: raises the faults new/2 answers, as Macaw.Data.Error"

@@ -10,12 +10,16 @@
 # - The adopter depends on the package by path and lists no zigler, so the native kernels
 #   are not built. It is compiled and started with `mix run`, which prints `loaded?`.
 # - It fails on any `[error]` line in the build or the start, on a `loaded?` other than
-#   false, and on any command that fails. Every command's whole output is printed.
+#   false, on `:telemetry` present or the telemetry source missing or starting, and on any
+#   command that fails. Every command's whole output is printed.
 #
 # Work goes under `--work DIR`, default a fresh directory in the system's temporary one.
 
 defmodule AdopterBoot do
-  @probe ~S|IO.puts("macaw_data loaded?: #{inspect(Macaw.Data.Native.loaded?())}")|
+  # The kernels unloaded, and the optional `:telemetry` absent: the telemetry source's
+  # module present all the same, its collector answering `{:error, :no_telemetry}`
+  # (spec/00 §3, macaw_data#250).
+  @probe ~S|IO.puts("macaw_data loaded?: #{inspect(Macaw.Data.Native.loaded?())}"); IO.puts("telemetry: #{inspect({Code.ensure_loaded?(:telemetry), Code.ensure_loaded?(Macaw.Data.Source.Telemetry), Macaw.Data.Source.Telemetry.start_link(metrics: [])})}")|
 
   # The adopter is a fresh Mix project: nothing of this project's build reaches it.
   @clean_env [
@@ -44,7 +48,9 @@ defmodule AdopterBoot do
 
     case faults do
       [] ->
-        IO.puts("adopter boot OK: no error logged, loaded? false, no .Elixir* file packaged")
+        IO.puts(
+          "adopter boot OK: no error logged, loaded? false, no :telemetry and its source answering :no_telemetry, no .Elixir* file packaged"
+        )
 
       _ ->
         Enum.each(faults, &IO.puts("adopter boot FAILED: " <> &1))
@@ -109,7 +115,14 @@ defmodule AdopterBoot do
         nil -> ["the start printed no loaded?"]
       end
 
-    errors ++ loaded
+    telemetry =
+      case Regex.run(~r/^telemetry: (.*)$/m, booted) do
+        [_, "{false, true, {:error, :no_telemetry}}"] -> []
+        [_, other] -> ["telemetry is #{other}, not {false, true, {:error, :no_telemetry}}"]
+        nil -> ["the start printed no telemetry"]
+      end
+
+    errors ++ loaded ++ telemetry
   end
 
   # A command's whole output, printed; a failed command fails the check at once.

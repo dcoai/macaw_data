@@ -387,6 +387,26 @@ defmodule Macaw.Data.ReadersImproperListsTest do
   end
 
   @tag verifies: "data-errors-readers"
+  test "Source.Telemetry.start_link/1: its options, definitions and reporter options" do
+    alias Macaw.Data.Source.Telemetry
+
+    metric =
+      Elixir.Telemetry.Metrics.summary("macaw_data_improper.a.b",
+        tags: [:x],
+        reporter_options: [macaw: [bounds: [0, 1]]]
+      )
+
+    for input <- improper(keep: 5, every: nil, metrics: [metric]) do
+      assert raised([input], fn opts ->
+               case Telemetry.start_link(opts) do
+                 {:ok, pid} -> GenServer.stop(pid)
+                 {:error, [_ | _]} -> :ok
+               end
+             end) == []
+    end
+  end
+
+  @tag verifies: "data-errors-readers"
   test "Push.new/3 and Finish.ceiling/2: their options" do
     assert raised(improper(cache: 1, limit: 10), fn opts ->
              ref = make_ref()

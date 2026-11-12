@@ -519,6 +519,31 @@ defmodule Macaw.Data.ReadersNeverRaiseTest do
     end
   end
 
+  @tag verifies: "data-errors-readers"
+  property "Source.Telemetry.start_link/1 answers any options and definitions as a value or faults" do
+    alias Macaw.Data.Source.Telemetry
+
+    definitions = [
+      Elixir.Telemetry.Metrics.last_value("macaw_data_readers.gauge.value"),
+      Elixir.Telemetry.Metrics.counter("macaw_data_readers.gauge.count",
+        reporter_options: [macaw: []]
+      )
+    ]
+
+    check all(
+            metrics <-
+              one_of([list_of(one_of([member_of(definitions), leaf()]), max_length: 3), leaf()]),
+            opts <- options([:keep, :every, :clock, :facts_key])
+          ) do
+      opts = if is_list(opts), do: [{:metrics, metrics} | opts], else: opts
+
+      case answers(fn -> Telemetry.start_link(opts) end, fn -> Telemetry.start_link!(opts) end) do
+        {:ok, pid} -> GenServer.stop(pid)
+        _error -> :ok
+      end
+    end
+  end
+
   # The readers spec/00 §5 names, from the sentence itself, so neither can move alone
   # (#185): one that answers values has a twin at its arity, raising exactly its faults.
   defp named_readers do
@@ -534,7 +559,7 @@ defmodule Macaw.Data.ReadersNeverRaiseTest do
   @tag verifies: "data-errors-readers"
   test "every reader spec/00 §5 names exports its ! twin at its arity" do
     readers = named_readers()
-    assert length(readers) == 30
+    assert length(readers) == 31
 
     for {module, name, arity} <- readers do
       assert Code.ensure_loaded?(module), inspect(module)

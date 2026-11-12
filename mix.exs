@@ -73,6 +73,12 @@ defmodule Macaw.Data.MixProject do
       # runs. 0.16.0 targets Zig 0.16.0 (`.tool-versions`). Optional, so an adopter opts in
       # by listing it: its zig_doc pins ex_doc to 0.39.1, which no adopter should inherit.
       {:zigler, "~> 0.16.0", runtime: false, optional: true},
+      # `Macaw.Data.Source.Telemetry` (spec/01 §10.3) attaches to `:telemetry`, optional
+      # like nx (which requires it): without it the module compiles and its collector
+      # answers `{:error, :no_telemetry}`. `telemetry_metrics` is the tests' real
+      # definitions only; the source reads a definition by its fields.
+      {:telemetry, "~> 1.0", optional: true},
+      {:telemetry_metrics, "~> 1.0", only: :test},
       {:stream_data, "~> 1.1", only: :test},
       # Docs for Hex (macaw_compose#155). Zigler's zig_doc needs it wherever Zigler compiles,
       # so dev and test, at the version zig_doc pins (`override`: ours stays dev/test only).
