@@ -28,8 +28,16 @@ defmodule Macaw.Data.Source.Combined do
   the first alone. What finishing does over the union no part is asked: a region,
   `latest`, an order, a budget and its reducer (macaw_data#273), since a part's own cut
   is no cut of the union. `as_of`, `params`, `viewer` and `now` reach every part as they
-  are. Its delivery carries the first part's `position`, `complete_until` and
-  `resolution`.
+  are.
+
+  **Its delivery states what the parts said of their answers** (spec/01 §10.2): `stale`
+  when any part asked answered stale; the parts' `note`s, each once, the freshest first,
+  joined by `"; "`; the first part's `params`, `position` and `resolution`; `capped` when
+  the oldest part asked stops short of the window or says it cut; and `complete_until` the
+  least claim of the parts asked, none when any claims none, but the first part's for a
+  snapshot taken for a subscription. `reduced_by`, `reduced_with`, `ordered` and `origin`
+  are none: no part is asked a budget, a reducer or an order, finishing states them of the
+  union, and a part's origin names that part.
 
   **Parts that deliver tables are concatenated at the seam as tables**: each kept run of a
   part's table is a slice of it, and the combination's rows are one `Macaw.Data.Table` of
@@ -306,10 +314,24 @@ defmodule Macaw.Data.Source.Combined do
   defp read(%Delivery{} = delivery, reading, spelling, i) do
     with {:ok, rows} <- part_rows(delivery, i),
          {:ok, rows} <- convert_rows(rows, reading, spelling || %{}, i),
-         {:ok, window} <- served_window(delivery.served.window, reading.window, i) do
-      {:ok, %{delivery | rows: rows, names: nil, served: %{delivery.served | window: window}}}
+         {:ok, window} <- served_window(delivery.served.window, reading.window, i),
+         {:ok, claim} <- served_claim(delivery.served.complete_until, reading.window, i) do
+      served = %{delivery.served | window: window, complete_until: claim}
+      {:ok, %{delivery | rows: rows, names: nil, served: served}}
     end
   end
+
+  # A later part's claim (spec/01 §4.4), a value of its window field, in the first's units.
+  defp served_claim(nil, _window, _i), do: {:ok, nil}
+
+  defp served_claim(claim, {_to_theirs, to_ours}, i) do
+    case value(claim, to_ours) do
+      {:ok, claim} -> {:ok, claim}
+      {:error, reason} -> {:error, {:combined_part, i, [{[:served, :complete_until], reason}]}}
+    end
+  end
+
+  defp served_claim(claim, nil, _i), do: {:ok, claim}
 
   defp served_window(window, {_to_theirs, to_ours}, i), do: bounds(window, to_ours, i)
   defp served_window(window, nil, _i), do: {:ok, window}
@@ -441,22 +463,28 @@ defmodule Macaw.Data.Source.Combined do
   defp combined([oldest | _] = kept, from, schema) do
     freshest = List.last(kept)
 
-    capped =
-      if from == nil,
-        do: oldest.delivery.served.capped,
-        else: not covered?(oldest.from, from)
+    answers = Enum.map(kept, & &1.delivery.served)
 
-    # The freshest part's subscription is the combination's, so its position and its
-    # claim are the combination's. Those facts are the parts' own, so one `Delivery.new/2`
-    # refuses is the combination's fault.
+    # The oldest part asked is the one no later part stands behind: what it did not reach
+    # is short, and so is what it says it cut. A fresher part's cut was handed on.
+    capped = oldest.delivery.served.capped or (from != nil and not covered?(oldest.from, from))
+
+    # Each fact said of the union (spec/01 §10.2): the parts' where it is a fact of their
+    # answers, the first part's where it is the subscription's, and none of a part's where
+    # no part was asked it (a budget, a reducer, an order: finishing's, over the union).
+    # Those facts are the parts' own, so one `Delivery.new/2` refuses is the combination's
+    # fault.
     delivery =
       Delivery.new(concatenated(Enum.map(kept, & &1.kept)),
         served: [
           window: [Window.latest(oldest.from, from), window_to(freshest.delivery)],
           resolution: freshest.delivery.served.resolution,
           capped: capped,
+          stale: stale(answers),
+          params: freshest.delivery.served.params,
+          note: note(answers),
           position: freshest.delivery.served.position,
-          complete_until: freshest.delivery.served.complete_until
+          complete_until: claim(freshest.delivery.served, answers)
         ],
         schema: Schema.version(schema)
       )
@@ -465,6 +493,38 @@ defmodule Macaw.Data.Source.Combined do
       {:ok, delivery} -> {:ok, delivery}
       {:error, faults} -> {:error, {:combined_delivery, faults}}
     end
+  end
+
+  # Stale when any part asked answered stale, rows or none: it may lack rows of the window
+  # it was asked. A value that is no boolean is passed on, for `Delivery.new/2` to refuse.
+  defp stale(answers) do
+    case Enum.find(answers, &(not is_boolean(&1.stale))) do
+      nil -> Enum.any?(answers, & &1.stale)
+      %{stale: wrong} -> wrong
+    end
+  end
+
+  # The parts' lines for a person, each once, the freshest first; a value that is no
+  # string is passed on, for `Delivery.new/2` to refuse.
+  defp note(answers) do
+    notes = answers |> Enum.reverse() |> Enum.map(& &1.note) |> Enum.reject(&is_nil/1)
+
+    case Enum.find(notes, &(not is_binary(&1))) do
+      nil -> if notes == [], do: nil, else: notes |> Enum.uniq() |> Enum.join("; ")
+      wrong -> wrong
+    end
+  end
+
+  # A snapshot for a subscription, its position stated, claims the first part's: a
+  # subscription's claim never moves back (spec/01 §4.4), and its increments are the first
+  # part's. Any other answer claims what every part asked claims, the least, and none when
+  # any part claims none: below it no part expects a change.
+  defp claim(%{position: position, complete_until: first}, _answers) when position != nil,
+    do: first
+
+  defp claim(_first, answers) do
+    claims = Enum.map(answers, & &1.complete_until)
+    if Enum.member?(claims, nil), do: nil, else: Enum.reduce(claims, &Window.earliest(&2, &1))
   end
 
   # The parts at the seam, oldest first: tables of one header are one table of their

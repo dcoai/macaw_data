@@ -18,15 +18,19 @@ defmodule Macaw.Data.SourceTelemetryTest do
   defmodule History do
     @moduledoc false
     @behaviour Macaw.Data.Source
-    defstruct [:schema, :rows]
+    defstruct [:schema, :rows, note: nil]
 
     @impl true
     def describe(%__MODULE__{schema: schema}, _context),
       do: {:ok, %Description{schema: schema, supports: [:window]}}
 
     @impl true
-    def fetch(%__MODULE__{schema: schema, rows: rows}, %Request{window: window}),
-      do: Delivery.new(rows, served: [window: window], schema: Schema.version(schema))
+    def fetch(%__MODULE__{schema: schema, rows: rows, note: note}, %Request{window: window}),
+      do:
+        Delivery.new(rows,
+          served: [window: window, note: note],
+          schema: Schema.version(schema)
+        )
   end
 
   # The kit's collector: one gauge under this module's own event, which no other test emits.
@@ -294,7 +298,8 @@ defmodule Macaw.Data.SourceTelemetryTest do
         Schema.new!(%{"t" => %{type: :time}, "value" => %{type: :number, unit: "s"}})
 
       t0 = ~U[2025-10-01 00:00:00Z]
-      history = %History{schema: history_schema, rows: [%{"t" => t0, "value" => 0.25}]}
+      rows = [%{"t" => t0, "value" => 0.25}]
+      history = %History{schema: history_schema, rows: rows, note: "from the store"}
 
       {version, schema, _} = describe(live)
       combined = Combined.new!([live, history])
@@ -303,6 +308,8 @@ defmodule Macaw.Data.SourceTelemetryTest do
       {:ok, delivery} = fetch(combined, [t0, nil])
       assert delivery.schema == version
       assert [%{"t" => ^t0, "value" => 250.0}, %{"value" => 7.0}] = rows_of(delivery)
+      # The history's line for a person is the combination's (spec/01 §10.2).
+      assert delivery.served.note == "from the store"
     end
   end
 

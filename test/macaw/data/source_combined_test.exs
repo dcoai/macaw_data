@@ -583,4 +583,173 @@ defmodule Macaw.Data.SourceCombinedTest do
       end
     end
   end
+
+  describe "what the combination states of its parts' answers" do
+    # A store holding `range`, honoring windows, saying `said` of every answer.
+    defp saying(range, name, said) do
+      answer = fn %Request{window: window} ->
+        [from, to] = window || [nil, nil]
+        held = rows(range, name) |> Window.trim(:t, [from, to])
+        served = [Window.latest(from, range.first), Window.earliest(to, range.last)]
+        {held, [window: served, capped: from != nil and from < range.first] ++ said}
+      end
+
+      Scripted.new(schema: @schema, supports: [:window], rows: answer)
+    end
+
+    @tag verifies: "combined-served"
+    test "a stale part, the freshest or the history, makes the combination stale; with none it is fresh" do
+      fresh = fetch(Combined.new!([store(50..100, :live), store(0..100, :history)]), [0, 100])
+      assert {:ok, %Delivery{served: %{stale: false, note: nil}}} = fresh
+
+      live = saying(50..100, :live, stale: true, note: "upstream down")
+      assert {:ok, d} = fetch(Combined.new!([live, store(0..100, :history)]), [0, 100])
+      assert {d.served.stale, d.served.note} == {true, "upstream down"}
+
+      # A history that answered stale, rows or none, is the combination's too.
+      history = saying(0..100, :history, stale: true)
+
+      assert {:ok, %{served: %{stale: true}}} =
+               fetch(Combined.new!([store(50..100, :live), history]), [0, 100])
+
+      empty = saying(200..300, :history, stale: true)
+
+      assert {:ok, %{served: %{stale: true}}} =
+               fetch(Combined.new!([store(50..100, :live), empty]), [0, 100])
+
+      # A part the window never reaches is not asked, and says nothing of the answer.
+      assert {:ok, %{served: %{stale: false}}} =
+               fetch(Combined.new!([store(0..100, :live), history]), [10, 100])
+    end
+
+    @tag verifies: "combined-served"
+    property "the combination is stale exactly when a part it asked answered stale" do
+      check all(flags <- list_of(boolean(), min_length: 1, max_length: 5)) do
+        # Part i holds from 100 - 20 * (i + 1), so every part is asked [0, 100].
+        parts =
+          flags
+          |> Enum.with_index()
+          |> Enum.map(fn {stale, i} -> saying((80 - 20 * i)..100, i, stale: stale) end)
+
+        {:ok, delivery} = fetch(Combined.new!(parts), [0, 100])
+        assert delivery.served.stale == Enum.any?(flags)
+        assert delivery.served.capped == length(flags) < 5
+      end
+    end
+
+    @tag verifies: "combined-served"
+    test "notes are the parts', each once, the freshest first; params are the first part's" do
+      live = saying(50..100, :live, note: "from memory", params: %{"floor" => 1})
+      middle = saying(30..100, :middle, note: "from memory")
+      history = saying(0..100, :history, note: "coarsened from raw", params: %{"floor" => 2})
+
+      assert {:ok, d} = fetch(Combined.new!([live, middle, history]), [0, 100])
+      assert d.served.note == "from memory; coarsened from raw"
+      assert d.served.params == %{"floor" => 1}
+
+      # A part's fact no delivery takes is the combination's fault, not dropped.
+      broken = Macaw.Data.Test.Sources.Broken.new(:stale_not_boolean)
+
+      assert {:error, {:combined_delivery, [{[:served, :stale], {:type, :boolean}}]}} =
+               fetch(Combined.new!([broken]), [0, 10])
+    end
+
+    @tag verifies: "combined-served"
+    test "the oldest part asked is capped when it says it cut, though it reaches the window's start" do
+      cut = saying(0..100, :history, capped: true)
+      assert {:ok, d} = fetch(Combined.new!([store(50..100, :live), cut]), [0, 100])
+      assert d.served.capped
+
+      # A fresher part's cut was handed on to the next, which covered it.
+      live = saying(50..100, :live, capped: true)
+
+      assert {:ok, %{served: %{capped: false}}} =
+               fetch(Combined.new!([live, store(0..100, :history)]), [0, 100])
+    end
+
+    @tag verifies: "combined-served"
+    test "complete_until is the least claim of the parts asked, none with any none, and the first's for a subscription" do
+      live = saying(50..100, :live, complete_until: 90)
+      history = saying(0..100, :history, complete_until: 40)
+      assert {:ok, d} = fetch(Combined.new!([live, history]), [0, 100])
+      assert d.served.complete_until == 40
+
+      unclaimed = store(0..100, :history)
+
+      assert {:ok, %{served: %{complete_until: nil}}} =
+               fetch(Combined.new!([live, unclaimed]), [0, 100])
+
+      # A window the first part covers asks it alone, and its claim is the union's.
+      assert {:ok, %{served: %{complete_until: 90}}} =
+               fetch(Combined.new!([live, history]), [60, 100])
+
+      # A snapshot for a subscription claims what the subscription does: the first part's.
+      subscribed = saying(50..100, :live, complete_until: 90, position: 3)
+
+      assert {:ok, %{served: %{complete_until: 90, position: 3}}} =
+               fetch(Combined.new!([subscribed, history]), [0, 100])
+
+      # A later part's claim, in its own units, is read in the first's.
+      ms = Schema.new!(%{t: %{type: :number, window: true, unit: "ms"}, v: %{type: :number}})
+      s = Schema.new!(%{t: %{type: :number, window: true, unit: "s"}, v: %{type: :number}})
+
+      fast = fn %Request{window: [from, _to]} ->
+        {for(t <- 50_000..100_000//1000, t >= from, do: %{t: t, v: 1}),
+         [window: [max(from, 50_000), 100_000], complete_until: 90_000]}
+      end
+
+      slow = fn %Request{window: [from, to]} ->
+        {for(t <- 0..100, t >= from, t <= to, do: %{t: t, v: 2}),
+         [window: [max(from, 0), to], complete_until: 40]}
+      end
+
+      parts = [
+        Scripted.new(schema: ms, supports: [:window], rows: fast),
+        Scripted.new(schema: s, supports: [:window], rows: slow)
+      ]
+
+      assert {:ok, d} = fetch(Combined.new!(parts), [10_000, 100_000])
+      assert d.served.complete_until == 40_000.0
+    end
+
+    @tag verifies: "combined-served"
+    test "a budget, a reducer, an order and an origin are no part's to state" do
+      reducing =
+        saying(50..100, :live,
+          reduced_by: :source,
+          reduced_with: {"m4", 2},
+          ordered: :source
+        )
+
+      assert {:ok, d} = fetch(Combined.new!([reducing, store(0..100, :history)]), [0, 100])
+
+      assert {d.served.reduced_by, d.served.reduced_with, d.served.ordered, d.origin} ==
+               {nil, nil, nil, nil}
+    end
+
+    @tag verifies: "combined-served"
+    test "a stale part passes the kit's every check, and its staleness is the combination's" do
+      alias Macaw.Data.Test.Sources.Broken
+      live = Broken.new(:stale)
+      combined = Combined.new!([live, Broken.new()])
+      requests = [[], [window: [2, 10]], [window: [nil, 6]]]
+
+      assert [] ==
+               Conformance.check(combined,
+                 requests: requests,
+                 budgets: [nil, 5],
+                 push: fn _combined -> Broken.emit(live) end,
+                 quiet: 30
+               )
+
+      {:ok, description} = describe(combined)
+
+      for ask <- requests do
+        request = Request.new!([now: @now] ++ ask)
+
+        assert {:ok, %Delivery{served: %{stale: true}}} =
+                 Source.fetch(combined, description, request)
+      end
+    end
+  end
 end
