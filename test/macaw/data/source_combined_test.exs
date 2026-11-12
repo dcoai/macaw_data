@@ -901,7 +901,7 @@ defmodule Macaw.Data.SourceCombinedTest do
     alias Macaw.Data.{Delivery, Schema, Window}
     alias Macaw.Data.Source.{Description, Request}
 
-    defstruct [:first, :step, :resolution, schema: nil]
+    defstruct [:first, :step, :resolution, schema: nil, table: false]
 
     @schema Schema.new!(%{t: %{type: :number, window: true}, v: %{type: :number}})
 
@@ -918,6 +918,7 @@ defmodule Macaw.Data.SourceCombinedTest do
 
       if Enum.all?([from, to], &(&1 == nil or is_number(&1))) do
         rows = for t <- first..100//step, Window.within?(t, [from, to]), do: %{t: t, v: t}
+        rows = if g.table, do: Delivery.table!(Delivery.new!(rows)), else: rows
 
         Delivery.new(rows,
           served: [
@@ -1033,6 +1034,204 @@ defmodule Macaw.Data.SourceCombinedTest do
 
       coarser = Combined.new!([Grid.new(50, 1), Grid.new(0, 10)])
       assert Conformance.check(coarser, requests: requests, budgets: [nil, 5]) == []
+    end
+  end
+
+  # Series on a grid: each series `s` from its own first time, `step` apart up to `last`,
+  # at a stated resolution, honoring windows, its served window from its earliest series.
+  defmodule Series do
+    @moduledoc false
+    @behaviour Macaw.Data.Source
+    alias Macaw.Data.{Delivery, Schema, Window}
+    alias Macaw.Data.Source.{Description, Request}
+
+    defstruct [:firsts, :step, :last, :resolution]
+
+    @schema Schema.new!(%{
+              t: %{type: :number, window: true},
+              s: %{type: :category},
+              v: %{type: :number}
+            })
+
+    def schema, do: @schema
+
+    def times(first, step, last),
+      do:
+        Enum.take_while(
+          Stream.map(Stream.iterate(0, &(&1 + 1)), &(first + &1 * step)),
+          &(&1 <= last)
+        )
+
+    @impl true
+    def describe(%__MODULE__{}, _context),
+      do: {:ok, %Description{schema: @schema, supports: [:window]}}
+
+    @impl true
+    def fetch(%__MODULE__{} = g, %Request{window: window}) do
+      [from, to] = window || [nil, nil]
+
+      rows =
+        for {s, first} <- Enum.sort(g.firsts),
+            t <- times(first, g.step, g.last),
+            Window.within?(t, [from, to]),
+            do: %{t: t, s: s, v: t}
+
+      start = g.firsts |> Map.values() |> Enum.min()
+
+      Delivery.new(rows,
+        served: [
+          window: [Window.latest(from, start), Window.earliest(to, g.last)],
+          resolution: g.resolution
+        ],
+        schema: Schema.version(@schema)
+      )
+    end
+  end
+
+  describe "the seam between parts at one resolution" do
+    @tag verifies: "combined-seam"
+    test "a later part's row closer than the resolution to the fresher part's start is dropped" do
+      for table <- [false, true] do
+        live = Grid.new(55, 10, table: table)
+        history = Grid.new(0, 10, table: table)
+        assert {:ok, d} = fetch(Combined.new!([live, history]), [0, 100])
+        assert column(d, :t) == [0, 10, 20, 30, 40, 55, 65, 75, 85, 95]
+        assert d.served.resolution == 10
+        assert d.served.window == [0, 100]
+        assert d.served.capped == false
+        assert match?(%Table{}, d.rows) == table
+
+        # A row exactly a resolution before is kept, and aligned grids lose none.
+        for {first, kept} <- [{50, 0..40//10}, {60, 0..50//10}] do
+          assert {:ok, d} =
+                   fetch(Combined.new!([Grid.new(first, 10, table: table), history]), [0, 100])
+
+          assert column(d, :t) == Enum.to_list(kept) ++ Enum.to_list(first..100//10)
+        end
+      end
+
+      # A coarser history, and a first part stating no spacing, which imposes none.
+      assert {:ok, d} = fetch(Combined.new!([Grid.new(55, 10), Grid.new(0, 25)]), [0, 100])
+      assert column(d, :t) == [0, 25, 55, 65, 75, 85, 95]
+
+      unspaced = Grid.new(55, 10, resolution: nil)
+      assert {:ok, d} = fetch(Combined.new!([unspaced, Grid.new(0, 10)]), [0, 100])
+      assert column(d, :t) == [0, 10, 20, 30, 40, 50, 55, 65, 75, 85, 95]
+    end
+
+    @tag verifies: "combined-seam"
+    test "over a time field a named resolution is its seconds, and dropping a row changes no coverage" do
+      t0 = ~U[2026-11-01 00:00:00Z]
+      time = Schema.new!(%{t: %{type: :time, window: true}, v: %{type: :number}})
+
+      part = fn first, served? ->
+        answer = fn %Request{window: [from, to]} ->
+          rows =
+            for s <- first..3600//60,
+                at = DateTime.add(t0, s),
+                Window.within?(at, [from, to]),
+                do: %{t: at, v: s}
+
+          window = if served?, do: [[Window.latest(from, DateTime.add(t0, first)), to]], else: []
+          {rows, [resolution: :minute] ++ Enum.map(window, &{:window, &1})}
+        end
+
+        Scripted.new(schema: time, supports: [:window], rows: answer)
+      end
+
+      window = [t0, DateTime.add(t0, 3600)]
+
+      for served? <- [true, false] do
+        assert {:ok, d} = fetch(Combined.new!([part.(1830, true), part.(0, served?)]), window)
+        seconds = Enum.map(column(d, :t), &DateTime.diff(&1, t0))
+        assert seconds == Enum.to_list(0..1740//60) ++ Enum.to_list(1830..3600//60)
+        assert d.served.window == window
+        assert d.served.capped == false
+      end
+
+      # A history whose one row in its window is dropped still reached it: its coverage is
+      # judged from the rows the window kept.
+      only = Scripted.new(schema: @schema, supports: [:window], rows: [%{t: 50, v: 50}])
+      assert {:ok, d} = fetch(Combined.new!([Grid.new(55, 10), only]), [50, 100])
+      assert column(d, :t) == [55, 65, 75, 85, 95]
+      assert d.served.window == [50, 100]
+      assert d.served.capped == false
+    end
+
+    @tag verifies: "combined-seam"
+    property "for generated resolutions and offsets the seam keeps the spacing, losing at most a row" do
+      check all(
+              resolution <- member_of([1, 2.5, 10, 0.1]),
+              live_at <- integer(20..60),
+              offsets <- list_of(integer(0..9), min_length: 1, max_length: 3),
+              coarser <- integer(1..3),
+              from <- integer(0..30),
+              max_runs: 200
+            ) do
+        step = resolution * coarser
+        live_first = live_at * resolution
+        last = 80 * resolution
+
+        # Each history series on its own grid, offset from the live part's start by a
+        # fraction of the resolution.
+        firsts =
+          for {offset, i} <- Enum.with_index(offsets),
+              into: %{},
+              do: {"s#{i}", offset * resolution / 10}
+
+        live = %Series{
+          firsts: Map.new(firsts, fn {s, _} -> {s, live_first} end),
+          step: resolution,
+          last: last,
+          resolution: resolution
+        }
+
+        history = %Series{firsts: firsts, step: step, last: last, resolution: step}
+        window = [from * resolution, last]
+        assert {:ok, d} = fetch(Combined.new!([live, history]), window)
+        assert d.served.resolution == resolution
+        rows = Delivery.rows!(d)
+
+        for {s, first} <- firsts do
+          times = for row <- rows, Table.get(row, :s) == s, do: Table.get(row, :t)
+
+          # The history's rows before the live part's start, but for one at it (a float a
+          # rounding short of it), which is the live part's own time.
+          held =
+            for t <- Series.times(first, step, last),
+                t >= from * resolution,
+                live_first - t > 1.0e-9 * step,
+                do: t
+
+          kept = Enum.filter(times, &(&1 < live_first))
+
+          # (a) no two rows of the series closer than the resolution stated.
+          assert Enum.all?(Enum.zip(times, tl(times)), fn {a, b} ->
+                   b - a >= resolution * (1 - 1.0e-9)
+                 end)
+
+          # (b) on aligned grids no row is dropped; (c) at most one row of a series is.
+          aligned? =
+            Enum.any?(
+              held,
+              &(abs(live_first - &1 - step * round((live_first - &1) / step)) < 1.0e-9 * step)
+            )
+
+          dropped = length(held) - length(kept)
+          if aligned?, do: assert(dropped == 0)
+          assert dropped in [0, 1]
+        end
+      end
+    end
+
+    @tag verifies: "combined-seam"
+    test "the kit passes two parts at one resolution on offset grids" do
+      requests = [[], [window: [0, 100]], [window: [20, 70]], [window: [45, nil]]]
+
+      for table <- [false, true] do
+        offset = Combined.new!([Grid.new(55, 10, table: table), Grid.new(0, 10, table: table)])
+        assert Conformance.check(offset, requests: requests, budgets: [nil, 5]) == []
+      end
     end
   end
 end

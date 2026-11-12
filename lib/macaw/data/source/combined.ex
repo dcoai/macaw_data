@@ -10,8 +10,10 @@ defmodule Macaw.Data.Source.Combined do
   starts at its delivery's served window (else its earliest row), and the part of the
   window before that goes to the next part, and so on. Each later part's rows are trimmed
   to the half-open window it was asked for, `[from, served)`, so a row at a seam comes from
-  the fresher part alone; a part serving from after the window's end hands on that end,
-  whole. The schema must have a `:time` or `:number` window field to
+  the fresher part alone, and keeps only rows at least the first part's resolution before
+  `served`, so no two rows lie closer than the resolution the union states, whatever grid
+  each part's rows lie on (macaw_data#282); a part serving from after the window's end
+  hands on that end, whole. The schema must have a `:time` or `:number` window field to
   route by.
 
   **The combination's schema is the first part's, whole**: its version, labels and facts.
@@ -312,14 +314,16 @@ defmodule Macaw.Data.Source.Combined do
       [from, to] = request.window || [nil, nil]
       asked = %{request | region: nil, latest: false, order: [], budget: nil, reduce: nil}
 
+      {:ok, type} = Schema.fetch(schema, time, :type)
+
       route(
         Enum.zip([parts, described, readings]),
-        time,
+        {time, type},
         from,
         {to, true},
         asked,
         [],
-        nil,
+        {nil, nil},
         schema
       )
     end
@@ -327,28 +331,37 @@ defmodule Macaw.Data.Source.Combined do
 
   # Each part is asked for `[from, upper]`, `upper` what the fresher parts served from (the
   # window's `to` for the first), exclusive once a fresher part served from it: `{bound,
-  # inclusive?}`. `kept` is built oldest first, since the route goes back
-  # in time. `spelling` is the first part's, read off its rows (`nil` until it is fetched).
-  defp route([], _time, from, _upper, _request, kept, _spelling, schema),
+  # inclusive?}`. `kept` is built oldest first, since the route goes back in time. `first`
+  # is what the first part's answer says of every later one: how its rows are spelled
+  # (`nil` until it is fetched) and the spacing its resolution states, which no row may
+  # break at a seam (`seam/6`).
+  defp route([], _time, from, _upper, _request, kept, _first, schema),
     do: combined(kept, from, schema)
 
-  defp route([part | rest], time, from, {bound, _} = upper, request, kept, spelling, schema) do
+  defp route([part | rest], time, from, {bound, _} = upper, request, kept, first, schema) do
     {{source, _context}, description, reading} = part
+    {field, type} = time
+    {spelling, step} = first
 
     with {:ok, window} <- asked(reading, [from, bound], length(kept)),
          {:ok, delivery} <- Source.fetch(source, description, %{request | window: window}),
          {:ok, delivery} <- read(delivery, reading, spelling, length(kept)),
-         {:ok, rows} <- seam(delivery, time, from, upper, length(kept)) do
-      served = served_from(delivery, rows, time)
+         {:ok, rows, reached} <- seam(delivery, field, from, upper, step, length(kept)) do
+      served = served_from(delivery, reached)
       kept = [%{kept: rows, delivery: delivery, from: served, position: length(kept)} | kept]
-      spelling = spelling || spelling(delivery)
+
+      first =
+        if spelling == nil,
+          do: {spelling(delivery), spacing(delivery.served.resolution, type)},
+          else: first
+
       # The subscription is the first part's alone: a later part's fetch is no snapshot
       # for it.
       request = %{request | subscription: nil}
 
       if covered?(served, from),
         do: combined(kept, from, schema),
-        else: route(rest, time, from, below(served, upper), request, kept, spelling, schema)
+        else: route(rest, time, from, below(served, upper), request, kept, first, schema)
     end
   end
 
@@ -482,60 +495,94 @@ defmodule Macaw.Data.Source.Combined do
   defp value(v, _units), do: {:ok, v}
 
   # The freshest part keeps its own end; every later part is strictly before what the
-  # fresher ones served. A part whose rows are a table keeps them as one: one run sliced,
-  # nothing copied; else the kept rows gathered from it.
-  defp seam(%Delivery{rows: %Table{} = table}, time, from, upper, _i) do
-    keep? = keeper(from, upper)
+  # fresher ones served, and at least the first part's spacing `step` before it (macaw_data
+  # #282), so no row lies closer to a fresher part's than the union's resolution says. A
+  # part whose rows are a table keeps them as one: one run sliced, nothing copied; else the
+  # kept rows gathered from it. Answers the rows kept and, for a part stating no served
+  # window, the earliest time it reached (`reached/4`).
+  defp seam(%Delivery{rows: %Table{} = table} = delivery, time, from, upper, step, _i) do
+    keep? = keeper(from, upper, step)
     name = Enum.find(Table.names(table), &(spelled(&1) == spelled(time)))
     values = if name, do: Table.column(table, name), else: []
     kept = for {v, i} <- Enum.with_index(values), keep?.(v), do: i
+    reached = reached(delivery, values, keep?, {from, upper})
 
     case kept do
       [] ->
-        {:ok, {:table, Table.slice(table, 0, 0)}}
+        {:ok, {:table, Table.slice(table, 0, 0)}, reached}
 
       [first | _] ->
         last = List.last(kept)
 
         if last - first + 1 == length(kept),
-          do: {:ok, {:table, Table.slice(table, first, length(kept))}},
-          else: {:ok, {:table, Subset.at(Subset.ready(table), kept)}}
+          do: {:ok, {:table, Table.slice(table, first, length(kept))}, reached},
+          else: {:ok, {:table, Subset.at(Subset.ready(table), kept)}, reached}
     end
   end
 
-  defp seam(%Delivery{} = delivery, time, from, upper, i) do
-    keep? = keeper(from, upper)
+  defp seam(%Delivery{} = delivery, time, from, upper, step, i) do
+    keep? = keeper(from, upper, step)
 
-    with {:ok, rows} <- part_rows(delivery, i),
-         do: {:ok, {:rows, Enum.filter(rows, &keep?.(Table.get(&1, time)))}}
+    with {:ok, rows} <- part_rows(delivery, i) do
+      kept = Enum.filter(rows, &keep?.(Table.get(&1, time)))
+      reached = reached(delivery, Enum.map(rows, &Table.get(&1, time)), keep?, {from, upper})
+      {:ok, {:rows, kept}, reached}
+    end
   end
 
-  # Whether a time is kept: within `[from, upper]` while the bound is inclusive (the
-  # freshest part, and a part no fresher one served before), else in `[from, upper)`.
-  defp keeper(from, {upper, true}), do: &Window.within?(&1, [from, upper])
+  # Where a part stating no served window served from, out of its rows' `times`: its
+  # earliest the window kept, spaced or not, since a row dropped for the spacing was still
+  # served, so dropping it changes no coverage. Kept rows lie at least `step` before the
+  # bound and dropped ones within it, so the earliest kept is the earliest the window kept
+  # whenever one was kept. A part stating its window has said where it served from
+  # (`served_from/2`), and its times are not read.
+  defp reached(%Delivery{served: %{window: [served, _to]}}, _times, _keep?, _bounds)
+       when served != nil,
+       do: nil
 
-  defp keeper(from, {upper, false}) do
+  defp reached(_delivery, times, keep?, {from, upper}) do
+    case earliest(Enum.filter(times, keep?)) do
+      nil -> earliest(Enum.filter(times, keeper(from, upper, nil)))
+      reached -> reached
+    end
+  end
+
+  defp earliest(times), do: Enum.reduce(times, nil, &Window.earliest(&2, &1))
+
+  # Whether a time is kept: within `[from, upper]` while the bound is inclusive (the
+  # freshest part, and a part no fresher one served before), else in `[from, upper)` and,
+  # where the first part states a spacing `step`, at least `step` before `upper`, measured
+  # as the conformance kit measures it (a number's difference, else seconds between
+  # positions) and with its tolerance.
+  defp keeper(from, {upper, true}, _step), do: &Window.within?(&1, [from, upper])
+
+  defp keeper(from, {upper, false}, step) when upper == nil or step == nil do
     fn time ->
       Window.within?(time, [from, nil]) and
         (upper == nil or (Window.comparable?(time, upper) and Window.compare(time, upper) == :lt))
     end
   end
 
-  defp served_from(%Delivery{served: %{window: [served, _to]}}, _kept, _time)
+  defp keeper(from, {upper, false}, step) when is_number(upper) do
+    least = step * (1 - 1.0e-9)
+    fn time -> is_number(time) and upper - time >= least and Window.within?(time, [from, nil]) end
+  end
+
+  defp keeper(from, {upper, false}, step) do
+    least = step * 1_000_000 * (1 - 1.0e-9)
+    at = Window.position(upper)
+
+    fn time ->
+      Window.instant?(time) and at - Window.position(time) >= least and
+        Window.within?(time, [from, nil])
+    end
+  end
+
+  defp served_from(%Delivery{served: %{window: [served, _to]}}, _reached)
        when served != nil,
        do: served
 
-  defp served_from(_delivery, kept, time),
-    do: Enum.reduce(times(kept, time), nil, &Window.earliest(&2, &1))
-
-  defp times({:rows, rows}, time), do: Enum.map(rows, &Table.get(&1, time))
-
-  defp times({:table, table}, time) do
-    case Enum.find(Table.names(table), &(spelled(&1) == spelled(time))) do
-      nil -> []
-      name -> Table.column(table, name)
-    end
-  end
+  defp served_from(_delivery, reached), do: reached
 
   defp covered?(nil, _from), do: false
   defp covered?(_served, nil), do: false
