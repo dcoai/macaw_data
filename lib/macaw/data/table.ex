@@ -183,6 +183,7 @@ defmodule Macaw.Data.Table do
       end
 
     {packed, faults} = pack(checked, counts, faults)
+    faults = faults ++ order_faults(origin, packed, counts, faults)
 
     case faults do
       [] -> {:ok, chunked(packed, counts, size, origin, offset)}
@@ -195,6 +196,26 @@ defmodule Macaw.Data.Table do
 
   def new(columns, opts) when is_list(columns) and is_list(opts),
     do: {:error, [{[], {:type, :columns}}]}
+
+  # By row count under a window field, the rows in its order, `nil` last, as in event
+  # time (macaw_data#239): read from the window column as packed, a time's instants and a
+  # number itself, so no value is read again. Event time checks it in its layout.
+  defp order_faults(%{window: window, span: nil}, packed, counts, [])
+       when window != nil and counts != nil do
+    {_name, _type, pieces} = List.keyfind(packed, window, 0)
+
+    positions =
+      pieces
+      |> Enum.zip(counts)
+      |> Enum.flat_map(fn {piece, {n, _id}} -> Column.positions(piece, n) end)
+
+    case Origin.unsorted(positions) do
+      nil -> []
+      i -> [{[:origin, :window], {:unsorted, i}}]
+    end
+  end
+
+  defp order_faults(_origin, _packed, _counts, _faults), do: []
 
   # One `{name, type, values}` column checked against those before it.
   defp column(columns, i, name, type, values, size, checked, faults) do
@@ -277,7 +298,7 @@ defmodule Macaw.Data.Table do
       size: size,
       origin: origin,
       next: if(origin, do: offset + size, else: 0),
-      sorted: if(Origin.windowed?(origin), do: origin.window)
+      sorted: Origin.ordered_by(origin)
     }
   end
 
@@ -688,8 +709,8 @@ defmodule Macaw.Data.Table do
     end
   end
 
-  defp in_order(%__MODULE__{origin: %{window: window, span: span}} = table, other)
-       when window != nil and span != nil and table.size > 0 and other.size > 0 do
+  defp in_order(%__MODULE__{origin: %{window: window}} = table, other)
+       when window != nil and table.size > 0 and other.size > 0 do
     [last] = column(slice(table, table.size - 1, 1), window)
     [next] = column(slice(other, 0, 1), window)
     if Origin.ordered?(last, next), do: :ok, else: {:error, {:unsorted, 0}}

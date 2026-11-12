@@ -754,6 +754,18 @@ defmodule Macaw.Data.Table.Column do
   def instants(_column, _n), do: :general
 
   @doc false
+  # The `n` positions of a window column, in order, `nil` where one is missing, as
+  # `Origin.position/1` places a value: a time's instant in microseconds, read from its
+  # buffer where its form holds one, and a number itself.
+  @spec positions(t(), non_neg_integer()) :: [number() | nil]
+  def positions(column, n) do
+    case instants(column, n) do
+      :general -> column |> values(n) |> Enum.map(&Macaw.Data.Table.Origin.position/1)
+      instants -> instants
+    end
+  end
+
+  @doc false
   # A dictionary column's codes, `nil` where a value is missing, and its strings by code:
   # a grouping reads the codes and names a group once (spec/04 §4.10).
   @spec codes(t(), non_neg_integer()) :: {[non_neg_integer() | nil], tuple()}

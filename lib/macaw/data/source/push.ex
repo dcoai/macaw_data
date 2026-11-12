@@ -670,7 +670,7 @@ defmodule Macaw.Data.Source.Push do
   # source's origin. `{:ok, held}` or the packing's faults.
   defp holding(push, %Delivery{} = delivery, schema) do
     with {:ok, rows} <- Delivery.named_rows(delivery),
-         rows = ordered(rows, Schema.window_field(schema)),
+         rows = ordered(rows, Schema.window_field(schema), schema),
          columns =
            for(
              {name, type} <- header(schema),
@@ -776,11 +776,16 @@ defmodule Macaw.Data.Source.Push do
   defp thinned?(%Delivery{served: served}), do: served.capped or served.reduced_by != nil
 
   # Stable by the window field's position, a row with no time last.
-  defp ordered(rows, nil), do: rows
+  # The rows in the window field's order, each value read as the edge packs it
+  # (`Table.at_edge/2`): a time given as an ISO string is placed at its instant, as the
+  # table checks the order it is held in (macaw_data#239).
+  defp ordered(rows, nil, _schema), do: rows
 
-  defp ordered(rows, time) do
+  defp ordered(rows, time, schema) do
+    type = schema.fields[time].type
+
     Enum.sort_by(rows, fn row ->
-      case Window.position(Table.get(row, time)) do
+      case Window.position(Table.at_edge(type, Table.get(row, time))) do
         nil -> {1, 0}
         p -> {0, p}
       end

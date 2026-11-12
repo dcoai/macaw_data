@@ -126,7 +126,8 @@ defmodule Macaw.Data.Table.Origin do
   # the source's: `id` nil where the chunk's id is its content digest. `:invalid` when a
   # window value is of no kind a window takes, or not of its span's (a number under a
   # `Duration`, a time under a number): the column's own fault reports it. `{:error,
-  # faults}` when the rows are not in the window field's order.
+  # faults}` when the rows are not in the window field's order, in event time; by row
+  # count, `Table.new/2` checks the order on the packed column (`unsorted/1`).
   @doc false
   @spec layout(
           t() | nil,
@@ -161,7 +162,9 @@ defmodule Macaw.Data.Table.Origin do
     end
   end
 
-  def layout(origin, offset, _columns, size, rows) do
+  def layout(origin, offset, _columns, size, rows), do: by_count(origin, offset, size, rows)
+
+  defp by_count(origin, offset, size, rows) do
     first = min(size, rows - rem(offset, rows))
     start = offset - rem(offset, rows)
 
@@ -184,6 +187,13 @@ defmodule Macaw.Data.Table.Origin do
   # Whether `later` may follow `earlier` in a window field's order, `nil` last.
   @spec ordered?(term(), term()) :: boolean()
   def ordered?(earlier, later), do: not after?(at(earlier), at(later))
+
+  @doc false
+  # The window field an origin names, whose order the table's rows are in and are sorted
+  # by (macaw_data#239), in event time or by row count; `nil` for none.
+  @spec ordered_by(t() | nil) :: term() | nil
+  def ordered_by(%{window: window}), do: window
+  def ordered_by(nil), do: nil
 
   @doc false
   # Whether the origin lays chunks in event time: a window field and a span.
@@ -272,7 +282,12 @@ defmodule Macaw.Data.Table.Origin do
 
   defp spanned(value, _span), do: at(value)
 
-  # The first index whose position comes before the one before it.
+  @doc false
+  # The first index whose position comes before the one before it, `nil` last; `nil` when
+  # the positions are in order.
+  @spec unsorted([number() | nil]) :: non_neg_integer() | nil
+  def unsorted(positions), do: unsorted(positions, :start, 0)
+
   defp unsorted([], _previous, _i), do: nil
 
   defp unsorted([p | rest], previous, i),

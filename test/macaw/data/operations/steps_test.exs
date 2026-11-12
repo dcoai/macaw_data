@@ -536,12 +536,56 @@ defmodule Macaw.Data.Operations.StepsTest do
 
   describe "the table's sorted column and its edge (spec/01 §1.1)" do
     @tag verifies: "table-sorted"
-    test "a source's table in event time is sorted by its window field, rows by none" do
+    test "a source's table naming a window field is sorted by it, with a span or by row count; rows by none" do
       assert Table.sorted(source(10)) == "t"
       assert Table.sorted(Table.new!(columns([1], [1], ["a"], ["s"]))) == nil
 
-      by_count = Table.new!(columns([1], [1], ["a"], ["s"]), origin: %{@origin | span: nil})
-      assert Table.sorted(by_count) == nil
+      # By row count (no span), the window field still orders the rows (macaw_data#239).
+      by_count = %{@origin | span: nil}
+      assert Table.sorted(Table.new!(columns([1], [1], ["a"], ["s"]), origin: by_count)) == "t"
+
+      gapped = Table.new!(columns([1, 2, nil], [1, 2, 3], ~w(a a a), ~w(s s s)), origin: by_count)
+      assert Table.sorted(gapped) == "t"
+
+      assert Table.new(columns([1, 3, 2], [1, 2, 3], ~w(a a a), ~w(s s s)), origin: by_count) ==
+               {:error, [{[:origin, :window], {:unsorted, 2}}]}
+
+      assert Table.new(columns([1, nil, 2], [1, 2, 3], ~w(a a a), ~w(s s s)), origin: by_count) ==
+               {:error, [{[:origin, :window], {:unsorted, 2}}]}
+
+      # No window field named: sorted by none.
+      none_named = %{@origin | window: nil, span: nil}
+
+      assert Table.sorted(
+               Table.new!(columns([3, 1], [1, 2], ~w(a a), ~w(s s)), origin: none_named)
+             ) == nil
+
+      # It stays sorted, and in order, through apply/2 with a late row, append/2, trim/2
+      # and compact/1.
+      held = Table.new!(columns([1, 5, 9], [1, 5, 9], ~w(a a a), ~w(s s s)), origin: by_count)
+
+      {applied, [], 0} =
+        Table.apply(held, %{
+          insert: [
+            %{"t" => 3, "v" => 3, "k" => "a", "s" => "s"},
+            %{"t" => 11, "v" => 11, "k" => "a", "s" => "s"}
+          ]
+        })
+
+      assert Table.sorted(applied) == "t"
+      assert Table.column(applied, "t") == [1, 3, 5, 9, 11]
+
+      {:ok, appended} =
+        Table.append(applied, Table.new!(columns([12], [12], ["a"], ["s"]), origin: by_count))
+
+      assert Table.sorted(appended) == "t"
+      assert Table.column(appended, "t") == [1, 3, 5, 9, 11, 12]
+
+      assert Table.append(applied, Table.new!(columns([2], [2], ["a"], ["s"]), origin: by_count)) ==
+               {:error, {:unsorted, 0}}
+
+      assert Table.sorted(Table.trim(appended, 2)) == "t"
+      assert Table.sorted(Table.compact(appended)) == "t"
 
       [{chunk, _, _}] = Table.chunks(source(10))
       {:ok, kept} = Table.from_chunks(header(), [chunk], sorted: "t")
