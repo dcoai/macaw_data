@@ -40,6 +40,7 @@ defmodule Macaw.Data.Test.Sources do
       :reducer_claim,
       :snapshot_ahead,
       :resolution_lie,
+      :resolution_drift,
       :window_overrun,
       :budget_overrun,
       :push_undeclared,
@@ -167,8 +168,9 @@ defmodule Macaw.Data.Test.Sources do
       delivery =
         Delivery.new!([row(t, 1, flaw)],
           types: types(flaw),
-          # At the subscription's resolution, as its fetches state it (spec/01 §4.3).
-          served: [window: [t, t], resolution: 1],
+          # At the subscription's resolution, as its fetches state it (spec/01 §4.3); the
+          # drifting flaw states none.
+          served: [window: [t, t], resolution: if(flaw != :resolution_drift, do: 1)],
           schema: Schema.version(schema)
         )
 

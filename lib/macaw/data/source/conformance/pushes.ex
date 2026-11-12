@@ -5,6 +5,7 @@ defmodule Macaw.Data.Source.Conformance.Pushes do
   # schemas they name. Ported from visualize's `Visualize.Feed.Conformance`.
 
   alias Macaw.Data.{Delivery, Schema, Source}
+  alias Macaw.Data.Source.Request
   alias Macaw.Data.Source.Conformance.{Call, Deliveries}
 
   @doc false
@@ -65,40 +66,104 @@ defmodule Macaw.Data.Source.Conformance.Pushes do
   end
 
   @doc false
+  # The subscription's snapshot fetched as a holder fetches it on handoff (spec/01 §4.1):
+  # the first request, no budget, naming the subscription. `{:ok, resolution}`, its
+  # `served.resolution`, or the findings of a fetch that answers no delivery.
+  def subscribed_fetch(source, description, ref, o) do
+    ask = List.first(o.requests) || []
+    probe = {:subscribed, ask}
+
+    with {:ok, request} <- subscribed_request(ask, ref, o),
+         {:ok, {:ok, %Delivery{served: served}}} when is_map(served) <-
+           call(fn -> Source.fetch(source, description, request) end, {:fetch, probe}, o) do
+      {:ok, Map.get(served, :resolution)}
+    else
+      {:error, {:request, faults}} -> [{:probe, ask, faults}]
+      {:ok, {:error, {:bad_fetch, other}}} -> [{:not_a_delivery, probe, other}]
+      {:ok, {:error, reason}} -> [{:fetch_error, probe, reason}]
+      {:ok, other} -> [{:not_a_delivery, probe, other}]
+      {:error, fault} -> [fault]
+    end
+  end
+
+  defp subscribed_request(ask, ref, o) do
+    case Request.new(ask ++ [now: o.now, viewer: hd(o.viewers), subscription: ref]) do
+      {:ok, request} -> {:ok, request}
+      {:error, faults} -> {:error, {:request, faults}}
+    end
+  end
+
+  @doc false
   # The handshake first, then every delivery after the schema it names; a snapshot
   # stating its position, and the increments numbered one past it, or from 1 with none,
-  # each one past the last (spec/01 §4.1).
-  def sequence(handshake, messages, o) do
+  # each one past the last (spec/01 §4.1); and every increment at the resolution of the
+  # subscription's first snapshot (§4.3). `before` arrived before the subscription's own
+  # fetch, whose answer `fetched` is (`{:ok, resolution}`, or findings), and `messages`
+  # after it: the first snapshot in that order fixes the resolution.
+  def sequence(handshake, before, fetched, messages, o) do
     {known, faults} =
       case handshake do
         {:schema, %Schema{} = schema} -> {%{schema.version => schema}, pushed_schema(schema)}
         other -> {%{}, [{:handshake, other}]}
       end
 
-    {_known, _next, faults, delivered?} =
-      Enum.reduce(messages, {known, 1, faults, false}, fn
-        {:schema, %Schema{} = schema}, {known, next, faults, delivered?} ->
-          {Map.put(known, schema.version, schema), next, faults ++ pushed_schema(schema),
-           delivered?}
+    state = %{known: known, next: 1, faults: faults, delivered?: false, held: nil}
+    state = Enum.reduce(before, state, &message(&1, &2, o))
 
-        {:snapshot, %Delivery{served: %{position: p}} = delivery}, {known, next, faults, d?} ->
-          faults = faults ++ pushed_delivery(delivery, known, o)
+    state =
+      case fetched do
+        {:ok, resolution} -> held(state, resolution)
+        findings -> %{state | faults: state.faults ++ findings}
+      end
 
-          if is_integer(p),
-            do: {known, p + 1, faults, d?},
-            else: {known, next, faults ++ [{:snapshot_position, p}], d?}
+    state = Enum.reduce(messages, state, &message(&1, &2, o))
 
-        {:increment, seq, %Delivery{} = delivery}, {known, next, faults, _delivered?} ->
-          numbering = if seq == next, do: [], else: [{:numbering, next, seq}]
-          faults = faults ++ numbering ++ pushed_delivery(delivery, known, o)
-          {known, next_after(seq, next), faults, true}
-
-        other, {known, next, faults, delivered?} ->
-          {known, next, faults ++ [{:not_a_message, other}], delivered?}
-      end)
-
-    if delivered?, do: faults, else: faults ++ [{:no_delivery, o.timeout}]
+    if state.delivered?,
+      do: state.faults,
+      else: state.faults ++ [{:no_delivery, o.timeout}]
   end
+
+  defp message({:schema, %Schema{} = schema}, state, _o) do
+    %{
+      state
+      | known: Map.put(state.known, schema.version, schema),
+        faults: state.faults ++ pushed_schema(schema)
+    }
+  end
+
+  defp message({:snapshot, %Delivery{served: %{position: p}} = delivery}, state, o) do
+    state = held(state, delivery.served.resolution)
+    faults = state.faults ++ pushed_delivery(delivery, state.known, o)
+
+    if is_integer(p),
+      do: %{state | next: p + 1, faults: faults},
+      else: %{state | faults: faults ++ [{:snapshot_position, p}]}
+  end
+
+  defp message({:increment, seq, %Delivery{} = delivery}, state, o) do
+    numbering = if seq == state.next, do: [], else: [{:numbering, state.next, seq}]
+
+    faults =
+      state.faults ++
+        numbering ++
+        resolution(state.held, delivery.served.resolution) ++
+        pushed_delivery(delivery, state.known, o)
+
+    %{state | next: next_after(seq, state.next), faults: faults, delivered?: true}
+  end
+
+  defp message(other, state, _o), do: %{state | faults: state.faults ++ [{:not_a_message, other}]}
+
+  # The first snapshot's resolution is the subscription's; a later one changes nothing.
+  defp held(%{held: nil} = state, resolution), do: %{state | held: {:held, resolution}}
+  defp held(state, _resolution), do: state
+
+  # An increment at another resolution than the subscription's (`nil` equal only to `nil`),
+  # which every holder refuses (spec/01 §4.3); none to compare with before a snapshot.
+  defp resolution({:held, expected}, got) when expected !== got,
+    do: [{:resolution, expected, got}]
+
+  defp resolution(_held, _got), do: []
 
   defp next_after(seq, next) when is_integer(seq), do: max(seq, next - 1) + 1
   defp next_after(_seq, next), do: next

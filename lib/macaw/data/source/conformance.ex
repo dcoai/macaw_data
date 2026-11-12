@@ -276,7 +276,7 @@ defmodule Macaw.Data.Source.Conformance do
   # -- push ----------------------------------------------------------------------------------
 
   defp run(:push, source, o) do
-    with {:ok, %Description{supports: supports}} <- described(source, o),
+    with {:ok, %Description{supports: supports} = description} <- described(source, o),
          true <- :push in supports || [],
          true <- o.push != nil || [{:no_probe, :push}],
          {:ok, ref} <- Pushes.subscribed(source, o) do
@@ -287,6 +287,10 @@ defmodule Macaw.Data.Source.Conformance do
           0 -> :nothing
         end
 
+      # What arrived before the subscription's own snapshot fetch, then the fetch: the
+      # first snapshot of either fixes the subscription's resolution (spec/01 §4.3).
+      before = Pushes.collect(ref, System.monotonic_time(:millisecond), 0, false, [])
+      fetched = Pushes.subscribed_fetch(source, description, ref, o)
       pushed = Pushes.stimulate(source, o)
 
       messages =
@@ -295,7 +299,7 @@ defmodule Macaw.Data.Source.Conformance do
       Pushes.unsubscribed(source, ref, o)
       Pushes.flush(ref)
 
-      Pushes.sequence(handshake, messages, o) ++ pushed
+      Pushes.sequence(handshake, before, fetched, messages, o) ++ pushed
     end
   end
 

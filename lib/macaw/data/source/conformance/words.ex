@@ -247,6 +247,11 @@ defmodule Macaw.Data.Source.Conformance.Words do
       "a pushed increment is numbered #{inspect(got)}, not #{expected}: increments are numbered " <>
         "from 1, or one past a snapshot's position, each one past the last"
 
+  def words({:resolution, expected, got}),
+    do:
+      "a pushed increment is at the resolution #{inspect(got)}, not the subscription's " <>
+        "#{inspect(expected)} (its first snapshot's): every holder refuses it and refetches"
+
   def words({:snapshot_position, got}),
     do:
       "a pushed snapshot states the position #{inspect(got)}, not the number of the last " <>
@@ -311,6 +316,7 @@ defmodule Macaw.Data.Source.Conformance.Words do
   defp rows(n), do: "#{n} rows"
 
   defp probe(:push), do: "a pushed delivery"
+  defp probe({:subscribed, ask}), do: "the subscription's snapshot fetch #{inspect(ask)}"
   defp probe({ask, nil}), do: "fetch #{inspect(ask)}"
   defp probe({ask, budget}), do: "fetch #{inspect(ask)} with budget #{budget}"
 

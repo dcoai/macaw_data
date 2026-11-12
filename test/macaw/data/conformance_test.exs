@@ -83,6 +83,64 @@ defmodule Macaw.Data.ConformanceTest do
       do: Delivery.new([%{t: 1, v: 1}, %{t: 2, v: "x"}], schema: Schema.version(@schema))
   end
 
+  # Broken pushing a snapshot of its own on subscribe, at a resolution of its choosing,
+  # after the handshake: the subscription's first snapshot is that one, not its fetch.
+  defmodule Snapshotting do
+    @moduledoc false
+    @behaviour Macaw.Data.Source
+    alias Macaw.Data.Source.{Push, Request}
+    alias Macaw.Data.Test.Sources.Broken
+    defstruct [:broken, :resolution]
+
+    def new(resolution), do: %__MODULE__{broken: Broken.new(), resolution: resolution}
+    def emit(%__MODULE__{broken: broken}), do: Broken.emit(broken)
+
+    @impl true
+    def describe(%__MODULE__{broken: broken}, context), do: Broken.describe(broken, context)
+
+    @impl true
+    def fetch(%__MODULE__{broken: broken}, request), do: Broken.fetch(broken, request)
+
+    @impl true
+    def subscribe(%__MODULE__{broken: broken, resolution: resolution}, pid) do
+      {:ok, ref} = Broken.subscribe(broken, pid)
+      {:ok, request} = Request.new(now: DateTime.utc_now(), subscription: ref)
+      {:ok, description} = Broken.describe(broken, nil)
+      {:ok, delivery} = Macaw.Data.Source.fetch(broken, description, request)
+      served = %{delivery.served | position: 0, resolution: resolution}
+      send(pid, Push.snapshot_message(ref, %{delivery | served: served}))
+      {:ok, ref}
+    end
+
+    @impl true
+    def unsubscribe(%__MODULE__{broken: broken}, ref), do: Broken.unsubscribe(broken, ref)
+  end
+
+  @tag verifies: "conformance-push-resolution"
+  test "the push check holds every increment to the subscription's first snapshot's resolution" do
+    # Fetched for the subscription (Broken pushes no snapshot): its fetch states 1, the
+    # drifting increments none, and a lying fetch 2 against increments at 1.
+    for {source, expected, got} <- [
+          {Broken.new(:resolution_drift), 1, nil},
+          {Broken.new(:resolution_lie), 2, 1}
+        ] do
+      assert [{:push, {:resolution, ^expected, ^got}} = finding] =
+               Conformance.check(:push, source, @opts)
+
+      assert Conformance.format(finding) =~ "resolution"
+    end
+
+    # Pushed: a snapshot on subscribe fixes the resolution before the fetch is asked.
+    opts = Keyword.put(@opts, :push, &Snapshotting.emit/1)
+    assert [] == Conformance.check(:push, Snapshotting.new(1), opts)
+
+    assert [{:push, {:resolution, :minute, 1}}] =
+             Conformance.check(:push, Snapshotting.new(:minute), opts)
+
+    # Honest sources keep passing.
+    assert [] == Conformance.check(:push, Broken.new(), @opts)
+  end
+
   @tag verifies: "conformance-monitor"
   test "the monitor check: honest sources pass; a snapshot ahead, rows that do not pack and a moving answer fail" do
     assert Conformance.check(:monitor, Broken.new(), @opts) == []
@@ -127,6 +185,7 @@ defmodule Macaw.Data.ConformanceTest do
     no_handshake: {:push, :handshake},
     data_before_schema: {:push, :before_schema},
     misnumbered: {:push, :numbering},
+    resolution_drift: {:push, :resolution},
     raises: {:errors, :raised},
     ticks_as_time: {:deliveries, :window_value},
     no_window_field: {:describe, :no_window_field},
