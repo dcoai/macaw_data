@@ -101,6 +101,10 @@ defmodule Macaw.Data.Source.Conformance.Words do
     do:
       "#{probe(probe)}: capped is false, but the source holds #{rows(count)} in the asked window before where it served from"
 
+  def words({:reduced_with, probe, reducer}),
+    do:
+      "#{probe(probe)}: reduced_with is #{inspect(reducer)}, but the source did not reduce the rows (reduced_by is not :source)"
+
   def words({:reduced_by, probe, by}),
     do: "#{probe(probe)}: reduced_by is #{inspect(by)}, which is not true of this delivery"
 

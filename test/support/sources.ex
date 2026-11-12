@@ -37,6 +37,7 @@ defmodule Macaw.Data.Test.Sources do
       :stale_not_boolean,
       :reduction_unrecorded,
       :runtime_claim,
+      :reducer_claim,
       :resolution_lie,
       :window_overrun,
       :budget_overrun,
@@ -291,13 +292,14 @@ defmodule Macaw.Data.Test.Sources do
       rows
       |> Delivery.new!(
         types: types(flaw),
-        served: [
-          window: [if(flaw == :served_window_lie, do: lo + 2, else: lo), hi],
-          resolution: if(flaw == :resolution_lie, do: 2, else: step),
-          capped: flaw == :capped_lie and from != nil,
-          stale: flaw == :stale,
-          reduced_by: reduced_by
-        ],
+        served:
+          [
+            window: [if(flaw == :served_window_lie, do: lo + 2, else: lo), hi],
+            resolution: if(flaw == :resolution_lie, do: 2, else: step),
+            capped: flaw == :capped_lie and from != nil,
+            stale: flaw == :stale,
+            reduced_by: reduced_by
+          ] ++ reducer_claim(flaw),
         origin: origin,
         schema:
           if(flaw == :stale_version,
@@ -313,6 +315,10 @@ defmodule Macaw.Data.Test.Sources do
       do: %{delivery | served: %{delivery.served | stale: "yes"}}
 
     defp stale_fact(delivery, _flaw), do: delivery
+
+    # A reducer named for rows the source did not reduce (macaw_data#246).
+    defp reducer_claim(:reducer_claim), do: [reduced_with: {"m4", 2}]
+    defp reducer_claim(_flaw), do: []
 
     # What three flaws add to every value: a count of the fetches (an answer moving with a
     # clock of the source's own), the viewer, or `now` where `as_of` was asked.

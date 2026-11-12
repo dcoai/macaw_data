@@ -12,7 +12,7 @@ defmodule Macaw.Data.Source.Finish do
   5. `:order`: the rows sorted by the request's order (`Macaw.Data.Source.Order`),
      `ordered: :runtime`, or `ordered: :sample` where the source had already cut them;
   6. `:budget`: the rows reduced to the budget by a registered reducer (`reduce/5`, spec/04
-     §7), or, for an ordered delivery, kept to its first `budget` rows; `reduced_by:
+     §7), the request's own at its count where it names one, or, for an ordered delivery, kept to its first `budget` rows; `reduced_by:
      :runtime`.
 
   The budget never widens the window: finishing only removes rows. A delivery that needs
@@ -39,7 +39,8 @@ defmodule Macaw.Data.Source.Finish do
 
   @doc """
   The delivery finished for the request, each step where the description's `supports`
-  lacks it: `{:ok, delivery}`, or `{:error, faults}` (spec/01 §2.4, spec/00 §5). `reduce:`
+  lacks it: `{:ok, delivery}`, or `{:error, faults}` (spec/01 §2.4, spec/00 §5). The
+  request's `reduce` names the reader's reducer (spec/01 §2.3, macaw_data#246); else `reduce:`
   names the budget's reducer by spelling, a registered transform that declares
   `reduces/0` (`"lttb"`, the default, or `"m4"` in `macaw_data`'s own package), and
   `operations:` is the registry it is found in (`macaw_data`'s own by default).
@@ -47,8 +48,9 @@ defmodule Macaw.Data.Source.Finish do
   The request is the caller's, so each fault is answered before any step runs:
   `Macaw.Data.Window.check/2`'s faults for a request the schema cannot answer,
   `{[:reduce], {:unknown, :reducer, name}}` for a name that is no registered reducer
-  (spec/04 §7), and `{[key], :unknown_key}` for an option `finish/4` does not take. A
-  step that must read tuple rows without names answers `Delivery.named_rows/1`'s fault,
+  (spec/04 §7), the request's own or `reduce:`'s, `{[:reduce], {:least, least}}` for a
+  request's count below its reducer's least, and `{[key], :unknown_key}` for an option
+  `finish/4` does not take. A step that must read tuple rows without names answers `Delivery.named_rows/1`'s fault,
   and a reading the reducer cannot place `{[:rows, field], reason}` (`reduce/5`).
   `finish!/4` answers the delivery or raises.
   """
@@ -63,7 +65,7 @@ defmodule Macaw.Data.Source.Finish do
     field = Schema.window_field(schema)
 
     with {:ok, opts} <- options(opts),
-         {:ok, reducer} <- reducer(opts[:operations], opts[:reduce]),
+         {:ok, plan} <- plan(opts[:operations], request.reduce, opts[:reduce]),
          :ok <- Window.check(request, schema),
          {:ok, d} <-
            step(delivery, :window in supports or request.window == nil or field == nil, fn d ->
@@ -89,7 +91,7 @@ defmodule Macaw.Data.Source.Finish do
       step(
         d,
         :budget in supports,
-        &reduced(&1, schema, request.budget, reducer, opts[:operations])
+        &reduced(&1, schema, request.budget, plan, opts[:operations])
       )
     end
   end
@@ -241,7 +243,14 @@ defmodule Macaw.Data.Source.Finish do
   `reduces/0` counts, never below the least its option takes, and
   the union of the kept rows returned whole, in their order, never more than the budget.
   A `nil` budget, a delivery within it, and a schema with no `:number` field to reduce by
-  come back as they are.
+  come back as they are. It records `reduced_with: {name, c}`.
+
+  **A reader's request in the budget's place** (spec/01 §6.1, macaw_data#246) reduces by
+  that request's reducer (`reduce:`, spec/01 §2.3), else by `method`, to its `budget`: a
+  reducer it names at its own count reduces each series and field to that count, the
+  budget, when it has one, still capping the union; `:none` keeps every row up to the
+  budget, which is then only a ceiling, an even stride keeping the first and the last.
+  So each reader of a pooled fetch is reduced its own way.
 
   **An ordered delivery keeps its head** (spec/01 §2.4): one whose `served.ordered` is
   set holds its rows in a reader's order, and a reader that orders rows wants the first
@@ -249,7 +258,8 @@ defmodule Macaw.Data.Source.Finish do
   any reducer. So a pooled fetch's ordered rows reduce to each reader's own head.
 
   `{:ok, delivery}`, or `{:error, faults}` (spec/00 §5): `{[:reduce], {:unknown, :reducer,
-  name}}` for a name that is no registered reducer, `Delivery.named_rows/1`'s fault for
+  name}}` for a name that is no registered reducer, `{[:reduce], {:least, least}}` for a
+  request's count below the least its reducer takes, `Delivery.named_rows/1`'s fault for
   tuple rows without names, and `{[:rows, field], reason}` for a field's reading the
   reducer cannot place (a number field holding a string: `{:reads, :number}`).
   `reduce!/5` answers the delivery or raises.
@@ -260,17 +270,34 @@ defmodule Macaw.Data.Source.Finish do
       iex> {length(Delivery.rows!(reduced)), reduced.served.reduced_by}
       {10, :runtime}
   """
-  @spec reduce(Delivery.t(), Schema.t(), pos_integer() | nil, String.t() | atom(), Registry.t()) ::
+  @spec reduce(
+          Delivery.t(),
+          Schema.t(),
+          pos_integer() | nil | Request.t(),
+          String.t() | atom(),
+          Registry.t()
+        ) ::
           {:ok, Delivery.t()} | {:error, [{list(), term()}, ...]}
   def reduce(delivery, schema, budget, method \\ "lttb", registry \\ Operations.registry())
 
+  def reduce(%Delivery{} = delivery, %Schema{} = schema, %Request{} = request, method, registry) do
+    with {:ok, plan} <- plan(registry, request.reduce, method),
+         do: reduced(delivery, schema, request.budget, plan, registry)
+  end
+
   def reduce(%Delivery{} = delivery, %Schema{} = schema, budget, method, %Registry{} = registry) do
-    with {:ok, reducer} <- reducer(registry, method),
-         do: reduced(delivery, schema, budget, reducer, registry)
+    with {:ok, plan} <- plan(registry, nil, method),
+         do: reduced(delivery, schema, budget, plan, registry)
   end
 
   @doc "As `reduce/5`, the delivery alone, raising `Macaw.Data.Error` naming the faults."
-  @spec reduce!(Delivery.t(), Schema.t(), pos_integer() | nil, String.t() | atom(), Registry.t()) ::
+  @spec reduce!(
+          Delivery.t(),
+          Schema.t(),
+          pos_integer() | nil | Request.t(),
+          String.t() | atom(),
+          Registry.t()
+        ) ::
           Delivery.t()
   def reduce!(delivery, schema, budget, method \\ "lttb", registry \\ Operations.registry()) do
     case reduce(delivery, schema, budget, method, registry) do
@@ -282,32 +309,82 @@ defmodule Macaw.Data.Source.Finish do
     end
   end
 
-  defp reduced(%Delivery{} = delivery, _schema, nil, _reducer, _registry), do: {:ok, delivery}
+  # How the rows may be reduced (macaw_data#246): the request's reducer at its own count
+  # (`{:count, reducer, count}`), none (`:none`), or, with the request naming none, the
+  # finishing call's reducer sharing the budget (`{:share, reducer}`). Every fault of the
+  # request's reducer is answered here, before any step.
+  defp plan(registry, :none, _method) do
+    with {:ok, _reducer} <- registry_of(registry), do: {:ok, :none}
+  end
 
-  defp reduced(%Delivery{served: %{ordered: by}} = delivery, _schema, budget, _reducer, _registry)
-       when by != nil and is_integer(budget) and budget > 0 do
+  defp plan(registry, {name, count}, _method) do
+    with {:ok, {_module, _option, _per, least} = reducer} <- reducer(registry, name) do
+      if count >= least,
+        do: {:ok, {:count, reducer, count}},
+        else: {:error, [{[:reduce], {:least, least}}]}
+    end
+  end
+
+  defp plan(registry, nil, method) do
+    with {:ok, reducer} <- reducer(registry, method), do: {:ok, {:share, reducer}}
+  end
+
+  defp registry_of(%Registry{} = registry), do: {:ok, registry}
+  defp registry_of(_other), do: {:error, [{[:operations], {:type, :registry}}]}
+
+  # No budget: only a reducer the request names at its own count reduces.
+  defp reduced(%Delivery{} = delivery, _schema, nil, :none, _registry), do: {:ok, delivery}
+  defp reduced(%Delivery{} = delivery, _schema, nil, {:share, _}, _registry), do: {:ok, delivery}
+
+  # An ordered delivery is never shaped by a reducer: its head, under a budget.
+  defp reduced(%Delivery{served: %{ordered: by}} = delivery, _schema, budget, _plan, _registry)
+       when by != nil do
     with {:ok, form} <- form(delivery) do
-      if size(form) <= budget,
+      if budget == nil or size(form) <= budget,
         do: {:ok, delivery},
         else: {:ok, delivery |> keep(form, 0..(budget - 1)) |> serve(:reduced_by, :runtime)}
     end
   end
 
-  defp reduced(%Delivery{} = delivery, schema, budget, reducer, registry)
-       when is_integer(budget) and budget > 0 do
+  # No reduction: every row up to the budget, which is only a ceiling.
+  defp reduced(%Delivery{} = delivery, _schema, budget, :none, _registry) do
+    with {:ok, form} <- form(delivery) do
+      n = size(form)
+
+      if n <= budget,
+        do: {:ok, delivery},
+        else:
+          {:ok,
+           delivery
+           |> keep(form, at_most(Enum.to_list(0..(n - 1)), budget))
+           |> serve(:reduced_by, :runtime)}
+    end
+  end
+
+  defp reduced(%Delivery{} = delivery, schema, budget, plan, registry) do
     clock = Schema.window_field(schema)
     numbers = for {name, %{type: :number}} <- schema.fields, name != clock, do: name
 
     with {:ok, form} <- form(delivery) do
-      if size(form) <= budget or numbers == [] do
+      n = size(form)
+
+      if numbers == [] or (elem(plan, 0) == :share and n <= budget) do
         {:ok, delivery}
       else
         numbers = Enum.sort_by(numbers, &to_string/1)
 
-        with {:ok, kept} <- kept(form, schema, numbers, budget, reducer, registry),
-             do:
-               {:ok,
-                delivery |> keep(form, at_most(kept, budget)) |> serve(:reduced_by, :runtime)}
+        with {:ok, kept, used} <- kept(form, schema, numbers, budget, plan, registry) do
+          kept = if budget, do: at_most(kept, budget), else: kept
+
+          if elem(plan, 0) == :count and length(kept) == n,
+            do: {:ok, delivery},
+            else:
+              {:ok,
+               delivery
+               |> keep(form, kept)
+               |> serve(:reduced_by, :runtime)
+               |> serve(:reduced_with, used)}
+        end
       end
     end
   end
@@ -347,7 +424,7 @@ defmodule Macaw.Data.Source.Finish do
   # The indexes, ascending, of the rows each series' reducer keeps, field by field: a
   # series the rows sharing every `:category` field's value, each field's readings and
   # the window field's positions read once, by index.
-  defp kept(form, schema, numbers, budget, method, registry) do
+  defp kept(form, schema, numbers, budget, plan, registry) do
     categories =
       Enum.sort_by(for({name, %{type: :category}} <- schema.fields, do: name), &to_string/1)
 
@@ -367,8 +444,8 @@ defmodule Macaw.Data.Source.Finish do
           |> Map.values()
       end
 
-    share = length(groups) * length(numbers)
-    node = node!(method, budget, share, registry)
+    {method, count} = count(plan, budget, length(groups) * length(numbers))
+    node = node!(method, count, registry)
     readings = readings(form, time, numbers)
 
     result =
@@ -381,16 +458,24 @@ defmodule Macaw.Data.Source.Finish do
           error
       end
 
-    with {:ok, kept} <- result, do: {:ok, kept |> MapSet.to_list() |> Enum.sort()}
+    with {:ok, kept} <- result,
+         do: {:ok, kept |> MapSet.to_list() |> Enum.sort(), {elem(method, 0).name(), count}}
   end
 
+  # The reducer and its count: the request's own, or the budget's share in the units the
+  # reducer counts, never below its least.
+  defp count({:count, reducer, count}, _budget, _share), do: {reducer, count}
+
+  defp count({:share, {_module, _option, per, least} = reducer}, budget, share),
+    do: {reducer, max(least, div(budget, per * share))}
+
   # The reducer's node, checked as any node is, its defaults filled in: `fields` the x and
-  # y columns, the count the budget's share in the units it counts, never below its least.
-  defp node!({module, count, per, least}, budget, share, registry) do
+  # y columns, the count its option.
+  defp node!({module, option, _per, _least}, count, registry) do
     node = %{
       "op" => module.name(),
       "fields" => ["x", "y"],
-      count => max(least, div(budget, per * share))
+      option => count
     }
 
     {:ok, [checked]} = Operations.validate(registry, [node], %{})
@@ -544,12 +629,20 @@ defmodule Macaw.Data.Source.Finish do
 
   @doc """
   The budget a pooled fetch asks for: the largest among its readers' (spec/01 §6), `nil`
-  when any reader wants every row.
+  when any reader wants every row. A reader is its budget or its request (macaw_data#246):
+  a request asking `reduce: :none`, or with no budget, wants every row, so readers with
+  different reducers share one fetch, each then reduced its own way by `reduce/5`.
 
       iex> Macaw.Data.Source.Finish.pooled([100, 4_000, 250])
       4000
   """
-  @spec pooled([pos_integer() | nil, ...]) :: pos_integer() | nil
-  def pooled([_ | _] = budgets),
-    do: if(Enum.member?(budgets, nil), do: nil, else: Enum.max(budgets))
+  @spec pooled([pos_integer() | nil | Request.t(), ...]) :: pos_integer() | nil
+  def pooled([_ | _] = readers) do
+    budgets = Enum.map(readers, &wants/1)
+    if Enum.member?(budgets, nil), do: nil, else: Enum.max(budgets)
+  end
+
+  defp wants(%Request{reduce: :none}), do: nil
+  defp wants(%Request{budget: budget}), do: budget
+  defp wants(budget), do: budget
 end

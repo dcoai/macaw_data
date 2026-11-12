@@ -78,6 +78,7 @@ defmodule Macaw.Data.ConformanceTest do
     uncapped_lie: {:deliveries, :uncapped},
     reduction_unrecorded: {:deliveries, :unrecorded_reduction},
     runtime_claim: {:deliveries, :reduced_by},
+    reducer_claim: {:deliveries, :reduced_with},
     resolution_lie: {:deliveries, :resolution},
     window_overrun: {:supports, :window_served},
     budget_overrun: {:supports, :over_budget},

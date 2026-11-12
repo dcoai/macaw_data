@@ -29,6 +29,8 @@ defmodule Macaw.Data.Delivery do
       answer); a fact of this one answer, as `capped` is, not a capability;
     - `reduced_by`: who brought the rows within budget, `:source` or `:runtime`, or `nil`
       when nobody had to;
+    - `reduced_with`: the reducer that shaped the rows, `{name, count}` (`{"m4", 800}`), or
+      `nil` when no reducer did (spec/01 §2.4, macaw_data#246);
     - `ordered`: who put the rows in the request's `order` (spec/01 §2.4): `:source`, which
       served its first rows in it; `:runtime`, which ordered every row the source served
       and kept the first; `:sample`, which ordered rows the source had already cut (its
@@ -94,6 +96,7 @@ defmodule Macaw.Data.Delivery do
     capped: false,
     stale: false,
     reduced_by: nil,
+    reduced_with: nil,
     ordered: nil,
     params: %{},
     note: nil,
@@ -114,6 +117,7 @@ defmodule Macaw.Data.Delivery do
           capped: boolean(),
           stale: boolean(),
           reduced_by: :source | :runtime | nil,
+          reduced_with: {String.t() | atom(), pos_integer()} | nil,
           ordered: :source | :runtime | :sample | nil,
           params: map(),
           note: String.t() | nil,
@@ -153,8 +157,8 @@ defmodule Macaw.Data.Delivery do
     `{[:opts], {:type, :keyword}}` options that are not a keyword list;
   - `{[:served, fact], :unknown_key}`: a fact that is not a served fact, and
     `{[:served, fact], reason}` a value it does not take: `{:type, :window}`,
-    `{:type, :boolean}`, `{:enum, values}`, `{:type, :map}`, `{:type, :string}`,
-    `{:type, :non_neg_integer}` or `{:type, :instant}`; `{[:served], {:type, :keyword}}`
+    `{:type, :boolean}`, `{:enum, values}`, `{:type, :reducer}`, `{:type, :map}`,
+    `{:type, :string}`, `{:type, :non_neg_integer}` or `{:type, :instant}`; `{[:served], {:type, :keyword}}`
     for served facts that are neither a keyword list nor a map;
   - `{[:names], {:type, :names}}`, `{[:types], {:type, :map}}`,
     `{[:schema], {:type, :version}}` and `{[:origin], {:type, :origin}}`;
@@ -364,6 +368,10 @@ defmodule Macaw.Data.Delivery do
   defp why(_path, {:type, :keyword}), do: "not a keyword list or a map"
   defp why(_path, {:type, :window}), do: "not a range [from, to], a box or nil (spec/01 §3)"
   defp why(_path, {:type, :boolean}), do: "not a boolean"
+
+  defp why(_path, {:type, :reducer}),
+    do: "not a reducer and its count, {name, count}, or nil (spec/01 §3)"
+
   defp why(_path, {:type, :map}), do: "not a map"
   defp why(_path, {:type, :string}), do: "not a string or nil"
   defp why(_path, {:type, :non_neg_integer}), do: "not a non-negative integer"
@@ -465,6 +473,14 @@ defmodule Macaw.Data.Delivery do
   defp check(:stale, _other), do: [{[:served, :stale], {:type, :boolean}}]
   defp check(:reduced_by, by) when by in @reduced_by, do: []
   defp check(:reduced_by, _other), do: [{[:served, :reduced_by], {:enum, @reduced_by}}]
+  defp check(:reduced_with, nil), do: []
+
+  defp check(:reduced_with, {name, count})
+       when (is_binary(name) or (is_atom(name) and name != nil)) and is_integer(count) and
+              count > 0,
+       do: []
+
+  defp check(:reduced_with, _other), do: [{[:served, :reduced_with], {:type, :reducer}}]
   defp check(:ordered, by) when by in @ordered, do: []
   defp check(:ordered, _other), do: [{[:served, :ordered], {:enum, @ordered}}]
   defp check(:params, params) when is_map(params) and not is_struct(params), do: []

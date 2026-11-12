@@ -939,12 +939,12 @@ visualize's sandbox allows `Visualize.Data`. A stored function written against i
 
 ## 7. Budget reducers {#operations-reducers}
 
-A budget's reducer (01 §2.4, `:budget`) is **any registered transform declaring `reduces/0`** (§1.1), by name: `lttb` (the default) and `m4` in `macaw_data`'s package, and any an enabled package adds. `Macaw.Data.Source.Finish.finish/4` and `reduce/5` take `reduce:` (a name, by spelling) and `operations:` (the registry, `macaw_data`'s own package by default):
+A budget's reducer (01 §2.4, `:budget`) is **any registered transform declaring `reduces/0`** (§1.1), by name: `lttb` (the default) and `m4` in `macaw_data`'s package, and any an enabled package adds. A request names one with its count (`reduce: {name, count}`, 01 §2.3, macaw_data#246); else `Macaw.Data.Source.Finish.finish/4` and `reduce/5` take `reduce:` (a name, by spelling); and `operations:` is the registry, `macaw_data`'s own package by default:
 
-- each series and number field is reduced as 01 §2.4 says, by the reducer's node `%{fields: [x, y], <count>: c}`. Here `x` is the window field or the row's place, `<count>` is the option `reduces/0` names, and `c = max(min, div(budget, per · share))`, where `per` is the rows a unit keeps, `share` the series times the number fields, and `min` the least its option's type allows (`lttb`: 3; `m4`: 1);
+- each series and number field is reduced as 01 §2.4 says, by the reducer's node `%{fields: [x, y], <count>: c}`. Here `x` is the window field or the row's place, `<count>` is the option `reduces/0` names, and `c` is the request's count when it names one, else `max(min, div(budget, per · share))`, where `per` is the rows a unit keeps, `share` the series times the number fields, and `min` the least its option's type allows (`lttb`: 3; `m4`: 1); a request's count below `min` is `{[:reduce], {:least, min}}`;
 - the union of the kept rows is returned whole, in their order, never more than the budget;
 - **a `reduce:` naming no registered reducer** (unknown, or a transform without `reduces/0`) is the fault `{[:reduce], {:unknown, :reducer, name}}` of `finish/4` and `reduce/5`, which answer `{:ok, delivery}` or `{:error, faults}` (00 §5): the request is the caller's, as a request the schema cannot answer is. A number field's reading the reducer cannot place is `{[:rows, field], reason}`, the reducer's own fault (§3.1). `finish!/4` and `reduce!/5` raise.
 
 ```test:operations-reducers-named
-a budget reduces by lttb by default, by m4 when named, and by a test reducer of an enabled package; an unknown name and a transform that does not reduce are each a fault naming it, and a number field holding a string is the reducer's fault at the field
+a budget reduces by lttb by default, by m4 when named, and by a test reducer of an enabled package, by reduce: or by the request's reducer; an unknown name and a transform that does not reduce are each a fault naming it, and a number field holding a string is the reducer's fault at the field
 ```

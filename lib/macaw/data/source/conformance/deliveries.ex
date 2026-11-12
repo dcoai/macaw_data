@@ -119,6 +119,7 @@ defmodule Macaw.Data.Source.Conformance.Deliveries do
     window = Map.get(served, :window)
     reduced_by = Map.get(served, :reduced_by)
     ordered = Map.get(served, :ordered)
+    reduced_with = Map.get(served, :reduced_with)
 
     faults =
       row_faults ++
@@ -130,7 +131,9 @@ defmodule Macaw.Data.Source.Conformance.Deliveries do
         malformed(:schema, is_nil(d.schema) or is_binary(d.schema), d.schema, probe) ++
         malformed(:resolution, resolution?(Map.get(served, :resolution)), served, probe) ++
         malformed(:ordered, ordered in [nil, :source, :runtime, :sample], ordered, probe) ++
+        malformed(:reduced_with, reducer?(reduced_with), reduced_with, probe) ++
         if(reduced_by == :runtime, do: [{:reduced_by, probe, :runtime}], else: []) ++
+        reduced_with(reduced_with, reduced_by, probe) ++
         if(ordered in [:runtime, :sample], do: [{:ordered, probe, ordered}], else: [])
 
     {faults, rows}
@@ -138,6 +141,19 @@ defmodule Macaw.Data.Source.Conformance.Deliveries do
 
   def well_formed(%Delivery{served: served}, probe, _o),
     do: {[{:malformed, probe, :served, served}], []}
+
+  # A reducer and its count, as a served fact names one (spec/01 §3), or none.
+  defp reducer?(nil), do: true
+
+  defp reducer?({name, count}),
+    do: (is_binary(name) or (is_atom(name) and name != nil)) and is_integer(count) and count > 0
+
+  defp reducer?(_other), do: false
+
+  # A source names the reducer only of rows it reduced itself (macaw_data#246).
+  defp reduced_with(nil, _reduced_by, _probe), do: []
+  defp reduced_with(_reducer, :source, _probe), do: []
+  defp reduced_with(reducer, _reduced_by, probe), do: [{:reduced_with, probe, reducer}]
 
   defp malformed(_field, true, _value, _probe), do: []
   defp malformed(field, false, value, probe), do: [{:malformed, probe, field, value}]

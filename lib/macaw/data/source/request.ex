@@ -16,6 +16,10 @@ defmodule Macaw.Data.Source.Request do
     the first key deciding first, or `[]` for none (`Macaw.Data.Source.Order`): with a
     budget, the reader wants the first rows in it, not a sample;
   - `budget`: the most rows the reader wants, or `nil`;
+  - `reduce`: how the reader's rows may be reduced (macaw_data#246): `{name, count}`, a
+    registered reducer by spelling (an atom or a string, held as the string) and its own
+    count (`{"m4", width}`, `{"lttb", n}`), `:none` for no reduction, or `nil` for the
+    finishing call's reducer (`Macaw.Data.Source.Finish`);
   - `as_of`: the `DateTime` the answer is as of, for a source supporting `:as_of`, or `nil`;
   - `viewer`: the host's viewer, **opaque** here, passed to the source and never stored;
     `nil` is the anonymous viewer;
@@ -36,6 +40,7 @@ defmodule Macaw.Data.Source.Request do
             latest: false,
             order: [],
             budget: nil,
+            reduce: nil,
             as_of: nil,
             viewer: nil,
             now: nil,
@@ -49,6 +54,7 @@ defmodule Macaw.Data.Source.Request do
           latest: boolean(),
           order: Macaw.Data.Source.Order.t(),
           budget: pos_integer() | nil,
+          reduce: {String.t(), pos_integer()} | :none | nil,
           as_of: DateTime.t() | nil,
           viewer: term(),
           now: DateTime.t(),
@@ -63,6 +69,7 @@ defmodule Macaw.Data.Source.Request do
     :latest,
     :order,
     :budget,
+    :reduce,
     :as_of,
     :viewer,
     :now,
@@ -87,7 +94,7 @@ defmodule Macaw.Data.Source.Request do
           if(Map.has_key?(given, :now), do: [], else: [{[:now], :required}])
 
       case Enum.sort_by(faults, &elem(&1, 0)) do
-        [] -> {:ok, struct!(__MODULE__, given)}
+        [] -> {:ok, struct!(__MODULE__, normal(given))}
         faults -> {:error, faults}
       end
     end
@@ -123,6 +130,13 @@ defmodule Macaw.Data.Source.Request do
   defp field(:budget, nil), do: []
   defp field(:budget, n) when is_integer(n) and n > 0, do: []
   defp field(:budget, _), do: [{[:budget], {:type, :pos_integer}}]
+  defp field(:reduce, nil), do: []
+  defp field(:reduce, :none), do: []
+
+  defp field(:reduce, {name, count}) when is_binary(name) or (is_atom(name) and name != nil),
+    do: if(is_integer(count) and count > 0, do: [], else: [{[:reduce], {:type, :pos_integer}}])
+
+  defp field(:reduce, _), do: [{[:reduce], {:type, :reducer}}]
   defp field(:as_of, nil), do: []
   defp field(:as_of, %DateTime{}), do: []
   defp field(:as_of, _), do: [{[:as_of], {:type, :time}}]
@@ -133,6 +147,12 @@ defmodule Macaw.Data.Source.Request do
   defp field(:subscription, ref) when is_reference(ref), do: []
   defp field(:subscription, _), do: [{[:subscription], {:type, :reference}}]
   defp field(key, _) when key not in @fields, do: [{[key], :unknown_key}]
+
+  # A reducer's name held as its spelling, as the registry spells it.
+  defp normal(%{reduce: {name, count}} = given) when is_atom(name),
+    do: %{given | reduce: {Atom.to_string(name), count}}
+
+  defp normal(given), do: given
 
   @doc """
   Whether a value is a box: four bounds in degrees, latitudes from −90 to 90 with `south`
