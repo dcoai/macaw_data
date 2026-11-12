@@ -12,11 +12,12 @@ defmodule Macaw.Data.SourceCombinedTest do
   doctest Combined
 
   # A source answering what it is told, counting its calls: `rows:` a list, or a function of
-  # the request answering `{rows, served}`; `error:` an error for every fetch.
+  # the request answering `{rows, served}`; `error:` an error for every fetch; `described:`
+  # the description's other facts.
   defmodule Scripted do
     @moduledoc false
     @behaviour Macaw.Data.Source
-    defstruct [:schema, :agent, supports: [], rows: [], error: nil, ref: nil]
+    defstruct [:schema, :agent, supports: [], described: [], rows: [], error: nil, ref: nil]
 
     def new(opts) do
       {:ok, agent} = Agent.start_link(fn -> %{fetch: 0, unsubscribe: 0} end)
@@ -26,8 +27,8 @@ defmodule Macaw.Data.SourceCombinedTest do
     def calls(%__MODULE__{agent: agent}, call), do: Agent.get(agent, & &1[call])
 
     @impl true
-    def describe(%__MODULE__{schema: schema, supports: supports}, _context),
-      do: {:ok, %Description{schema: schema, supports: supports}}
+    def describe(%__MODULE__{schema: schema, supports: supports} = s, _context),
+      do: {:ok, struct!(%Description{schema: schema, supports: supports}, s.described)}
 
     @impl true
     def fetch(%__MODULE__{error: error} = s, _request) when error != nil do
@@ -750,6 +751,145 @@ defmodule Macaw.Data.SourceCombinedTest do
         assert {:ok, %Delivery{served: %{stale: true}}} =
                  Source.fetch(combined, description, request)
       end
+    end
+  end
+
+  describe "what the combination is, from its parts" do
+    @floor %{"floor" => %{type: :number, default: nil}}
+
+    # A store holding 0..100 from `first`, honoring windows and a `floor` on `v`, telling
+    # the test each parameter map it is asked.
+    defp floored(first, name, described) do
+      test = self()
+
+      answer = fn %Request{window: window, params: params} ->
+        send(test, {:asked, name, params})
+        [from, to] = window || [nil, nil]
+        floor = params["floor"]
+
+        held =
+          rows(first..100, name)
+          |> Window.trim(:t, [from, to])
+          |> Enum.filter(&(floor == nil or &1.v >= floor))
+
+        {held, [window: [Window.latest(from, first), Window.earliest(to, 100)]]}
+      end
+
+      Scripted.new(schema: @schema, supports: [:window], rows: answer, described: described)
+    end
+
+    @tag verifies: "combined-description"
+    test "the first part's parameters are the combination's, and every part is asked a value given" do
+      combined =
+        Combined.new!([floored(50, :live, params: @floor), floored(0, :history, params: @floor)])
+
+      assert {:ok, %Description{params: @floor} = description} = describe(combined)
+      request = Request.new!(window: [0, 100], params: %{"floor" => 20}, now: @now)
+      assert {:ok, delivery} = Source.fetch(combined, description, request)
+      assert column(delivery, :t) == Enum.to_list(20..100)
+      assert_received {:asked, :live, %{"floor" => 20}}
+      assert_received {:asked, :history, %{"floor" => 20}}
+
+      # Not given, the first's default reaches every part.
+      assert {:ok, _} = Source.fetch(combined, description, Request.new!(now: @now))
+      assert_received {:asked, :history, %{"floor" => nil}}
+
+      # A later part's own other parameter is not the combination's.
+      extra = Map.put(@floor, "zoom", %{type: :number, default: 1})
+
+      combined =
+        Combined.new!([floored(50, :live, params: @floor), floored(0, :h, params: extra)])
+
+      assert {:ok, %Description{params: @floor}} = describe(combined)
+    end
+
+    @tag verifies: "combined-description"
+    test "a later part that lacks a parameter of the first's, or takes less of it, is the fault" do
+      first = floored(50, :live, params: @floor)
+      request = Request.new!(window: [0, 100], now: @now)
+
+      missing = Combined.new!([first, floored(0, :history, params: %{})])
+      fault = {:combined_params, [{1, "floor", :missing}]}
+      assert describe(missing) == {:error, fault}
+      assert Combined.fetch(missing, request) == {:error, fault}
+      assert Combined.format_error(fault) =~ ~s(part 1 lacks "floor")
+
+      narrower = [
+        %{"floor" => %{type: :category, default: nil}},
+        %{"floor" => %{type: :number, default: nil, values: [1, 2]}},
+        %{"floor" => %{type: :number, default: 0}},
+        %{"floor" => %{type: :number}}
+      ]
+
+      for theirs <- narrower do
+        combined = Combined.new!([first, floored(0, :history, params: theirs)])
+        reason = {:narrower, @floor["floor"], theirs["floor"]}
+        assert describe(combined) == {:error, {:combined_params, [{1, "floor", reason}]}}
+
+        assert Combined.fetch(combined, request) ==
+                 {:error, {:combined_params, [{1, "floor", reason}]}}
+      end
+
+      assert Combined.format_error({:combined_params, [{2, "floor", {:narrower, %{}, %{}}}]}) =~
+               ~s(part 2 takes less of "floor")
+
+      # A wider declaration takes every value the first's does.
+      closed = %{"agg" => %{type: :category, values: ["max"]}}
+
+      wider = [
+        {@floor, %{"floor" => %{type: :term}}},
+        {closed, %{"agg" => %{type: :category, values: ["max", "mean"]}}},
+        {closed, %{"agg" => %{type: :category, default: "max"}}},
+        {%{"floor" => %{type: :number, default: 1}}, @floor}
+      ]
+
+      for {ours, theirs} <- wider do
+        combined =
+          Combined.new!([floored(50, :live, params: ours), floored(0, :h, params: theirs)])
+
+        assert {:ok, %Description{params: ^ours}} = describe(combined)
+      end
+    end
+
+    @tag verifies: "combined-description"
+    test "viewer independent only when every part is; lateness, idle_after and chunk_span the first's" do
+      first = [viewer_independent: true, lateness: 5, idle_after: 1_000, chunk_span: 50]
+      later = [viewer_independent: true, lateness: 60, idle_after: 10, chunk_span: 500]
+
+      assert {:ok, d} = describe(Combined.new!([floored(50, :l, first), floored(0, :h, later)]))
+
+      assert {d.viewer_independent, d.lateness, d.idle_after, d.chunk_span} ==
+               {true, 5, 1_000, 50}
+
+      dependent = Keyword.put(later, :viewer_independent, false)
+
+      assert {:ok, d} =
+               describe(Combined.new!([floored(50, :l, first), floored(0, :h, dependent)]))
+
+      refute d.viewer_independent
+
+      assert {:ok, d} = describe(Combined.new!([floored(50, :l, []), floored(0, :h, later)]))
+
+      assert {d.viewer_independent, d.lateness, d.idle_after, d.chunk_span} ==
+               {false, nil, nil, nil}
+    end
+
+    @tag verifies: "combined-description"
+    test "a combination of parameterized, viewer-independent parts passes the kit asked a parameter" do
+      alias Macaw.Data.Test.Sources.Broken
+      live = Broken.new()
+      combined = Combined.new!([live, Broken.new()])
+      {:ok, description} = describe(combined)
+      assert description.viewer_independent
+      assert Map.keys(description.params) == ["scale"]
+
+      assert [] ==
+               Conformance.check(combined,
+                 requests: [[], [window: [2, 10], params: %{"scale" => 3}], [window: [nil, 6]]],
+                 budgets: [nil, 5],
+                 push: fn _combined -> Broken.emit(live) end,
+                 quiet: 30
+               )
     end
   end
 end

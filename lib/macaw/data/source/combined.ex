@@ -22,6 +22,13 @@ defmodule Macaw.Data.Source.Combined do
   and fields only the later schema describes dropped. The first part's rows are never
   touched.
 
+  **It is described by its parts** (spec/01 §2.1, §10.2): the first part's parameters,
+  `lateness`, `idle_after` and `chunk_span`, and viewer independent only when every part
+  is. Every later part is asked the first's parameters, so it must declare each, taking
+  every value the first's takes; otherwise describe and fetch answer `{:error,
+  {:combined_params, faults}}`, each `{position, name, :missing | {:narrower, first,
+  later}}`.
+
   A combination honors `:window`, pushes when its first part does (its subscription is the
   first's, its pushes pass through unchanged), and honors `:as_of` when every part does.
   Its request goes to every part with only the window routed, and its `subscription` to
@@ -117,14 +124,14 @@ defmodule Macaw.Data.Source.Combined do
   defp part(%_{} = source), do: {source, nil}
   defp part(_other), do: nil
 
-  # The first part's description, its schema whole, with the combination's supports
-  # (`:window`, and `:push` when the first part pushes): `{:error, {:combined_schema,
+  # The combination's description (`description/2`): `{:error, {:combined_schema,
   # incompatibilities}}` listing every field of every later part whose schema is not
   # compatible with the first's, each `{position, field, reason}`, and `{position,
   # window_field, {:window, first, later}}` for a later part windowing over another field
   # (`nil` for none); `{:error, :combined_window_field}` when the schema has no `:time` or
-  # `:number` window field; and the first error of a part that cannot describe. Its own
-  # context is not read: each part is described with its own.
+  # `:number` window field; `{:error, {:combined_params, faults}}` for a later part that
+  # does not take the first's parameters (`takes_params/1`); and the first error of a part
+  # that cannot describe. Its own context is not read: each part is described with its own.
   @impl Macaw.Data.Source
   def describe(%__MODULE__{parts: parts}, _context) do
     with {:ok, description, _described, _readings} <- resolve(parts), do: {:ok, description}
@@ -133,18 +140,77 @@ defmodule Macaw.Data.Source.Combined do
   # The combination's description and, per part, its own and how its rows read as the
   # first's.
   defp resolve(parts) do
-    with {:ok, [%Description{schema: schema, supports: supports} | _] = described} <-
+    with {:ok, [%Description{schema: schema} = first | _] = described} <-
            describe_all(parts, []),
          :ok <- compatible(described),
-         :ok <- has_window(schema) do
+         :ok <- has_window(schema),
+         :ok <- takes_params(described) do
       time = Schema.window_field(schema)
       readings = Enum.map(described, &reading(&1, schema.version, schema, time))
-      # `:as_of` when every part answers as of the instant asked, so the union does too.
-      as_of = if Enum.all?(described, &(:as_of in &1.supports)), do: [:as_of], else: []
-      supports = [:window | Enum.filter(supports, &(&1 == :push))] ++ as_of
-      {:ok, %Description{schema: schema, supports: supports}, described, readings}
+      {:ok, description(first, described), described, readings}
     end
   end
+
+  # What the combination is (spec/01 §2.1, §10.2), each fact by one rule: the first part's
+  # schema, parameters, `lateness`, `idle_after` and `chunk_span`, since its subscription,
+  # its increments and its units are the first part's and every part is asked its
+  # parameters; viewer independent only when every part is, as one part answering by
+  # viewer makes the union do so; `:window`, `:push` when the first part pushes, and
+  # `:as_of` when every part answers as of the instant asked.
+  defp description(%Description{} = first, described) do
+    as_of = if Enum.all?(described, &(:as_of in &1.supports)), do: [:as_of], else: []
+
+    %Description{
+      schema: first.schema,
+      params: first.params,
+      supports: [:window | Enum.filter(first.supports, &(&1 == :push))] ++ as_of,
+      viewer_independent: Enum.all?(described, &(&1.viewer_independent == true)),
+      lateness: first.lateness,
+      idle_after: first.idle_after,
+      chunk_span: first.chunk_span
+    }
+  end
+
+  # Every part is asked the request's parameters as they are, the first part's defaults
+  # filled in (`Source.fetch/3`), so every later part must take each of the first's: declare
+  # it (`:missing`), accepting every value the first's accepts (`{:narrower, first,
+  # later}`). A later part's own other parameters are asked at their defaults.
+  defp takes_params([%Description{params: params} | later]) do
+    faults =
+      for {%Description{params: theirs}, position} <- Enum.with_index(later, 1),
+          {name, ours} <- Enum.sort(params),
+          reason = param_fault(ours, Map.get(theirs, name)),
+          reason != nil,
+          do: {position, name, reason}
+
+    if faults == [], do: :ok, else: {:error, {:combined_params, faults}}
+  end
+
+  defp param_fault(_ours, nil), do: :missing
+
+  defp param_fault(ours, theirs),
+    do: if(accepts?(ours, theirs), do: nil, else: {:narrower, ours, theirs})
+
+  # Whether `theirs` takes every value `ours` does (spec/01 §2.2): of its type, or any
+  # value as a `:term`; within its closed values, if it has any; and `nil` where ours
+  # takes `nil`, a default of `nil` (or a `:term`, which takes anything).
+  defp accepts?(ours, theirs) do
+    type? = theirs.type == :term or theirs.type == ours.type
+    values = Map.get(theirs, :values)
+
+    values? =
+      values == nil or
+        (Map.get(ours, :values) != nil and
+           Enum.all?(Map.get(ours, :values), &(&1 in values)))
+
+    nil? = not takes_nil?(ours) or takes_nil?(theirs)
+    type? and values? and nil?
+  end
+
+  defp takes_nil?(parameter),
+    do:
+      Map.get(parameter, :type) == :term or
+        (Map.has_key?(parameter, :default) and parameter.default == nil)
 
   defp describe_all([], acc), do: {:ok, Enum.reverse(acc)}
 
@@ -581,6 +647,14 @@ defmodule Macaw.Data.Source.Combined do
     "a later part's schema is not the first's: " <>
       Enum.map_join(faults, "; ", fn {position, field, _reason} ->
         "part #{position}, field #{inspect(field)}"
+      end)
+  end
+
+  def words({:combined_params, faults}) do
+    "a later part does not take the first part's parameters: " <>
+      Enum.map_join(faults, "; ", fn
+        {position, name, :missing} -> "part #{position} lacks #{inspect(name)}"
+        {position, name, {:narrower, _, _}} -> "part #{position} takes less of #{inspect(name)}"
       end)
   end
 
