@@ -82,6 +82,17 @@ raises:
   script:
     - elixir ci/raises.exs
 
+# The rules for tests and state (ci/rules.exs, the family's copy, dco-tek/macaw/macaw#280,
+# #286, spec/00 §3): no clock timing code, sleep or atom count in test code, and no
+# application environment read in lib/, outside ci/rules_allowlist.exs, each entry
+# counted. The self-test first.
+rules:
+  image: $ELIXIR_IMAGE
+  stage: check
+  script:
+    - elixir ci/rules.exs --self-test
+    - elixir ci/rules.exs
+
 # Every spec link resolves (ci/spec_links.exs, the family's copy, #162): links into
 # another Macaw repository are checked by shape here, where no sibling checkout exists.
 # The self-test plants a broken link of each kind first, so a check that checks nothing
@@ -135,6 +146,18 @@ test:
     # Spec, tests and code aligned (macaw_compose spec/00 §4.1): the status reads this
     # job's test run as evidence, so it runs right after it, in the same job.
     - mix surfex.status
+
+# A flake shows itself (ci/stress.exs, the family's copy, dco-tek/macaw/macaw#280, #286):
+# the weekly schedule whose variable STRESS is true runs the suite 18 times, six at once,
+# each with its own seed, and a failed run names the seed that reproduces it. It is the
+# `test` job, with its toolchain and variables, run only on that schedule.
+stress:
+  extends: test
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule" && $STRESS == "true"
+  script:
+    - elixir ci/stress.exs --self-test
+    - elixir ci/stress.exs
 
 # Without the toolchain: the build warns and passes, and every step runs its Elixir path,
 # whose tests must pass as they do with the kernels.

@@ -34,7 +34,7 @@ defmodule VendoredTest do
     assert Vendored.check(File.cwd!(), nil) == []
 
     assert Map.keys(Vendored.manifest(File.cwd!())) |> Enum.sort() ==
-             ["advisories.exs", "raises.exs", "release_guard.exs", "spec_links.exs"]
+             ~w(advisories.exs raises.exs release_guard.exs rules.exs spec_links.exs stress.exs)
   end
 
   @tag verifies: "data-dependencies-vendored"
