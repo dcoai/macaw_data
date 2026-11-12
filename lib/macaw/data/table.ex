@@ -54,6 +54,7 @@ defmodule Macaw.Data.Table do
   alias Macaw.Data.Table.Digest
   alias Macaw.Data.Table.Origin
   alias Macaw.Data.Table.Subset
+  alias Macaw.Data.Schema
 
   import Kernel, except: [apply: 2]
 
@@ -659,7 +660,10 @@ defmodule Macaw.Data.Table do
   same names in the same order, each of the same type; another table is
   `{:error, {:columns, expected, given}}`, each a list of `{name, type}`.
 
-  A table built from rows takes `other`'s chunks as they are, copying nothing. A source's
+  A table built from rows takes `other`'s chunks as they are, copying nothing; it stays
+  sorted by its column (`sorted/1`) only when `other`'s rows are in that column's order at
+  or after its last, `other`'s own rows and the table's last read, else it is sorted by
+  none (macaw_data#261). A source's
   table keeps its alignment: the rows that fall in its last chunk's slot are written into
   it, a chunk of the same id with new contents, and later rows start new chunks. `other`
   is of the same origin, else `{:error, {:origin, expected, given}}`, and its rows lie at
@@ -684,7 +688,12 @@ defmodule Macaw.Data.Table do
 
       table.origin == nil ->
         {:ok,
-         %__MODULE__{table | chunks: table.chunks ++ other.chunks, size: table.size + other.size}}
+         %__MODULE__{
+           table
+           | chunks: table.chunks ++ other.chunks,
+             size: table.size + other.size,
+             sorted: joined_sorted(table, other)
+         }}
 
       true ->
         aligned(table, other)
@@ -718,6 +727,37 @@ defmodule Macaw.Data.Table do
 
   defp in_order(_table, _other), do: :ok
 
+  # The column two tables of no origin, one after the other, are still sorted by
+  # (macaw_data#261): an empty side keeps the other's; else the table's, when `other`'s
+  # first row is at or after its last and `other` is itself in that order, by its mark or
+  # by its own rows. Only `other`'s rows and the table's last are read.
+  defp joined_sorted(%__MODULE__{size: 0}, other), do: other.sorted
+  defp joined_sorted(table, %__MODULE__{size: 0}), do: table.sorted
+  defp joined_sorted(%__MODULE__{sorted: nil}, _other), do: nil
+
+  defp joined_sorted(%__MODULE__{sorted: name} = table, other) do
+    rest = if other.sorted == name, do: slice(other, 0, 1), else: other
+    if in_order?(slice(table, table.size - 1, 1), rest, name), do: name
+  end
+
+  # Whether the rows of `tail`, after `head`'s, are in column `name`'s order, `nil` last,
+  # read from the column as packed (a time's instants, a number itself). A value the order
+  # can't place, or a column the tables lack, is no order.
+  defp in_order?(head, tail, name) do
+    if Map.has_key?(head.types, name) do
+      positions = positions(head, name) ++ positions(tail, name)
+      :invalid not in positions and Origin.unsorted(positions) == nil
+    else
+      false
+    end
+  end
+
+  defp positions(%__MODULE__{chunks: views}, name),
+    do:
+      Enum.flat_map(views, fn {chunk, first, count} ->
+        chunk |> Chunk.storage(name, first, count) |> Column.positions(count)
+      end)
+
   # -- changes (spec/01 §1.1.4) -------------------------------------------------------------
 
   @doc """
@@ -735,6 +775,11 @@ defmodule Macaw.Data.Table do
   a thinned holding. Rows to insert that don't pack under the table's columns are
   `{:table, faults}`, and nothing is applied. A settled chunk whose delta reaches a
   quarter of its base is compacted.
+
+  A table that is not a source's keeps the column it is sorted by only while its rows are
+  in that column's order (macaw_data#261): when nothing is inserted, when `schema`'s window
+  field is that column, or when the rows inserted after the held ones are in its order from
+  the last held row; else it is sorted by none.
   """
   @spec apply(t(), map()) :: {t(), list(), non_neg_integer()}
   def apply(%__MODULE__{} = table, change) when is_map(change) do
@@ -752,7 +797,39 @@ defmodule Macaw.Data.Table do
         change
       )
 
-    {with_chunks(table, chunks, next), faults, unheld}
+    applied = with_chunks(table, chunks, next)
+
+    {%__MODULE__{applied | sorted: applied_sorted(table, applied, change, faults)}, faults,
+     unheld}
+  end
+
+  # The column a table is still sorted by once a change is applied (macaw_data#261). A
+  # source's table merges every row in its window field's order, and so does a table of no
+  # origin under a schema whose window field is that column; retractions keep any order.
+  # Otherwise the rows inserted (a replacement's among them) are laid after the held ones
+  # in the order given: the mark is kept when they are in order from the last held row,
+  # only they and that row read. Under another window field they are placed by it, so the
+  # mark goes; nothing is inserted when the rows don't pack.
+  defp applied_sorted(%__MODULE__{sorted: nil}, _applied, _change, _faults), do: nil
+
+  defp applied_sorted(%__MODULE__{origin: origin} = table, _, _, _) when origin != nil,
+    do: table.sorted
+
+  defp applied_sorted(%__MODULE__{sorted: name}, applied, change, faults) do
+    inserted = length(change.insert) + Enum.sum(Enum.map(change.replace, &length(&1.rows)))
+    time = change.schema && Schema.window_field(change.schema)
+
+    cond do
+      inserted == 0 or match?([{:table, _} | _], faults) -> name
+      time == name -> name
+      time != nil or applied.size == nil -> nil
+      true -> tail_sorted(applied, inserted, name)
+    end
+  end
+
+  defp tail_sorted(%__MODULE__{size: size} = applied, inserted, name) do
+    from = max(size - inserted - 1, 0)
+    if in_order?(slice(applied, from, 1), slice(applied, from + 1, size), name), do: name
   end
 
   # The table's chunks, each whole: a view that reads part of its chunk written as a chunk
