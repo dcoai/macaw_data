@@ -14,7 +14,7 @@ defmodule Macaw.Data.Test.Sources do
     schema first. A fetch for a subscription states its position, the count of increments
     sent to it; any other answer states none. `:stale` is no flaw, as `:identified` is
     not: it answers honestly from a store it says it could not refresh,
-    `served.stale: true`.
+    `served.stale: true` and a note saying so, on every answer and increment.
     """
     @behaviour Macaw.Data.Source
 
@@ -174,7 +174,12 @@ defmodule Macaw.Data.Test.Sources do
           types: types(flaw),
           # At the subscription's resolution, as its fetches state it (spec/01 §4.3); the
           # drifting flaw states none.
-          served: [window: [t, t], resolution: if(flaw != :resolution_drift, do: 1)],
+          served: [
+            window: [t, t],
+            resolution: if(flaw != :resolution_drift, do: 1),
+            stale: flaw == :stale,
+            note: note(flaw)
+          ],
           schema: Schema.version(schema)
         )
 
@@ -306,6 +311,7 @@ defmodule Macaw.Data.Test.Sources do
             resolution: if(flaw == :resolution_lie, do: 2, else: step),
             capped: flaw == :capped_lie and from != nil,
             stale: flaw == :stale,
+            note: note(flaw),
             position: position(source, flaw, request.subscription),
             reduced_by: reduced_by
           ] ++ reducer_claim(flaw),
@@ -329,6 +335,10 @@ defmodule Macaw.Data.Test.Sources do
 
     defp position(%__MODULE__{agent: agent}, _flaw, ref),
       do: Agent.get(agent, &Map.get(&1.seqs, ref, 0))
+
+    # Why a stale answer is stale, said of every answer, pushed or fetched (spec/01 §3, §4).
+    defp note(:stale), do: "upstream down; last good answer"
+    defp note(_flaw), do: nil
 
     # A delivery built by hand around `Delivery.new/2`, its `stale` not a boolean.
     defp stale_fact(delivery, :stale_not_boolean),

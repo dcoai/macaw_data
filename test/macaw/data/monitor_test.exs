@@ -433,6 +433,33 @@ defmodule Macaw.Data.MonitorTest do
   end
 
   describe "push sources" do
+    @tag verifies: "push-note"
+    test "a reader's stale and note follow the increments its holding applies" do
+      down = "upstream down; last good answer"
+      answer = fn _request -> {rows(1..3), [stale: true, note: down]} end
+      {source, agent} = Scripted.new(schema: @v1, supports: [:window, :push], rows: answer)
+      monitor = source |> one() |> tick(0) |> Scripted.drain() |> tick(1)
+      assert %{stale: true, note: ^down} = Monitor.deliveries(monitor).a.served
+
+      # A live increment: the upstream is back, and the reader is told so.
+      Scripted.push(agent, self(), Delivery.new!(rows(4..4), schema: Schema.version(@v1)))
+      monitor = monitor |> Scripted.drain() |> tick(2)
+      delivery = Monitor.deliveries(monitor).a
+      assert {delivery.served.stale, delivery.served.note, size(delivery)} == {false, nil, 4}
+
+      # One noting why it is stale again says so.
+      served = [stale: true, note: "replica lagging"]
+
+      Scripted.push(
+        agent,
+        self(),
+        Delivery.new!(rows(5..5), schema: Schema.version(@v1), served: served)
+      )
+
+      monitor = monitor |> Scripted.drain() |> tick(3)
+      assert %{stale: true, note: "replica lagging"} = Monitor.deliveries(monitor).a.served
+    end
+
     @tag verifies: "monitor-push"
     test "a push source is subscribed by the owner, whichever process ticks" do
       {source, agent} = push_source(rows(1..3))

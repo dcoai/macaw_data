@@ -183,6 +183,158 @@ defmodule Macaw.Data.PushTest do
     assert {ts(push), Push.held(push).served.stale} == {[9], false}
   end
 
+  @tag verifies: "push-note"
+  property "the holding's stale and note are the last applied answer's" do
+    note =
+      one_of([
+        constant(nil),
+        constant("upstream down; last good answer"),
+        string(:alphanumeric, min_length: 1)
+      ])
+
+    said = tuple({boolean(), note})
+
+    check all(
+            {stale, said_note} <- said,
+            increments <- list_of(tuple({said, boolean()}), max_length: 8)
+          ) do
+      ref = make_ref()
+
+      snapshot =
+        increment([%{"t" => 0, "v" => 0}],
+          window: [0, 0],
+          position: 0,
+          stale: stale,
+          note: said_note
+        )
+
+      push =
+        Push.new!(:ticks, ref, cache: Cache.new([{:ticks, @schema}]))
+        |> Push.snapshot(snapshot)
+        |> Push.drain(&no_describe/1)
+
+      {push, expected} =
+        increments
+        |> Enum.with_index(1)
+        |> Enum.reduce({push, {stale, said_note}}, fn {{{s, n}, applied?}, seq},
+                                                      {push, expected} ->
+          # An increment at another resolution is not applied (spec/01 §4.3).
+          served = [stale: s, note: n] ++ if(applied?, do: [], else: [resolution: 60])
+
+          message =
+            Push.increment_message(ref, seq, increment([%{"t" => seq, "v" => seq}], served))
+
+          {:ok, push} = Push.receive(push, message)
+          {Push.drain(push, &no_describe/1), if(applied?, do: {s, n}, else: expected)}
+        end)
+
+      held = Push.held(push).served
+      assert {held.stale, held.note} == expected
+    end
+  end
+
+  @tag verifies: "push-note"
+  test "what was done to the snapshot's rows, and its params, stay the snapshot's; the holding states no order" do
+    ref = make_ref()
+
+    snapshot =
+      increment([%{"t" => 1, "v" => 1}, %{"t" => 0, "v" => 2}],
+        window: [0, 1],
+        position: 0,
+        capped: true,
+        reduced_by: :source,
+        reduced_with: {"m4", 2},
+        ordered: :source,
+        params: %{"floor" => 1}
+      )
+
+    push =
+      Push.new!(:ticks, ref, cache: Cache.new([{:ticks, @schema}]))
+      |> Push.snapshot(snapshot)
+      |> Push.drain(&no_describe/1)
+
+    taken = fn served ->
+      Map.take(served, [:capped, :reduced_by, :reduced_with, :ordered, :params])
+    end
+
+    kept = %{
+      capped: true,
+      reduced_by: :source,
+      reduced_with: {"m4", 2},
+      ordered: nil,
+      params: %{"floor" => 1}
+    }
+
+    assert taken.(Push.held(push).served) == kept
+    assert ts(push) == [0, 1]
+
+    said = [
+      capped: false,
+      reduced_by: :runtime,
+      reduced_with: {"lttb", 3},
+      ordered: :runtime,
+      params: %{}
+    ]
+
+    {:ok, push} =
+      Push.receive(push, Push.increment_message(ref, 1, increment([%{"t" => 2, "v" => 3}], said)))
+
+    push = Push.drain(push, &no_describe/1)
+    assert taken.(Push.held(push).served) == kept
+
+    # An increment's own cut is not read either: the holding is thinned as its snapshot was.
+    fresh = increment([%{"t" => 5, "v" => 5}], window: [5, 5], position: 1)
+    push = push |> Push.snapshot(fresh) |> Push.drain(&no_describe/1)
+
+    {:ok, push} =
+      Push.receive(
+        push,
+        Push.increment_message(ref, 2, increment([%{"t" => 6, "v" => 6}], capped: true))
+      )
+
+    push = Push.drain(push, &no_describe/1)
+    assert %{capped: false, reduced_by: nil, params: %{}} = Push.held(push).served
+  end
+
+  @tag verifies: "push-note"
+  test "a push source noting its staleness passes the kit's push and monitor checks, and a monitor reader keeps its note" do
+    alias Macaw.Data.Monitor
+    alias Macaw.Data.Source.Conformance
+    alias Macaw.Data.Test.Sources.Broken
+
+    source = Broken.new(:stale)
+
+    assert [] ==
+             Conformance.check(source,
+               requests: [[], [window: [2, 10]]],
+               push: &Broken.emit/1,
+               quiet: 30
+             )
+
+    source = Broken.new(:stale)
+    monitor = Monitor.new!(%{a: source}, %{a: [source: :a, ask: [window: [0, nil]]]})
+    at = ~U[2026-11-01 00:00:00Z]
+    monitor = Monitor.tick!(monitor, now: 0, at: at)
+    note = "upstream down; last good answer"
+    assert %{stale: true, note: ^note} = Monitor.deliveries(monitor).a.served
+
+    :ok = Broken.emit(source)
+    monitor = pump(monitor) |> Monitor.tick!(now: 1, at: at)
+    delivery = Monitor.deliveries(monitor).a
+    assert %{stale: true, note: ^note} = delivery.served
+    assert (100 + 1) in Enum.map(Delivery.rows!(delivery), &Table.get(&1, :t))
+  end
+
+  defp pump(monitor) do
+    receive do
+      {:macaw_source, _ref, _message} = message ->
+        {:ok, monitor} = Macaw.Data.Monitor.handle_message(monitor, message)
+        pump(monitor)
+    after
+      50 -> monitor
+    end
+  end
+
   @tag verifies: "push-coalesce"
   test "pushes between two pulses buffer, and one drain merges them all, in the order received" do
     ref = make_ref()

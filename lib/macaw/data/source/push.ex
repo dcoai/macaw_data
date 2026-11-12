@@ -44,9 +44,12 @@ defmodule Macaw.Data.Source.Push do
     cover them. Rows are never deduplicated: an identical row is a second row. A schema
     with no window field keeps the newest `limit` rows, marking the delivery `capped`
     when it drops any.
-  - **`stale` is the last answer's** (spec/01 §4): a snapshot's `served.stale` becomes
-    the holding's, and an applied increment's replaces it, as the source answers as of
-    that change.
+  - **`stale` and `note` are the last answer's** (spec/01 §4): a snapshot's
+    `served.stale` and `served.note` become the holding's, and an applied increment's
+    replace them, as the source answers as of that change: one stating no note clears
+    the last. What was done to the snapshot's rows (`capped`, `reduced_by`,
+    `reduced_with`) and its `params` stay the snapshot's, and the holding states no
+    `ordered`: it keeps its rows in the window field's order.
   - **What is held is a chunked table** (spec/01 §2.6): `held/1`'s rows are a
     `Macaw.Data.Table` of the source's origin, its columns the schema's fields, packed as
     `Delivery.table/2` packs; every change reaches it through `Macaw.Data.Table.apply/2`,
@@ -567,8 +570,10 @@ defmodule Macaw.Data.Source.Push do
           %{held | rows: table, schema: version, served: %{held.served | window: [from, to]}}
       end
 
-    # An increment answers as of its change, so its `stale` is the holding's (spec/01 §4).
-    held = %{held | served: %{held.served | stale: delivery.served.stale}}
+    # An increment answers as of its change, so its `stale` and its `note`, the line that
+    # may say why, are the holding's (spec/01 §4): one stating no note clears the last.
+    served = %{held.served | stale: delivery.served.stale, note: delivery.served.note}
+    held = %{held | served: served}
 
     {faults, push} = trimmed_retractions(push, faults, Schema.window_field(schema))
 
@@ -678,7 +683,9 @@ defmodule Macaw.Data.Source.Push do
            ),
          {:ok, table} <-
            Table.new(columns, origin: origin(push, schema, delivery.served.resolution)) do
-      {:ok, %{delivery | rows: table, names: nil, retracted: [], replace: []}}
+      # Held in the window field's order, never a request's, so no `ordered` (spec/01 §4).
+      served = %{delivery.served | ordered: nil}
+      {:ok, %{delivery | rows: table, names: nil, retracted: [], replace: [], served: served}}
     end
   end
 
