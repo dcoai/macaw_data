@@ -9,7 +9,7 @@ defmodule Macaw.Data.ReadersImproperListsTest do
   """
   use ExUnit.Case, async: true
 
-  alias Macaw.Data.{Delivery, Derived, Error, Operations, Parameter, Schema, Stack, Table}
+  alias Macaw.Data.{Delivery, Derived, Error, Format, Operations, Parameter, Schema, Stack, Table}
   alias Macaw.Data.Source.{Description, Finish, Order, Push, Request}
 
   @moduletag :capture_log
@@ -326,6 +326,23 @@ defmodule Macaw.Data.ReadersImproperListsTest do
   # `Derived.from_map/2` is not walked: an improper list in a map form, like a struct,
   # raises inside `Macaw.Layers.Form.gates/3` today, the kernel's to refuse
   # (dco-tek/macaw/macaw_layers#37). A decoded document can't hold one.
+
+  @tag verifies: "data-errors-readers"
+  test "Format.parse/2 and Format.Locale.new/1: their options, fields and grouping" do
+    locale = Format.Locale.english()
+
+    assert raised(improper(locale: locale), fn opts ->
+             answers(fn -> Format.parse(",.2f", opts) end, fn -> Format.parse!(",.2f", opts) end)
+           end) == []
+
+    assert raised(improper(grouping: [3, 2], currency: ["$", ""], decimal: "."), fn fields ->
+             answers(fn -> Format.Locale.new(fields) end, fn -> Format.Locale.new!(fields) end)
+           end) == []
+
+    assert raised(improper(%{grouping: [3, 2], currency: ["$", ""]}), fn fields ->
+             answers(fn -> Format.Locale.new(fields) end, fn -> Format.Locale.new!(fields) end)
+           end) == []
+  end
 
   @tag verifies: "data-errors-readers"
   test "Push.new/3 and Finish.ceiling/2: their options" do

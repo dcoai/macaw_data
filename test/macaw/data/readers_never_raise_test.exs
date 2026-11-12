@@ -9,7 +9,7 @@ defmodule Macaw.Data.ReadersNeverRaiseTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
-  alias Macaw.Data.{Derived, Error, Fault, Schema, Stack, Table}
+  alias Macaw.Data.{Derived, Error, Fault, Format, Schema, Stack, Table}
   alias Macaw.Data.Source.{Description, Finish, Push, Request}
 
   # A leaf of any kind, small: the shapes are the generators' work, not the values'.
@@ -413,6 +413,44 @@ defmodule Macaw.Data.ReadersNeverRaiseTest do
     end
   end
 
+  # A specifier from the grammar's own characters, so most read and some do not (#251).
+  @specifier_characters String.graphemes("<>=^+-( $#019,.~efgrs%pdboxXcnq*€")
+
+  defp specifier do
+    one_of([
+      leaf(),
+      map(list_of(member_of(@specifier_characters), max_length: 8), &Enum.join/1)
+    ])
+  end
+
+  @tag verifies: "data-errors-readers"
+  property "Format.parse/2 and Format.Locale.new/1 answer any specifier and fields as a value or faults" do
+    keys = [:decimal, :thousands, :grouping, :currency, :minus, :nan, :percent, :symbols, :locale]
+
+    check all(
+            text <- specifier(),
+            opts <- options([:locale]),
+            fields <- one_of([pairs(keys), map_of(member_of(keys), value(), max_length: 3)]),
+            symbols <- map_of(one_of([member_of(~w(USD EUR ZZZ)), leaf()]), leaf(), max_length: 2)
+          ) do
+      with {:ok, format} <-
+             answers(fn -> Format.parse(text, opts) end, fn -> Format.parse!(text, opts) end) do
+        # What parse/2 accepts writes any value without raising.
+        for value <- [1, -1.5, 0, 10 ** 400, nil, "x"],
+            do: assert(is_binary(Format.number(format, value)))
+      end
+
+      answers(fn -> Format.Locale.new(fields) end, fn -> Format.Locale.new!(fields) end)
+
+      with {:ok, locale} <-
+             answers(fn -> Format.Locale.new(symbols: symbols) end, fn ->
+               Format.Locale.new!(symbols: symbols)
+             end) do
+        assert {:ok, %Format{}} = Format.parse(",.2f", locale: locale)
+      end
+    end
+  end
+
   # The readers spec/00 §5 names, from the sentence itself, so neither can move alone
   # (#185): one that answers values has a twin at its arity, raising exactly its faults.
   defp named_readers do
@@ -428,7 +466,7 @@ defmodule Macaw.Data.ReadersNeverRaiseTest do
   @tag verifies: "data-errors-readers"
   test "every reader spec/00 §5 names exports its ! twin at its arity" do
     readers = named_readers()
-    assert length(readers) == 24
+    assert length(readers) == 26
 
     for {module, name, arity} <- readers do
       assert Code.ensure_loaded?(module), inspect(module)

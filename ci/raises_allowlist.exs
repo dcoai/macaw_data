@@ -12,6 +12,16 @@
 # Bad input is never a class: a function answers it with {:error, reason}.
 [
   %{
+    at: {Macaw.Data.Format, :parse!, 2},
+    class: :bang,
+    reason: "parse/2's twin: raises the faults parse/2 answers, as Macaw.Data.Error"
+  },
+  %{
+    at: {Macaw.Data.Format.Locale, :new!, 1},
+    class: :bang,
+    reason: "new/1's twin: raises the faults new/1 answers, as Macaw.Data.Error"
+  },
+  %{
     at: {Macaw.Data.Derived, :from_map!, 2},
     class: :bang,
     reason: "from_map/2's twin: raises the faults from_map/2 answers, as Macaw.Data.Error"
