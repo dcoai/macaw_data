@@ -376,6 +376,17 @@ defmodule Macaw.Data.ReadersImproperListsTest do
   end
 
   @tag verifies: "data-errors-readers"
+  test "Source.Combined.new/2: its parts and options" do
+    alias Macaw.Data.Source.{Combined, Signal}
+
+    signal = Signal.new!(:sine, [:t, :v])
+
+    assert raised(improper({[signal, {signal, [1, 2]}], []}), fn {parts, opts} ->
+             answers(fn -> Combined.new(parts, opts) end, fn -> Combined.new!(parts, opts) end)
+           end) == []
+  end
+
+  @tag verifies: "data-errors-readers"
   test "Push.new/3 and Finish.ceiling/2: their options" do
     assert raised(improper(cache: 1, limit: 10), fn opts ->
              ref = make_ref()

@@ -1368,3 +1368,28 @@ the present is the fixed tick or the request's now counted from the origin, a wi
 ```test:signal-faults
 a bad kind, fields or option is each its fault, every one at once, an unknown option and a description the schema refuses too; new!/3 raises them in words
 ```
+
+### 10.2 A combined source, routed by window {#sources-combined}
+
+**`Macaw.Data.Source.Combined`: one source over several, routed by window** (macaw_data#249), so live data and its history read as one source: an in-process source holding the last hour in front of a store holding everything.
+- **Parts, freshest first,** each a source described with no context, or `{source, context}` described with its own. `new(parts, opts)` answers `{[], {:type, :parts}}` for anything but a non-empty list, `{[i], {:type, :part}}` for an element that is neither, and `{[key], :unknown_key}` for an option (it takes none).
+- **One schema, the first part's, whole.** Every later part's schema must be compatible with it (§1.9) and window over the same field; otherwise describe and fetch answer `{:error, {:combined_schema, faults}}`, each `{position, field, reason}`, a later part windowing over another field `{position, field, {:window, first, later}}`. A first schema with no `:time` or `:number` window field is `{:error, :combined_window_field}`. A later part's rows are read in the first's words: keyed by the first part's spellings, numbers converted into its units, a window over a field in other units converted both ways, and fields only the later schema describes dropped. The first part's rows are never touched. A later part's rows that cannot be read so are `{:error, {:combined_part, position, faults}}`.
+- **Routing:** the first part is asked the window; what it served starts at its served window's `from`, else its earliest row, and the rest of the window, before that, goes to the next part, and so on until a part covers the window's `from`. A part keeps its rows in `[from, upper]` while no fresher part has served (the window's `to`, inclusive), and in `[from, served)` after: a row at a seam comes from the fresher part alone, and a part serving from after the window's end hands on that end. A part's error is the combination's. The window is capped when no part reaches its `from`, and an open window takes what every part holds.
+- **The request** goes to every part with only the window routed, a region and `latest` left to finishing over the union (§2.4), its `subscription` to the first part alone. The combination honors `:window`, and `:push` when its first part does: its subscription, and so its pushes, its `position`, `complete_until` and `resolution`, are the first part's. A served fact no delivery takes is `{:error, {:combined_delivery, faults}}`.
+- **Tables stay tables:** where every part kept a table of the same columns, the combination's rows are one table of their chunks, each kept run a slice, copied nowhere; a part of rows makes the combination's rows rows.
+
+```test:combined-route
+the freshest part serves what it holds and the next the rest; a window the freshest covers is not asked of the history; a history ignoring the window gives only what is older; an unreached window is capped and an open one takes everything; a part's error and a served fact no delivery takes are the combination's; tables are concatenated as their chunks; over gaps, open bounds, seams and every kind of time each time appears once, from the freshest part holding it (property); the kit passes
+```
+
+```test:combined-schema
+a compatible schema of another version combines and the first's is the combination's; no window field is refused; a later part's rows read in the first's names and units, extra fields dropped, an undescribed column left; every incompatibility is reported with its part's position, a window over another field among them; a window field in other units is converted both ways; rows that cannot be read are the part's fault
+```
+
+```test:combined-push
+a combination pushes when its first part does, its subscription the first part's, and one over parts that do not push refuses a subscription
+```
+
+```test:combined-faults
+new/2 refuses what is no non-empty list, a part that is no source or pair, and an option; new!/2 raises the faults in words; a part that is no source is describe's not_a_source
+```

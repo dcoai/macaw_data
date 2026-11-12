@@ -499,6 +499,26 @@ defmodule Macaw.Data.ReadersNeverRaiseTest do
     end
   end
 
+  @tag verifies: "data-errors-readers"
+  property "Source.Combined.new/2 answers any parts and options as a value or faults" do
+    alias Macaw.Data.Source.{Combined, Signal}
+
+    signal = Signal.new!(:sine, [:t, :v])
+
+    check all(
+            parts <-
+              one_of([
+                list_of(one_of([constant(signal), tuple({constant(signal), leaf()}), leaf()]),
+                  max_length: 3
+                ),
+                leaf()
+              ]),
+            opts <- options([:parts])
+          ) do
+      answers(fn -> Combined.new(parts, opts) end, fn -> Combined.new!(parts, opts) end)
+    end
+  end
+
   # The readers spec/00 §5 names, from the sentence itself, so neither can move alone
   # (#185): one that answers values has a twin at its arity, raising exactly its faults.
   defp named_readers do
@@ -514,7 +534,7 @@ defmodule Macaw.Data.ReadersNeverRaiseTest do
   @tag verifies: "data-errors-readers"
   test "every reader spec/00 §5 names exports its ! twin at its arity" do
     readers = named_readers()
-    assert length(readers) == 29
+    assert length(readers) == 30
 
     for {module, name, arity} <- readers do
       assert Code.ensure_loaded?(module), inspect(module)
