@@ -24,6 +24,9 @@ defmodule Macaw.Data.Source.Finish do
   head gathers that head alone. Each step keeps exactly the rows finishing the table's
   rows would keep. Any other delivery is finished over its rows, read by name.
 
+  `finish/5` and `reduce/5` given a `Macaw.Data.Operations.Cache` reduce a table chunk by
+  chunk from the partials it holds (macaw_data#247), with the same answer.
+
   The pure rules of running sources (spec/01 §6) are here too: `ceiling/2` clamps a
   budget to the host's ceiling, and `pooled/1` is the one budget a pooled fetch asks for,
   the largest among its readers, each reader then reduced to its own by `reduce/5`.
@@ -34,7 +37,8 @@ defmodule Macaw.Data.Source.Finish do
   alias Macaw.Data.{Delivery, Operations, Schema, Table, Window}
   alias Macaw.Data.Operations.{Option, Registry}
   alias Macaw.Data.Source.{Description, Order, Request}
-  alias Macaw.Data.Source.Finish.Columns
+  alias Macaw.Data.Operations.Cache
+  alias Macaw.Data.Source.Finish.{Chunked, Columns}
   alias Macaw.Data.Table.Subset
 
   @doc """
@@ -60,6 +64,38 @@ defmodule Macaw.Data.Source.Finish do
 
   def finish(%Delivery{} = delivery, %Description{} = description, %Request{} = request, opts)
       when is_list(opts) do
+    with {:ok, finished, nil} <- finished(delivery, description, request, opts, nil),
+         do: {:ok, finished}
+  end
+
+  def finish(%Delivery{}, %Description{}, %Request{}, _opts),
+    do: {:error, [{[:opts], {:type, :keyword}}]}
+
+  @doc """
+  As `finish/4`, the budget reduced through the caller's `Macaw.Data.Operations.Cache`
+  (spec/01 §2.4, macaw_data#247): `{:ok, delivery, cache}`, the delivery `finish/4`
+  answers and the cache holding this call's parts, or `finish/4`'s faults. A table
+  reduced by `m4` or `lttb` is reduced chunk by chunk from the partials the cache holds
+  (`reduce/5`), so a warm call costs the chunks that changed.
+  """
+  @spec finish(Delivery.t(), Description.t(), Request.t(), keyword(), Cache.t()) ::
+          {:ok, Delivery.t(), Cache.t()} | {:error, [{list(), term()}, ...]}
+  def finish(
+        %Delivery{} = delivery,
+        %Description{} = description,
+        %Request{} = request,
+        opts,
+        %Cache{} = cache
+      )
+      when is_list(opts),
+      do: finished(delivery, description, request, opts, cache)
+
+  def finish(%Delivery{}, %Description{}, %Request{}, _opts, %Cache{}),
+    do: {:error, [{[:opts], {:type, :keyword}}]}
+
+  # Every step, the budget's through the cache where one is given (`nil` for none):
+  # `{:ok, delivery, cache}`.
+  defp finished(delivery, description, request, opts, cache) do
     schema = description.schema
     supports = description.supports
     field = Schema.window_field(schema)
@@ -88,16 +124,11 @@ defmodule Macaw.Data.Source.Finish do
              with {:ok, d} <- ordered(d, request.order, schema, head(supports, request.budget)),
                   do: {:ok, serve(d, :ordered, by)}
            end) do
-      step(
-        d,
-        :budget in supports,
-        &reduced(&1, schema, request.budget, plan, opts[:operations])
-      )
+      if :budget in supports,
+        do: {:ok, d, cache},
+        else: reduced(d, schema, request.budget, plan, opts[:operations], cache)
     end
   end
-
-  def finish(%Delivery{}, %Description{}, %Request{}, _opts),
-    do: {:error, [{[:opts], {:type, :keyword}}]}
 
   @doc "As `finish/4`, the delivery alone, raising `Macaw.Data.Error` naming the faults."
   @spec finish!(Delivery.t(), Description.t(), Request.t(), keyword()) :: Delivery.t()
@@ -252,6 +283,14 @@ defmodule Macaw.Data.Source.Finish do
   budget, which is then only a ceiling, an even stride keeping the first and the last.
   So each reader of a pooled fetch is reduced its own way.
 
+  **Through the caller's cache** (spec/01 §2.4, macaw_data#247): given a
+  `Macaw.Data.Operations.Cache` in `method`'s place, the budget or request is reduced as
+  without one and the answer is `{:ok, delivery, cache}` (`reduce!/5`: `{delivery,
+  cache}`). A table reduced by `m4` or `lttb` is reduced chunk by chunk from the ladder
+  partials the cache holds by chunk id and version (`Finish.Chunked`), the same rows, names
+  and served facts at the cost of the chunks that changed; any other reduces whole and the
+  cache comes back as it was. Prune it with the held table (`Cache.prune/2`).
+
   **An ordered delivery keeps its head** (spec/01 §2.4): one whose `served.ordered` is
   set holds its rows in a reader's order, and a reader that orders rows wants the first
   of them, not a shape, so its first `budget` rows are kept, `reduced_by: :runtime`, with
@@ -274,11 +313,24 @@ defmodule Macaw.Data.Source.Finish do
           Delivery.t(),
           Schema.t(),
           pos_integer() | nil | Request.t(),
-          String.t() | atom(),
+          String.t() | atom() | Cache.t(),
           Registry.t()
         ) ::
-          {:ok, Delivery.t()} | {:error, [{list(), term()}, ...]}
+          {:ok, Delivery.t()}
+          | {:ok, Delivery.t(), Cache.t()}
+          | {:error, [{list(), term()}, ...]}
   def reduce(delivery, schema, budget, method \\ "lttb", registry \\ Operations.registry())
+
+  def reduce(%Delivery{} = delivery, %Schema{} = schema, budget, %Cache{} = cache, registry) do
+    {budget, reduce} =
+      case budget do
+        %Request{} = request -> {request.budget, request.reduce}
+        budget -> {budget, nil}
+      end
+
+    with {:ok, plan} <- plan(registry, reduce, "lttb"),
+         do: reduced(delivery, schema, budget, plan, registry, cache)
+  end
 
   def reduce(%Delivery{} = delivery, %Schema{} = schema, %Request{} = request, method, registry) do
     with {:ok, plan} <- plan(registry, request.reduce, method),
@@ -295,14 +347,17 @@ defmodule Macaw.Data.Source.Finish do
           Delivery.t(),
           Schema.t(),
           pos_integer() | nil | Request.t(),
-          String.t() | atom(),
+          String.t() | atom() | Cache.t(),
           Registry.t()
         ) ::
-          Delivery.t()
+          Delivery.t() | {Delivery.t(), Cache.t()}
   def reduce!(delivery, schema, budget, method \\ "lttb", registry \\ Operations.registry()) do
     case reduce(delivery, schema, budget, method, registry) do
       {:ok, reduced} ->
         reduced
+
+      {:ok, reduced, cache} ->
+        {reduced, cache}
 
       {:error, faults} ->
         raise Macaw.Data.Error, reason: faults, what: "the delivery cannot be reduced"
@@ -332,36 +387,54 @@ defmodule Macaw.Data.Source.Finish do
   defp registry_of(%Registry{} = registry), do: {:ok, registry}
   defp registry_of(_other), do: {:error, [{[:operations], {:type, :registry}}]}
 
+  # The delivery reduced by the plan, through the caller's cache where one is given
+  # (`nil` for none): `{:ok, delivery, cache}`.
+  defp reduced(delivery, schema, budget, plan, registry) do
+    with {:ok, delivery, nil} <- reduced(delivery, schema, budget, plan, registry, nil),
+         do: {:ok, delivery}
+  end
+
   # No budget: only a reducer the request names at its own count reduces.
-  defp reduced(%Delivery{} = delivery, _schema, nil, :none, _registry), do: {:ok, delivery}
-  defp reduced(%Delivery{} = delivery, _schema, nil, {:share, _}, _registry), do: {:ok, delivery}
+  defp reduced(%Delivery{} = delivery, _schema, nil, :none, _registry, cache),
+    do: {:ok, delivery, cache}
+
+  defp reduced(%Delivery{} = delivery, _schema, nil, {:share, _}, _registry, cache),
+    do: {:ok, delivery, cache}
 
   # An ordered delivery is never shaped by a reducer: its head, under a budget.
-  defp reduced(%Delivery{served: %{ordered: by}} = delivery, _schema, budget, _plan, _registry)
+  defp reduced(
+         %Delivery{served: %{ordered: by}} = delivery,
+         _schema,
+         budget,
+         _plan,
+         _registry,
+         cache
+       )
        when by != nil do
     with {:ok, form} <- form(delivery) do
       if budget == nil or size(form) <= budget,
-        do: {:ok, delivery},
-        else: {:ok, delivery |> keep(form, 0..(budget - 1)) |> serve(:reduced_by, :runtime)}
+        do: {:ok, delivery, cache},
+        else:
+          {:ok, delivery |> keep(form, 0..(budget - 1)) |> serve(:reduced_by, :runtime), cache}
     end
   end
 
   # No reduction: every row up to the budget, which is only a ceiling.
-  defp reduced(%Delivery{} = delivery, _schema, budget, :none, _registry) do
+  defp reduced(%Delivery{} = delivery, _schema, budget, :none, _registry, cache) do
     with {:ok, form} <- form(delivery) do
       n = size(form)
 
       if n <= budget,
-        do: {:ok, delivery},
+        do: {:ok, delivery, cache},
         else:
           {:ok,
            delivery
            |> picked(form, at_most(Enum.to_list(0..(n - 1)), budget), {:reduced, :none, budget})
-           |> serve(:reduced_by, :runtime)}
+           |> serve(:reduced_by, :runtime), cache}
     end
   end
 
-  defp reduced(%Delivery{} = delivery, schema, budget, plan, registry) do
+  defp reduced(%Delivery{} = delivery, schema, budget, plan, registry, cache) do
     clock = Schema.window_field(schema)
     numbers = for {name, %{type: :number}} <- schema.fields, name != clock, do: name
 
@@ -369,21 +442,22 @@ defmodule Macaw.Data.Source.Finish do
       n = size(form)
 
       if numbers == [] or (elem(plan, 0) == :share and n <= budget) do
-        {:ok, delivery}
+        {:ok, delivery, cache}
       else
         numbers = Enum.sort_by(numbers, &to_string/1)
 
-        with {:ok, kept, used} <- kept(form, schema, numbers, budget, plan, registry) do
+        with {:ok, kept, used, cache} <-
+               kept(form, schema, numbers, budget, plan, registry, cache) do
           kept = if budget, do: at_most(kept, budget), else: kept
 
           if elem(plan, 0) == :count and length(kept) == n,
-            do: {:ok, delivery},
+            do: {:ok, delivery, cache},
             else:
               {:ok,
                delivery
                |> picked(form, kept, {:reduced, elem(used, 0), elem(used, 1)})
                |> serve(:reduced_by, :runtime)
-               |> serve(:reduced_with, used)}
+               |> serve(:reduced_with, used), cache}
         end
       end
     end
@@ -426,10 +500,32 @@ defmodule Macaw.Data.Source.Finish do
 
   defp picked(delivery, rows, indexes, _key), do: keep(delivery, rows, indexes)
 
-  # The indexes, ascending, of the rows each series' reducer keeps, field by field: a
-  # series the rows sharing every `:category` field's value, each field's readings and
-  # the window field's positions read once, by index.
-  defp kept(form, schema, numbers, budget, plan, registry) do
+  # The indexes, ascending, of the rows each series' reducer keeps, the reducer and count,
+  # and the cache: a table's chunk by chunk through the caller's cache where one is given
+  # and its reducer works on the ladder (`Finish.Chunked`, macaw_data#247), with the same
+  # answer; any other whole.
+  defp kept({:table, table} = form, schema, numbers, budget, plan, registry, %Cache{} = cache) do
+    {{module, _option, _per, _least}, _count} = count(plan, budget, 1)
+
+    if Chunked.applies?(module, table, Schema.window_field(schema), numbers) do
+      share = fn share -> elem(count(plan, budget, share), 1) end
+
+      case Chunked.kept(table, schema, numbers, module, share, cache) do
+        {:ok, kept, c, cache} -> {:ok, kept, {module.name(), c}, cache}
+        {:error, _faults} = error -> error
+        :whole -> kept(form, schema, numbers, budget, plan, registry, nil, cache)
+      end
+    else
+      kept(form, schema, numbers, budget, plan, registry, nil, cache)
+    end
+  end
+
+  defp kept(form, schema, numbers, budget, plan, registry, cache),
+    do: kept(form, schema, numbers, budget, plan, registry, nil, cache)
+
+  # The whole reduction: a series the rows sharing every `:category` field's value, each
+  # field's readings and the window field's positions read once, by index.
+  defp kept(form, schema, numbers, budget, plan, registry, nil, cache) do
     categories =
       Enum.sort_by(for({name, %{type: :category}} <- schema.fields, do: name), &to_string/1)
 
@@ -464,7 +560,8 @@ defmodule Macaw.Data.Source.Finish do
       end
 
     with {:ok, kept} <- result,
-         do: {:ok, kept |> MapSet.to_list() |> Enum.sort(), {elem(method, 0).name(), count}}
+         do:
+           {:ok, kept |> MapSet.to_list() |> Enum.sort(), {elem(method, 0).name(), count}, cache}
   end
 
   # The reducer and its count: the request's own, or the budget's share in the units the

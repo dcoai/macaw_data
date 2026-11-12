@@ -2,10 +2,20 @@
 
 ## Unreleased
 
-The next release is **0.17.0**: it adds public API (a request's reducer, a served fact) and changes behavior (a source's table by row count now refuses rows out of its window field's order).
+The next release is **0.17.0**: it adds public API (a request's reducer, a served fact, finishing through a cache, `Macaw.Data.Table.Chunk.pick/5`) and changes behavior (a source's table by row count now refuses rows out of its window field's order).
 
 ### Changes
 
+- **New: finishing reduces a table chunk by chunk through the caller's cache** (#247, #259, spec/01 §2.4, spec/04 §1.5; from visualize's frame-time work). `Macaw.Data.Source.Finish.reduce/5` given a `Macaw.Data.Operations.Cache` in the reducer name's place, and the new `Macaw.Data.Source.Finish.finish/5` given one after its options, answer `{:ok, delivery, cache}`: a table's series are reduced by `m4` or `lttb` from per-chunk ladder partials the cache holds by chunk id and version, folded into a coarser level when the extent or count calls for one, so a warm call costs the chunks that changed and the merge. **The answer is the whole reduction's**, rows, chunk names and served facts, held by a property over generated tables, series, gaps, chunkings and cut views. Any other delivery, reducer or window field reduces whole, the cache as it was. On visualize#998's loop (50,000 readings, one 1,000-row frame, the newest 50,000 seconds to 1,000):
+
+  | Reducer, path | Whole | Warm, through the cache |
+  |---|---|---|
+  | `m4`, Elixir | 2,055,820 r, 89–97 ms | 610,353 r, 25 ms |
+  | `m4`, kernels | 829,569 r, 30–32 ms | 207,793 r, 7–8 ms |
+  | `lttb`, Elixir | 1,867,580 r, 44–60 ms | 575,783 r, 19–23 ms |
+  | `lttb`, kernels | 681,288 r, 23–27 ms | 149,407 r, 4–5 ms |
+
+  The warm costs are pinned (700,000 on the Elixir path, 250,000 with the kernels, each at most a third of the whole). Prune the cache with the held table (`Macaw.Data.Operations.Cache.prune/2`).
 - **A reduced table's chunks are named stably** (#247, #258, spec/01 §1.1.3, §2.4). Finishing's budget step gathered the rows it kept into chunks named by those rows (`{source id, {:subset, rows}}`), so a reduced chunk's id changed whenever its kept rows did. Each source chunk's kept rows are now one chunk named `{source id, {:reduced, name, count}}` (`Macaw.Data.Table.Chunk.pick/5`, new), for the reducer and count of `served.reduced_with` (`{:reduced, :none, budget}` for the ceiling's stride), its version the derivation digest of the source chunk's version and the slots kept: the id holds on every reduction and the version moves only with that chunk's kept rows. Rows, served facts and cost are unchanged. A host's per-chunk cache keyed by id and version reuses exactly what it reused before (visualize#998's loop under a budget of 4,000: 8 to 10 parts a frame by `m4`, none by `lttb`, whose picks move with the window), and its eviction by id now follows the source chunk.
   - **Breaking only for a caller that read a reduced chunk's id's form;** ids are opaque, and nothing in this library reads one's form.
 

@@ -160,6 +160,38 @@ defmodule Macaw.Data.Operations.Cache do
     %{cache | parts: Map.filter(parts, fn {{id, version, _key}, _} -> {id, version} in live end)}
   end
 
+  @doc false
+  # What a caller beside the steps holds for `chunk` under `key` (finishing's parts,
+  # spec/01 §2.4, macaw_data#247): the part, or `nil` when none is held or the chunk has
+  # no version. Its key is the steps' shape, `{id, version, key}`, so `prune/2` evicts it.
+  @spec held(t(), Chunk.t(), term()) :: term() | nil
+  def held(%__MODULE__{parts: parts}, chunk, key) do
+    case Chunk.version(chunk) do
+      nil -> nil
+      version -> Map.get(parts, {Chunk.id(chunk), version, key})
+    end
+  end
+
+  @doc false
+  # The cache holding `part` for `chunk` under `key`, as `held/3` reads it; as it was for a
+  # chunk with no version, which no key matches.
+  @spec hold(t(), Chunk.t(), term(), term()) :: t()
+  def hold(%__MODULE__{parts: parts} = cache, chunk, key, part) do
+    case Chunk.version(chunk) do
+      nil -> cache
+      version -> %{cache | parts: Map.put(parts, {Chunk.id(chunk), version, key}, part)}
+    end
+  end
+
+  @doc false
+  # The cache recording how a call came by its parts.
+  @spec counted(t(), %{
+          reused: non_neg_integer(),
+          updated: non_neg_integer(),
+          computed: non_neg_integer()
+        }) :: t()
+  def counted(%__MODULE__{} = cache, last), do: %{cache | last: last}
+
   @doc "How many parts the cache holds."
   @spec size(t()) :: non_neg_integer()
   def size(%__MODULE__{parts: parts}), do: map_size(parts)
