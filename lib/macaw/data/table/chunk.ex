@@ -517,6 +517,32 @@ defmodule Macaw.Data.Table.Chunk do
   end
 
   @doc """
+  A reduced chunk of `input` (spec/01 §1.1.3, macaw_data#247): the rows at `indexes` of
+  the run of `count` rows from `first` that a budget's reducer kept, ascending, every
+  column gathered by its slots as `gather/5` gathers them. Its id is `{id(input), key}`
+  whatever rows it keeps, so a reader reducing the chunk by one reducer at one count
+  meets the same id on every call; its version is the derivation digest of
+  `{[version(input)], {key, slots}}`, `slots` the input's slots it holds, so it moves only
+  when the input or the rows kept do. Nothing is hashed but that term.
+  """
+  @spec pick(t(), non_neg_integer(), non_neg_integer(), [non_neg_integer()], term()) :: t()
+  def pick(%__MODULE__{} = input, first, _count, indexes, key) when is_list(indexes) do
+    at = read_at(first, indexes)
+    columns = Map.new(as_read(input), fn {name, col} -> {name, Column.gather(col, at)} end)
+    size = length(indexes)
+
+    %__MODULE__{
+      size: size,
+      columns: columns,
+      id: {input.id, key},
+      digest: nil,
+      derivation: Digest.term({[version(input)], {key, at}}),
+      base_rows: size,
+      header: input.header
+    }
+  end
+
+  @doc """
   A reshaping per-row step's output chunk (spec/04 §1.4, §4.7): the rows at `indexes` of
   the run of `count` rows from `first` of `input`, repeats allowed, under `header`
   (`{name, type}` in order): a column of `added` (a map from name to its values) packed

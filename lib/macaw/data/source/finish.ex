@@ -356,7 +356,7 @@ defmodule Macaw.Data.Source.Finish do
         else:
           {:ok,
            delivery
-           |> keep(form, at_most(Enum.to_list(0..(n - 1)), budget))
+           |> picked(form, at_most(Enum.to_list(0..(n - 1)), budget), {:reduced, :none, budget})
            |> serve(:reduced_by, :runtime)}
     end
   end
@@ -381,7 +381,7 @@ defmodule Macaw.Data.Source.Finish do
             else:
               {:ok,
                delivery
-               |> keep(form, kept)
+               |> picked(form, kept, {:reduced, elem(used, 0), elem(used, 1)})
                |> serve(:reduced_by, :runtime)
                |> serve(:reduced_with, used)}
         end
@@ -407,11 +407,9 @@ defmodule Macaw.Data.Source.Finish do
   defp positions({:table, table}, field), do: Columns.positions(table, field)
   defp positions(form, field), do: form |> read(field) |> Enum.map(&Window.position/1)
 
-  # The rows at the ascending indexes, in the delivery's form.
+  # The rows at the ascending indexes, in the delivery's form: a table's head as a slice.
   defp keep(delivery, {:table, table}, first..last//1) when last >= first,
     do: %{delivery | rows: Table.slice(table, first, last - first + 1)}
-
-  defp keep(delivery, {:table, table}, indexes), do: %{delivery | rows: Subset.at(table, indexes)}
 
   defp keep(delivery, {:rows, rows}, first..last//1),
     do: rebuild(delivery, Enum.slice(rows, first..last//1))
@@ -420,6 +418,13 @@ defmodule Macaw.Data.Source.Finish do
     kept = MapSet.new(indexes)
     rebuild(delivery, for({row, i} <- Enum.with_index(rows), MapSet.member?(kept, i), do: row))
   end
+
+  # The rows a reducer kept, ascending: a table's each source chunk's kept rows one chunk
+  # named by `key` (`Subset.picked/3`, macaw_data#247), so its name holds across calls.
+  defp picked(delivery, {:table, table}, indexes, key),
+    do: %{delivery | rows: Subset.picked(table, indexes, key)}
+
+  defp picked(delivery, rows, indexes, _key), do: keep(delivery, rows, indexes)
 
   # The indexes, ascending, of the rows each series' reducer keeps, field by field: a
   # series the rows sharing every `:category` field's value, each field's readings and

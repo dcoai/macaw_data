@@ -47,6 +47,19 @@ defmodule Macaw.Data.Table.Subset do
     end
   end
 
+  @doc false
+  # The rows a budget's reducer kept, at the ascending `indexes` (of a ready table), as a
+  # table of its columns (spec/01 §2.4, macaw_data#247): each view's kept rows one reduced
+  # chunk named `{source id, key}` (`Chunk.pick/5`), or the view's run where they are
+  # contiguous, so the names hold from one reduction to the next.
+  @spec picked(Table.t(), [non_neg_integer()], term()) :: Table.t()
+  def picked(table, indexes, key) do
+    header = for name <- Table.names(table), do: {name, Table.column_type(table, name)}
+    views = runs(Table.chunks(table), 0, indexes, [], {:picked, key})
+    {:ok, taken} = Table.from_chunks(header, views, sorted: Table.sorted(table))
+    taken
+  end
+
   # Rows in another order, all of one view: gathered from its chunk in their order, every
   # column copied by its slots (`Chunk.gather/5` takes indexes in any order).
   defp one_view(views, indexes) do
@@ -127,14 +140,14 @@ defmodule Macaw.Data.Table.Subset do
   defp ascending?(_one_or_none), do: true
 
   # The views of the ascending indexes `kept`, view by view of the table's.
-  defp runs(views, kept), do: runs(views, 0, kept, [])
+  defp runs(views, kept), do: runs(views, 0, kept, [], :subset)
 
-  defp runs(_views, _start, [], acc), do: Enum.reverse(acc)
+  defp runs(_views, _start, [], acc, _name), do: Enum.reverse(acc)
 
-  defp runs([{chunk, first, count} | views], start, kept, acc) do
+  defp runs([{chunk, first, count} | views], start, kept, acc, name) do
     {here, rest} = split_below(kept, start + count, [])
-    acc = if here == [], do: acc, else: [run(chunk, first, count, start, here) | acc]
-    runs(views, start + count, rest, acc)
+    acc = if here == [], do: acc, else: [run(chunk, first, count, start, here, name) | acc]
+    runs(views, start + count, rest, acc, name)
   end
 
   defp split_below([i | rest], limit, acc) when i < limit, do: split_below(rest, limit, [i | acc])
@@ -143,12 +156,14 @@ defmodule Macaw.Data.Table.Subset do
   # One view's kept rows: a contiguous run read where it lies, any other gathered. The rows
   # are in order, so they are a run when they span as many places as they hold and none
   # repeats: [10, 10, 12, 13] spans four and holds four (macaw_data#205).
-  defp run(chunk, first, count, start, [i | _] = here) do
+  defp run(chunk, first, count, start, [i | _] = here, name) do
     locals = Enum.map(here, &(&1 - start))
     k = length(locals)
 
-    if List.last(here) - i + 1 == k and ascending?(here),
-      do: {chunk, first + i - start, k},
-      else: {Chunk.gather(chunk, first, count, locals, {:subset, locals}), 0, k}
+    cond do
+      List.last(here) - i + 1 == k and ascending?(here) -> {chunk, first + i - start, k}
+      name == :subset -> {Chunk.gather(chunk, first, count, locals, {:subset, locals}), 0, k}
+      {:picked, key} = name -> {Chunk.pick(chunk, first, count, locals, key), 0, k}
+    end
   end
 end
