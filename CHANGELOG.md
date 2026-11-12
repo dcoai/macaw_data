@@ -1,8 +1,19 @@
 # Changelog
 
-## Unreleased
+## v0.17.0 (2026-11-12)
 
-The next release is **0.17.0**: it adds public API (a request's reducer, a served fact, finishing through a cache, `Macaw.Data.Table.Chunk.pick/5`, the shipped sources) and changes behavior (a source's table by row count now refuses rows out of its window field's order).
+**A reducer named per reader and finishing chunk by chunk through a cache, one parsed format for numbers and times, the loop over a set of sources as a value, and generated, combined and telemetry sources that pass the conformance kit** (#239, #246, #247, #248, #249, #250, #251, #260, #261, #269, #271, #273, #275, #277, #278, #279, #282). It adds public API and changes behavior: a source's table refuses rows out of its window field's order, and the kit holds a subscription to its resolution and position. So this is a minor.
+
+### Upgrading from 0.16.x
+
+- **Breaking: a source's table whose origin names a window field is sorted by it, with a chunk span or without one.** `Macaw.Data.Table.new/2` refuses rows out of that field's order with `{[:origin, :window], {:unsorted, i}}`, and `Macaw.Data.Table.append/2` of such a table refuses earlier rows with `{:error, {:unsorted, 0}}`. A caller handing a source's table unsorted rows sorts them first; a late row is `Macaw.Data.Table.apply/2`'s.
+- **Breaking for a holder that read `Macaw.Data.Source.Push.held/1`'s `note` or `ordered` after an increment.** `note` is the last applied answer's (`nil` when that stated none), as `stale` is, and `ordered` is `nil`.
+- **Breaking for the conformance kit's users:** the `:push`, `:deliveries` and new `:monitor` checks can fail a source that passed before. An increment states its subscribed fetch's resolution; a fetch taken with `subscription:` set states the subscription's position and no other fetch states one. Such a source was already broken for every holder.
+- **Breaking only for a caller that read a reduced chunk's id's form:** a reduced table's chunks are `{source id, {:reduced, name, count}}`. Ids are opaque.
+- **New:** `Macaw.Data.Source.Request`'s `reduce` (`{:m4, width}`, `{:lttb, n}`, `:none`) and the served fact `reduced_with`; finishing through a `Macaw.Data.Operations.Cache` (`Macaw.Data.Source.Finish.finish/5`, `reduce/5`), with `Macaw.Data.Table.Chunk.pick/5`. Every existing call answers as it did.
+- **New:** `Macaw.Data.Format` (spec/05): d3-format numbers, strftime times, and a field's default from its measure.
+- **New:** `Macaw.Data.Monitor`, `Macaw.Data.Source.Signal`, `Macaw.Data.Source.Combined` and `Macaw.Data.Source.Telemetry`, which needs the new optional `:telemetry` dependency (without it `start_link/1` answers `{:error, :no_telemetry}`).
+- **Fixed:** `Macaw.Data.Table.compact/1`, `append/2` and `apply/2` of a table that is not a source's keep its sorted mark only while it is true.
 
 ### Changes
 
