@@ -9,6 +9,6 @@
 | [02 — Derived sources](02-derived.md) | checked, bounded, deterministic functions over sources | implemented (order-of-work step 5) |
 | [04 — Operations](04-operations.md) | the transform and aggregate behaviors, the registry, the table operations, the statistics, what a stored function reaches, budget reducers | implemented (order-of-work step 6) |
 | [03 — Units and quantities](03-units.md) | UCUM codes, dimensions and factors, aliases, the currency extension, symbols, conversion, `Telemetry.Metrics` units; the fixed list of quantities, their kind, bounds, additivity, families, conventions and unit systems; the measure; the label rule | implemented (order-of-work step 3) |
-| [05 — Formats](05-format.md) | a format as data, the d3-format notation, the locale | implemented: §1 to §3 (macaw_data#251) |
+| [05 — Formats](05-format.md) | a format as data, the d3-format notation, the locale, the common formats' cost, times, a field's default from its measure | implemented (macaw_data#251) |
 
 Sections keep the anchors they had in the family spec (`sources-*`, `derived-*`), so links into them stay stable.

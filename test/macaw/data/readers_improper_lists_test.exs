@@ -339,6 +339,12 @@ defmodule Macaw.Data.ReadersImproperListsTest do
              end)
            end) == []
 
+    assert raised(improper(domain: [0, 1], precision: 2), fn opts ->
+             answers(fn -> Format.for_measure(%{unit: "By"}, opts) end, fn ->
+               Format.for_measure!(%{unit: "By"}, opts)
+             end)
+           end) == []
+
     assert raised(improper(periods: ["a", "p"], months: locale.months), fn fields ->
              answers(fn -> Format.Locale.new(fields) end, fn -> Format.Locale.new!(fields) end)
            end) == []

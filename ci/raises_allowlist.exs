@@ -17,6 +17,11 @@
     reason: "parse/2's twin: raises the faults parse/2 answers, as Macaw.Data.Error"
   },
   %{
+    at: {Macaw.Data.Format, :for_measure!, 2},
+    class: :bang,
+    reason: "for_measure/2's twin: raises the faults for_measure/2 answers, as Macaw.Data.Error"
+  },
+  %{
     at: {Macaw.Data.Format, :parse_time!, 2},
     class: :bang,
     reason: "parse_time/2's twin: raises the faults parse_time/2 answers, as Macaw.Data.Error"

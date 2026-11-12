@@ -2,7 +2,7 @@
 
 <!-- surfex: class orientation -->
 
-**Units and quantities come from one vocabulary,** so nothing translates between two ([01 §1](01-sources.md#sources-data); metresis.md C1). A field's schema names its unit and its quantity from this vocabulary, and visualize, metresis and Macaw's components all read it. It is visualize's vocabulary (its spec/05 §4), moved here so every adopter shares it: `Macaw.Data.Unit` and `Macaw.Data.Quantity`. How a value is drawn in its unit (the display unit an axis picks, its tick formats, a value written in a locale) stays with the drawing library, visualize's `Visualize.Quantity`, built on this vocabulary.
+**Units and quantities come from one vocabulary,** so nothing translates between two ([01 §1](01-sources.md#sources-data); metresis.md C1). A field's schema names its unit and its quantity from this vocabulary, and visualize, metresis and Macaw's components all read it. It is visualize's vocabulary (its spec/05 §4), moved here so every adopter shares it: `Macaw.Data.Unit` and `Macaw.Data.Quantity`. How a value is written by default (its format in a locale, the member of its family one value is written in) is macaw_data's too ([05 §6](05-format.md#format-default)), so a tile and an axis write it alike; how it is drawn (the ticks an axis picks and places) stays with the drawing library, visualize's `Visualize.Quantity`, built on this vocabulary.
 
 ## 1. Units are UCUM codes {#units-codes}
 
@@ -139,7 +139,7 @@ UCUM has no currency, and a plain annotation (`{USD}`) is UCUM's unity, so `{USD
 - a code composes like any unit: `{iso4217:USD}/h` is an hourly rate, `{iso4217:EUR}/kW/h` an energy price (UCUM's `/` is left-associative, so a price per kilowatt-hour divides twice: `{iso4217:EUR}/kW.h` would be euro-hours per kilowatt), `{iso4217:EUR}/{iso4217:USD}` an exchange rate, which is data like any other;
 - its factor is the unity, so a currency scales only by the units around it;
 - a code not in the table is refused by `parse/1`, `{:error, {:unknown_currency, code}}`, the extension being macaw_data's to check;
-- its display symbol is the code (`{iso4217:USD}/h` → `USD/h`), and how it is written in a locale is the drawing library's.
+- its display symbol is the code (`{iso4217:USD}/h` → `USD/h`), and how it is written in a locale is [05 §6](05-format.md#format-default)'s.
 
 **To any other UCUM reader, `{iso4217:USD}` and `{iso4217:EUR}` are both the dimensionless unit `1`, and so equal.** The annotation is valid UCUM syntax, so another reader degrades to "a count" rather than failing, but it cannot tell two currencies apart. macaw_data therefore never hands a currency code to a UCUM consumer — a telemetry export, an OpenTelemetry unit — without that caveat; within Macaw and visualize, and between hosts that use them, the code is the currency. `Macaw.Data.Unit.currency/1` is the ISO code a code holds alone (`"USD"` for `{iso4217:USD}`, `nil` for `{iso4217:USD}/h` and for any code that is not a currency), and `Macaw.Data.Unit.minor_units/1` a code's minor units (`nil` for none).
 
@@ -306,7 +306,7 @@ A quantity's display families are ladders of units, smallest first, each tagged 
 | `:electric_charge` | — | — | — | `mA.h`, `A.h` |
 | `:illuminance` | — | — | — | `lx`, `klx` |
 
-`:ratio`, `:count`, `:angle`, `:currency`, `:sound_level` and the two concentrations have no family: each is displayed in the unit it is given (how a count is written, in SI notation from a thousand, is the drawing library's).
+`:ratio`, `:count`, `:angle`, `:currency`, `:sound_level` and the two concentrations have no family: each is displayed in the unit it is given (how a count is written is [05 §6](05-format.md#format-default)'s).
 
 **Conventions** (visualize#598, D-158). One dimension may be read in several conventions, and a unit system picks a unit *within* a convention, never across them: a US weather viewer reads a barometer in inches of mercury, not psi, and a blood pressure is mmHg in every system. A convention is a fact of the quantity table: its families, tagged by system as above, and the codes it **claims** — every member of its families and any further code it holds without a ladder for it. `:pressure` has three, in this order:
 
@@ -336,7 +336,7 @@ the four systems; a system shows a unit in its own family, US and UK apart, and 
 
 A unit and a quantity together are a *measure*, `%{unit: code | nil, quantity: quantity | nil}`, the two facts a field description carries (visualize#535). `Macaw.Data.Quantity.resolve/1` completes and checks one: the unit is checked (§1); a missing quantity is the one the unit's dimension implies — the table's dimension, a dimensionless unit holding `%` being `:ratio` and any other dimensionless one `:count`, and a code of one currency alone (`{iso4217:USD}`) `:currency` — or `nil` when no quantity has that dimension (`rad/s`, `Cel/s`, a bare `dB`); a missing unit is the quantity's base unit (`nil` for a `:currency`, whose code the data must say); a unit whose dimension is not its quantity's (`By` as a `:duration`, `dB` as a `:sound_level`) is `{:error, {:quantity, quantity, code}}`; a `:ratio` or a `:count` takes any dimensionless unit, and a `:currency` a code of one currency alone — `{iso4217:USD}`, not `{iso4217:USD}/h`, whose quantity is none of the list. It returns `{:ok, %{unit: code | nil, quantity: quantity | nil}}`, `{:error, {:unit, code, reason}}` for a code that does not read, `{:error, {:unknown_quantity, term}}` for a quantity not in the list, or the mismatch. `Macaw.Data.Quantity.of_unit/1` is the inference alone.
 
-**Unit and quantity are facts about the data, not knobs.** Neither changes what a value is; they say what it already is, so a display can choose for it. What a reader sees (the format, the tick count) is the drawing library's to choose, and the unit system is the viewer's; there is no setting that picks decimal against binary apart from the data.
+**Unit and quantity are facts about the data, not knobs.** Neither changes what a value is; they say what it already is, so a display can choose for it. What a reader sees by default is derived from them, never set ([05 §6](05-format.md#format-default)): a design's format only overrides it, the tick count is the drawing library's, and the unit system is the viewer's; there is no setting that picks decimal against binary apart from the data.
 
 ```test:quantities-resolve
 resolve/1 completes a measure: a unit implies its quantity and a quantity its base unit; a pair whose dimensions disagree is refused, and so are a code that does not read and a quantity not in the list

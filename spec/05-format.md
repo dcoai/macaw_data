@@ -131,3 +131,37 @@ every case of visualize's Format.time/2 tests writes byte for byte what visualiz
 ```test:format-time-kinds
 a UTC and a zoned DateTime, a NaiveDateTime, a Date and integer microseconds are written by their own fields, the integer as UTC; any other value and an integer past a DateTime's range are NaN; another locale's names are written; parse_time/2 refuses a term that is no string and options parse/2 refuses, and parse_time!/2 raises them
 ```
+
+## 6. A field's default {#format-default}
+
+**A field's value is written the same whoever writes it, with no format given** (macaw_data#255). macaw_data knows each field's unit and quantity ([03](03-units.md), [01 §1.2](01-sources.md#sources-schema)), so the format follows from them: a stat tile and an axis tick over one field ask the same function rather than each choosing digits. `Macaw.Data.Format.for_measure(measure, opts)` answers `{:ok, %Macaw.Data.Format.Measure{}}`, data like every format, and `Macaw.Data.Format.measure(format, value)` writes a value by it. The measure is completed and checked by `Macaw.Data.Quantity.resolve/1` ([03 §13](03-units.md#quantities-measure)), so a unit implies its quantity:
+
+| The measure | How a value is written | Examples |
+|---|---|---|
+| a `:duration` | converted to seconds, in the compound form: the two largest non-zero whole units of `d`, `h`, `m` and `s` from a second up, joined by a space; below a second in `ms`, below a microsecond in `ns`, each to `precision` decimals with the trailing zeros dropped | 5,040 `s` is `1h 24m`, 3,603 `s` `1h 3s`, 0.84 `s` `840ms`, 100 `ns` `100ns` |
+| a `:currency` | by its code: grouped, to the code's minor units ([03 §4](03-units.md#units-currency)), 2 for a code with none; the locale's symbol for the code before the amount and after the sign, or the code after the amount and a space for a code the locale has none for | 1,240 `{iso4217:USD}` is `$1,240.00`, `{iso4217:JPY}` `¥1,240`, `{iso4217:BHD}` `1,240.000 BHD`, −9.5 `{iso4217:EUR}` `-€9.50` |
+| a `:ratio` | as a percent, its value converted into `%`, to `precision` decimals | 0.914 in `1` and 91.4 in `%` are both `91.40%` |
+| a `:count` | rounded to an integer and grouped | 1,240.4 is `1,240` |
+| any other quantity | in the member of its unit's family under the system ([03 §11](03-units.md#quantities-families), [§12](03-units.md#quantities-systems)) that its magnitude fills to at least 1, else the smallest; a family of one member is that member; a unit no family holds, or one with no factor (`Cel`), as it is; to `precision` decimals, then the unit's suffix | 1,500,000 `By` is `1.50 MB`, 3,145,728 `By` in `KiBy`'s binary ladder `3.00 MiB`, 1,500 `m` `1.50 km`, 80 `kg` under `:us` `176.37 lb`, 21.5 `Cel` `21.50 °C` |
+| a unit and no quantity | to `precision` decimals, then the unit's suffix | 3.5 `rad/s` is `3.50 rad/s` |
+| no unit and no quantity | by its notation (below), or to `precision` decimals when one is given and no notation or domain is | `450`, `45,000`, `4.5M`; `1234.50` at precision 2 |
+
+**The suffix** is the unit's symbol ([03 §5](03-units.md#units-symbol)) after a space, directly after the number when it is `%` or `°` or begins with `/`, and nothing when it is empty. **The notation** of a number with no measure is an axis's ([visualize's `Visualize.Format.Auto`](https://github.com/dcoai/visualize)): `:plain` writes a float to at most six decimals, its zeros and a bare point dropped and never `-0`, and an integer as it is; `:grouped` is that grouped in threes; `{:si, e}` is the value over 10ᵉ, plain, then the SI prefix of `e` (`k` to `Y`), zero as `0`; `:si` gives each value its own prefix from a thousand, plain below it. By default each value takes the notation of its own magnitude, plain below 1,000, grouped below a million and `{:si, e}` from there, `e` the exponent of the largest prefix not above it; `domain:` takes the notation of a domain's greatest magnitude for every value, as an axis's ticks share one.
+
+**Options**, each checked: `precision:` the decimals, an integer from 0 to 20, 2 by default (a currency's are its code's minor units unless it is given); `system:` one of `Macaw.Data.Quantity.systems/0`, `:as_posted` by default; `style:` a duration's, `:compound` by default or `:magnitude`, visualize's axis form (the largest of `d`, `h`, `m`, `s` and `ms` the value reaches, a whole count as it is, one whole in the next finer unit as both, `2m30s`, any other to one decimal, `1.5h`, a negative signed `−`); `notation:` and `domain:` (a list of numbers, any other element skipped) a number's with no measure; `locale:` a `Macaw.Data.Format.Locale` (§3); and `format:` a d3 specifier (§2), which **only overrides the number**: the value is written by it in the field's unit and followed by the unit's suffix, except a currency's amount and a ratio under `%` or `p`, which the specifier writes whole (a ratio as a fraction of one, which `%` multiplies). A value that is no number is the locale's not-a-number.
+
+**Faults** are `{[key], reason}`: a measure `resolve/1` refuses is `{[:measure], reason}` and one that is no map `{[:measure], {:type, :measure}}`; a precision out of range `{[:precision], {:type, :precision}}`; a system `{[:system], {:unknown_system, system}}`; a style or a notation `{[key], {:enum, choices}}`; a domain that is no list `{[:domain], {:type, :domain}}`; a specifier `parse/2` refuses `{[:format], reason}`; a locale that is no `Locale` `{[:locale], {:type, :locale}}`; any other key `{[key], :unknown_key}`. `for_measure!/2` raises them.
+
+**Where this differs from visualize's `Visualize.Quantity.format/3`,** macaw_data#251 chose it: a value is rescaled within its unit's family under every system, `:as_posted` included, as an axis already rescales it, so a tile writes 1,500,000 `By` as `1.50 MB` where visualize's one value is `1500000.00 B`; a ratio in a unit other than `%` is a percent, `91.40%` where visualize writes `0.91`; a negative that rounds to zero loses its sign (§2), `0.00` where visualize writes `-0.00`; a number with no measure and no precision given is written by its notation, as an axis writes it (`1,234.5`), where visualize's one value is `1234.50`; and a value that is no number is `NaN` under every notation, where visualize's notations write it with `to_string/1`. Everything else, the compound and magnitude durations, currency by code, the rounded count, the precision and the suffix, and the axis's notations, is visualize's byte for byte over its cases.
+
+```test:format-default-conformance
+visualize's cases write byte for byte what visualize writes: Format.currency/2 by code, Format.duration/1 and its compound form, Format.Auto's plain, grouped, one-prefix and per-value SI notations by magnitude and by domain, and Visualize.Quantity.format/3's examples
+```
+
+```test:format-default-measure
+a measure's default is its quantity's: a duration compound, a currency by its code and minor units, a ratio a percent from any dimensionless unit, a count rounded and grouped, a quantity with a family rescaled within it under each system, decimal and binary bytes apart, a unit alone to its precision, the suffix rules; a d3 format overrides the number only; a non-number is NaN
+```
+
+```test:format-default-faults
+for_measure/2 answers each fault at its key: a measure resolve/1 refuses or that is no map, a precision, a system, a style, a notation, a domain, a format, a locale and an unknown key; for_measure!/2 raises them
+```

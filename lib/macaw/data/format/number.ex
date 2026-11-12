@@ -242,6 +242,11 @@ defmodule Macaw.Data.Format.Number do
 
   # d3's `formatGroup`: groups from the right, the sizes used in turn and again from the
   # first; with a finite width the groups shrink so the grouped digits fit it.
+  @doc false
+  # Integer digits grouped by a locale, for the notations of `Macaw.Data.Format.Measure`.
+  @spec group_digits(String.t(), Macaw.Data.Format.Locale.t()) :: String.t()
+  def group_digits(digits, locale), do: group(digits, :infinity, locale)
+
   defp group(digits, _width, %{grouping: []}), do: digits
 
   defp group(digits, width, %{grouping: [g | _] = grouping, thousands: thousands}) do

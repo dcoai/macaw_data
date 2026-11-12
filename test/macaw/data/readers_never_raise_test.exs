@@ -448,6 +448,18 @@ defmodule Macaw.Data.ReadersNeverRaiseTest do
 
       answers(fn -> Format.Locale.new(fields) end, fn -> Format.Locale.new!(fields) end)
 
+      measure_opts = [:precision, :system, :style, :notation, :domain, :format, :locale]
+
+      for measure <- [%{unit: text}, %{quantity: text}, %{unit: "By"}, %{}, text] do
+        with {:ok, format} <-
+               answers(fn -> Format.for_measure(measure, options(measure_opts)) end, fn ->
+                 Format.for_measure!(measure, options(measure_opts))
+               end) do
+          for value <- [0, -1.5, 10 ** 400, nil],
+              do: assert(is_binary(Format.measure(format, value)))
+        end
+      end
+
       with {:ok, time} <-
              answers(fn -> Format.parse_time(text, opts) end, fn ->
                Format.parse_time!(text, opts)
@@ -481,7 +493,7 @@ defmodule Macaw.Data.ReadersNeverRaiseTest do
   @tag verifies: "data-errors-readers"
   test "every reader spec/00 §5 names exports its ! twin at its arity" do
     readers = named_readers()
-    assert length(readers) == 27
+    assert length(readers) == 28
 
     for {module, name, arity} <- readers do
       assert Code.ensure_loaded?(module), inspect(module)

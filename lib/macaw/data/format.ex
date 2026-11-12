@@ -26,7 +26,7 @@ defmodule Macaw.Data.Format do
   """
 
   alias Macaw.Data.{Error, Fault, Options, Unit}
-  alias Macaw.Data.Format.{Locale, Number, Time}
+  alias Macaw.Data.Format.{Locale, Measure, Number, Time}
 
   @enforce_keys [:specifier]
   defstruct specifier: nil,
@@ -179,6 +179,72 @@ defmodule Macaw.Data.Format do
   def time(%Time{} = format, value), do: Time.write(format, value)
 
   @doc """
+  A field's default format, from its measure (spec/05 §6): `{:ok, format}` or
+  `{:error, faults}`, each fault at its key.
+
+  The measure, `%{unit: code, quantity: quantity}` with either or both absent, is
+  completed by `Macaw.Data.Quantity.resolve/1`, and its quantity chooses the writing: a
+  duration compound, a currency by its code, a ratio a percent, a count rounded and
+  grouped, any other quantity rescaled within its unit's family, a number with no measure
+  by its notation.
+
+  ## Options
+
+  - `:precision` - decimals, 0 to 20, default 2 (a currency's: its code's minor units)
+  - `:system` - one of `Macaw.Data.Quantity.systems/0`, default `:as_posted`
+  - `:style` - a duration's, `:compound` (default) or `:magnitude`
+  - `:notation` - a number's with no measure: `:auto` (default), `:plain`, `:grouped`,
+    `:si` or `{:si, e}`
+  - `:domain` - numbers whose greatest magnitude chooses the `:auto` notation for every value
+  - `:format` - a d3 specifier that overrides the number
+  - `:locale` - a `Macaw.Data.Format.Locale`, default English
+
+  ## Examples
+
+      iex> {:ok, format} = Macaw.Data.Format.for_measure(%{unit: "s"})
+      iex> Macaw.Data.Format.measure(format, 5040)
+      "1h 24m"
+
+      iex> Macaw.Data.Format.measure(Macaw.Data.Format.for_measure!(%{unit: "{iso4217:JPY}"}), 1240)
+      "¥1,240"
+
+      iex> Macaw.Data.Format.measure(Macaw.Data.Format.for_measure!(%{unit: "kg"}, system: :us), 80)
+      "176.37 lb"
+
+      iex> Macaw.Data.Format.measure(Macaw.Data.Format.for_measure!(%{}, domain: [0, 9_000_000]), 4_500_000)
+      "4.5M"
+
+      iex> Macaw.Data.Format.for_measure(%{unit: "By", quantity: :duration}, precision: -1)
+      {:error, [{[:measure], {:quantity, :duration, "By"}}, {[:precision], {:type, :precision}}]}
+
+  """
+  @spec for_measure(term(), keyword()) :: {:ok, Measure.t()} | {:error, [fault(), ...]}
+  def for_measure(measure, opts \\ []), do: Measure.build(measure, opts)
+
+  @doc "As `for_measure/2`, the format alone, raising `Macaw.Data.Error` with the faults in `format_error/1`'s words."
+  @spec for_measure!(term(), keyword()) :: Measure.t()
+  def for_measure!(measure, opts \\ []) do
+    case for_measure(measure, opts) do
+      {:ok, format} ->
+        format
+
+      {:error, faults} ->
+        raise Error, reason: faults, what: "not a measure's format", words: &words/1
+    end
+  end
+
+  @doc """
+  Writes a value by a measure's format (spec/05 §6): a string, whatever the value; a
+  value that is no number is the locale's not-a-number.
+
+      iex> Macaw.Data.Format.measure(Macaw.Data.Format.for_measure!(%{quantity: :ratio}), 0.914)
+      "91.40%"
+
+  """
+  @spec measure(Measure.t(), term()) :: String.t()
+  def measure(%Measure{} = format, value), do: Measure.write(format, value)
+
+  @doc """
   The words of a reason this module answers, for a person (spec/00 §5).
 
       iex> Macaw.Data.Format.format_error({:width, 1024})
@@ -199,7 +265,20 @@ defmodule Macaw.Data.Format do
   def words({:type, :currency}), do: "must be {prefix, suffix}, two strings"
   def words({:type, :symbols}), do: "must be a map of ISO 4217 codes to strings"
   def words({:unknown_currency, _code} = reason), do: Unit.format_error(reason)
-  def words({:names, n}), do: "must be a list of #{n} strings"
+  def words({:type, :measure}), do: "must be a measure, a map of a unit and a quantity"
+  def words({:type, :precision}), do: "must be an integer from 0 to 20"
+  def words({:type, :domain}), do: "must be a list of numbers"
+  def words({:unknown_system, _system}), do: "must be one of :metric, :us, :uk or :as_posted"
+
+  def words({:unknown_quantity, q}),
+    do: "#{inspect(q)} is no quantity of Macaw.Data.Quantity.all/0"
+
+  def words({:quantity, q, unit}), do: "#{unit} does not measure #{q}"
+  def words({:unit, code, reason}), do: "unit #{inspect(code)}: " <> Unit.format_error(reason)
+
+  def words({:names, n}),
+    do: "must be a list of #{n} strings"
+
   def words({:type, :pattern}), do: "must be a strftime pattern, a string"
   def words(_reason), do: nil
 
