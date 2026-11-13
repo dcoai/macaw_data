@@ -183,10 +183,9 @@ defmodule Macaw.Data.Operations.GroupNativeTest do
         assert Kernels.group_sum(1, vd, vv, true, cd, cv, ncodes, 0, n, e - 1) == :dirty
 
         # The call's own time, the CPU time of its scheduler thread (macaw_data#297).
-        {answer, ns} =
-          KernelTime.least(fn ->
-            Kernels.group_sum_timed(1, vd, vv, true, cd, cv, ncodes, 0, n, e)
-          end)
+        # Through apply/3: a build without the toolchain has no probes, timed or counted.
+        args = [1, vd, vv, true, cd, cv, ncodes, 0, n, e]
+        {answer, ns} = KernelTime.least(fn -> apply(Kernels, :group_sum_timed, args) end)
 
         assert answer == call.()
         assert ns < 1_000_000, "a #{n}-row sum answering #{e} entries took #{ns} ns of CPU"
