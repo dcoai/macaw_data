@@ -49,34 +49,6 @@
       "the deadline of a wait on a source's pushed messages (a receive's `after`): it bounds a wait on messages, it times nothing"
   },
   %{
-    file: "test/macaw/data/operations/filter_native_test.exs",
-    call: ":timer.tc",
-    count: 1,
-    reason:
-      "a kernel on a normal scheduler returns within 1 ms (spec/04 §1.7): the bound is a time, and a NIF makes no reductions to count"
-  },
-  %{
-    file: "test/macaw/data/operations/finish_native_test.exs",
-    call: ":timer.tc",
-    count: 1,
-    reason:
-      "a kernel on a normal scheduler returns within 1 ms (spec/04 §1.7): the bound is a time, and a NIF makes no reductions to count"
-  },
-  %{
-    file: "test/macaw/data/operations/group_native_test.exs",
-    call: ":timer.tc",
-    count: 1,
-    reason:
-      "a kernel on a normal scheduler returns within 1 ms (spec/04 §1.7): the bound is a time, and a NIF makes no reductions to count"
-  },
-  %{
-    file: "test/macaw/data/operations/ladder_native_test.exs",
-    call: ":timer.tc",
-    count: 1,
-    reason:
-      "a kernel on a normal scheduler returns within 1 ms (spec/04 §1.7): the bound is a time, and a NIF makes no reductions to count"
-  },
-  %{
     file: "test/macaw/data/operations/frame_loop_test.exs",
     call: ":timer.tc",
     count: 2,

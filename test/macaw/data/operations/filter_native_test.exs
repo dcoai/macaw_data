@@ -10,7 +10,7 @@ defmodule Macaw.Data.Operations.FilterNativeTest do
   alias Macaw.Data.Native.Kernels
   alias Macaw.Data.Operations.Transforms.Filter
   alias Macaw.Data.Table.{Chunk, Column}
-  alias Macaw.Data.Test.{Gen, Storage}
+  alias Macaw.Data.Test.{Gen, KernelTime, Storage}
 
   @registry Operations.registry()
   @tests [:eq, :ne, :lt, :lte, :gt, :gte, :present, :absent]
@@ -292,16 +292,18 @@ defmodule Macaw.Data.Operations.FilterNativeTest do
         {:float64, data, validity} = Chunk.packed(chunk, "v")
         every_other = Enum.to_list(0..(2 * n - 1)//2)
 
-        for call <- [
-              fn ->
-                Kernels.filter_mask(2, data, validity, 0, n, 4, 0.0, false, false, <<>>, 0)
-              end,
-              fn -> Kernels.take(data, 8, every_other) end,
-              fn -> Kernels.take_bits(validity, every_other) end
+        mask = [2, data, validity, 0, n, 4, 0.0, false, false, <<>>, 0]
+
+        # Each call's own time, the CPU time of its scheduler thread (macaw_data#297).
+        for {kernel, args} <- [
+              {:filter_mask, mask},
+              {:take, [data, 8, every_other]},
+              {:take_bits, [validity, every_other]}
             ] do
-          for _ <- 1..5, do: call.()
-          least = Enum.min(for _ <- 1..21, do: elem(:timer.tc(call), 0))
-          assert least < 1_000, "a #{n}-row call took #{least} µs"
+          timed = :"#{kernel}_timed"
+          {answer, ns} = KernelTime.least(fn -> apply(Kernels, timed, args) end)
+          assert answer == apply(Kernels, kernel, args)
+          assert ns < 1_000_000, "a #{n}-row #{kernel} took #{ns} ns of its thread's CPU"
         end
 
         # A slot past the buffer is a fault, answered as a term, never read (macaw_data#101).

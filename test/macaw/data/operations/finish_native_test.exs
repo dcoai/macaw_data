@@ -10,7 +10,7 @@ defmodule Macaw.Data.Operations.FinishNativeTest do
   alias Macaw.Data.Native.Kernels
   alias Macaw.Data.Operations.Transforms.{Ladder, Lttb, M4}
   alias Macaw.Data.Table.Chunk
-  alias Macaw.Data.Test.Storage
+  alias Macaw.Data.Test.{KernelTime, Storage}
 
   @registry Operations.registry()
   @epoch ~U[1970-01-01 00:00:00.000000Z]
@@ -193,13 +193,15 @@ defmodule Macaw.Data.Operations.FinishNativeTest do
       if Native.loaded?() do
         {_k, _views, pieces} = sync
 
-        for call <- [
-              fn -> Kernels.m4_finish(pieces, 2, 1, 0, 8 * n, 1000) end,
-              fn -> Kernels.lttb_finish(pieces, 1000) end
+        # Each call's own time, the CPU time of its scheduler thread (macaw_data#297).
+        for {kernel, args} <- [
+              {:m4_finish, [pieces, 2, 1, 0, 8 * n, 1000]},
+              {:lttb_finish, [pieces, 1000]}
             ] do
-          for _ <- 1..5, do: call.()
-          least = Enum.min(for _ <- 1..21, do: elem(:timer.tc(call), 0))
-          assert least < 1_000, "a #{n}-bucket finish took #{least} µs"
+          timed = :"#{kernel}_timed"
+          {answer, ns} = KernelTime.least(fn -> apply(Kernels, timed, args) end)
+          assert answer == apply(Kernels, kernel, args)
+          assert ns < 1_000_000, "a #{n}-bucket #{kernel} took #{ns} ns of its thread's CPU"
         end
       end
     end

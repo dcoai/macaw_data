@@ -151,3 +151,57 @@ pub fn take_probe(fail_at: usize, data: beam.term, width: usize, indexes: beam.t
 pub fn take_bits_probe(fail_at: usize, bitmap: beam.term, indexes: beam.term) beam.term {
     return probed(fail_at, take_bits, .{ bitmap, indexes });
 }
+
+// -- the timing probes (macaw_data#297) ---------------------------------------------------
+//
+// Each kernel a bound test times, run once with the CPU time of the scheduler thread that
+// ran it read before and after: `{answer, ns}`. A thread's CPU clock stops while the OS
+// runs another thread, so a loaded host does not reach it, as it reaches a wall clock read
+// around the NIF; it is the kernel's own work, which spec/04 §1.7's 1 ms rule bounds.
+// Exported only under `config :macaw_data, native_probes: true` (`kernels.ex`), the suite's.
+
+const std = @import("std");
+
+fn threadNs() u64 {
+    var ts: std.c.timespec = undefined;
+    // A thread's own CPU clock is always there to read on the hosts the kernels build for.
+    std.debug.assert(std.c.clock_gettime(.THREAD_CPUTIME_ID, &ts) == 0);
+    return @as(u64, @intCast(ts.sec)) * std.time.ns_per_s + @as(u64, @intCast(ts.nsec));
+}
+
+fn timed(comptime kernel: anytype, args: anytype) beam.term {
+    const before = threadNs();
+    const result = @call(.auto, kernel, args);
+    const ns = threadNs() - before;
+    const env = beam.context.env;
+    var pair = [_]e.ErlNifTerm{ result.v, e.enif_make_uint64(env, ns) };
+    return .{ .v = e.enif_make_tuple_from_array(env, &pair, 2) };
+}
+
+pub fn ladder_timed(xform: u8, xdata: beam.term, xvalid: beam.term, yform: u8, ydata: beam.term, yvalid: beam.term, first: usize, count: usize, kind: u8, k: i64) beam.term {
+    return timed(ladder, .{ xform, xdata, xvalid, yform, ydata, yvalid, first, count, kind, k });
+}
+
+pub fn m4_finish_timed(pieces: beam.term, k: i64, extent: u8, lo: beam.term, hi: beam.term, width: i64) beam.term {
+    return timed(m4_finish, .{ pieces, k, extent, lo, hi, width });
+}
+
+pub fn lttb_finish_timed(pieces: beam.term, n: i64) beam.term {
+    return timed(lttb_finish, .{ pieces, n });
+}
+
+pub fn group_sum_timed(vform: u8, vdata: beam.term, vvalid: beam.term, grouped: bool, codes: beam.term, cvalid: beam.term, ncodes: usize, first: usize, count: usize, limit: usize) beam.term {
+    return timed(group_sum, .{ vform, vdata, vvalid, grouped, codes, cvalid, ncodes, first, count, limit });
+}
+
+pub fn filter_mask_timed(mode: u8, data: beam.term, validity: beam.term, first: usize, count: usize, cmp: u8, value: beam.term, present: bool, missing: bool, pass: beam.term, ncodes: usize) beam.term {
+    return timed(filter_mask, .{ mode, data, validity, first, count, cmp, value, present, missing, pass, ncodes });
+}
+
+pub fn take_timed(data: beam.term, width: usize, indexes: beam.term) beam.term {
+    return timed(take, .{ data, width, indexes });
+}
+
+pub fn take_bits_timed(bitmap: beam.term, indexes: beam.term) beam.term {
+    return timed(take_bits, .{ bitmap, indexes });
+}

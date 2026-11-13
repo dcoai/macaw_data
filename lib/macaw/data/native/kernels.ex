@@ -59,7 +59,16 @@ case Toolchain.decide(
                   group_sum_probe: [],
                   filter_mask_probe: [],
                   take_probe: [],
-                  take_bits_probe: []
+                  take_bits_probe: [],
+                  # The timing probes (macaw_data#297): `{answer, ns}`, the CPU time of
+                  # the scheduler thread that ran the call, for the 1 ms rule's tests.
+                  ladder_timed: [],
+                  m4_finish_timed: [],
+                  lttb_finish_timed: [],
+                  group_sum_timed: [],
+                  filter_mask_timed: [],
+                  take_timed: [],
+                  take_bits_timed: []
                 ],
                 else: []
               )

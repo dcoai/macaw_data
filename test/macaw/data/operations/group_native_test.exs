@@ -12,8 +12,7 @@ defmodule Macaw.Data.Operations.GroupNativeTest do
   alias Macaw.Data.Operations.Aggregates
   alias Macaw.Data.Operations.Transforms.Aggregate
   alias Macaw.Data.Table.Chunk
-  alias Macaw.Data.Test.Gen
-  alias Macaw.Data.Test.Storage
+  alias Macaw.Data.Test.{Gen, KernelTime, Storage}
 
   @registry Operations.registry()
   @max_int 0x7FFF_FFFF_FFFF_FFFF
@@ -183,9 +182,14 @@ defmodule Macaw.Data.Operations.GroupNativeTest do
         assert is_list(call.())
         assert Kernels.group_sum(1, vd, vv, true, cd, cv, ncodes, 0, n, e - 1) == :dirty
 
-        for _ <- 1..5, do: call.()
-        least = Enum.min(for _ <- 1..21, do: elem(:timer.tc(call), 0))
-        assert least < 1_000, "a #{n}-row sum answering #{e} entries took #{least} µs"
+        # The call's own time, the CPU time of its scheduler thread (macaw_data#297).
+        {answer, ns} =
+          KernelTime.least(fn ->
+            Kernels.group_sum_timed(1, vd, vv, true, cd, cv, ncodes, 0, n, e)
+          end)
+
+        assert answer == call.()
+        assert ns < 1_000_000, "a #{n}-row sum answering #{e} entries took #{ns} ns of CPU"
       end
     end
   end

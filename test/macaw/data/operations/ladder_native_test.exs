@@ -12,7 +12,7 @@ defmodule Macaw.Data.Operations.LadderNativeTest do
   alias Macaw.Data.Native.Kernels
   alias Macaw.Data.Operations.Transforms.Ladder
   alias Macaw.Data.Table.Chunk
-  alias Macaw.Data.Test.{Gen, Work}
+  alias Macaw.Data.Test.{Gen, KernelTime, Work}
 
   @epoch ~U[1970-01-01 00:00:00.000000Z]
   @forms [:int, :float, :utc, :naive, :zoned, :date]
@@ -71,7 +71,9 @@ defmodule Macaw.Data.Operations.LadderNativeTest do
   end
 
   # The kernel called on the view as `Ladder.partial/4` calls it.
-  defp kernel({chunk, first, count}, kind, k) do
+  defp kernel(view, kind, k), do: apply(Kernels, :ladder, kernel_args(view, kind, k))
+
+  defp kernel_args({chunk, first, count}, kind, k) do
     {xf, xd, xv} =
       case Chunk.packed(chunk, "t") do
         {:int64, d, v} -> {0, d, v}
@@ -87,7 +89,7 @@ defmodule Macaw.Data.Operations.LadderNativeTest do
       end
 
     kd = if kind == :time, do: 1, else: 0
-    Kernels.ladder(xf, xd, xv, yf, yd, yv, first, count, kd, k)
+    [xf, xd, xv, yf, yd, yv, first, count, kd, k]
   end
 
   # The property's runs, and the most reductions generating all their cases may cost:
@@ -199,11 +201,11 @@ defmodule Macaw.Data.Operations.LadderNativeTest do
       # At level 0 every row of x = 3i is a bucket of its own: the largest answer a call
       # builds, so its slowest.
       if Native.loaded?() do
-        for _ <- 1..5, do: kernel(sync, :linear, 0)
-        # The least of 21: the call's own cost, not the box's load around it.
-        times = for _ <- 1..21, do: elem(:timer.tc(fn -> kernel(sync, :linear, 0) end), 0)
-        least = Enum.min(times)
-        assert least < 1_000, "a #{n}-row call took #{least} µs"
+        # The call's own time, the CPU time of its scheduler thread (macaw_data#297).
+        args = kernel_args(sync, :linear, 0)
+        {answer, ns} = KernelTime.least(fn -> apply(Kernels, :ladder_timed, args) end)
+        assert answer == kernel(sync, :linear, 0)
+        assert ns < 1_000_000, "a #{n}-row call took #{ns} ns of its thread's CPU"
       end
     end
   end

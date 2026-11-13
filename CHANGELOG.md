@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **The kernels' 1 ms bound is judged by the scheduler thread's CPU time** (#297). Each test of the rule read a wall clock around the call, which a loaded host stretches past 1 ms (the weekly stress job failed one run in 54). Each timed kernel now has a probe twin, `<kernel>_timed`, built only under `native_probes: true`, that answers `{answer, ns}` from `CLOCK_THREAD_CPUTIME_ID`. No change to an adopter's build: its kernels export no probe.
+
 ## v0.17.0 (2026-11-12)
 
 **A reducer named per reader and finishing chunk by chunk through a cache, one parsed format for numbers and times, the loop over a set of sources as a value, and generated, combined and telemetry sources that pass the conformance kit** (#239, #246, #247, #248, #249, #250, #251, #260, #261, #269, #271, #273, #275, #277, #278, #279, #282). It adds public API and changes behavior: a source's table refuses rows out of its window field's order, and the kit holds a subscription to its resolution and position. So this is a minor.
