@@ -10,7 +10,7 @@ defmodule Macaw.Data.DerivedTest do
 
   alias Macaw.Data.{Delivery, Derived, Schema}
   alias Macaw.Data.Derived.{Context, Join, Sandbox}
-  alias Macaw.Data.Test.Atoms
+  alias Macaw.Data.Test.{Atoms, Gen}
 
   doctest Derived
   doctest Context
@@ -756,7 +756,7 @@ defmodule Macaw.Data.DerivedTest do
       map({instant, integer(1..1000)}, fn {from, d} ->
         %{window: [from, DateTime.add(from, d)], latest: true}
       end),
-      map(map_of(form_name(), integer(0..9), min_length: 1, max_length: 3), fn region ->
+      map(Gen.map_of(form_name(), integer(0..9), min_length: 1, max_length: 3), fn region ->
         %{region: Map.new(region, fn {field, from} -> {field, [from, from + 1]} end)}
       end)
     ])
@@ -767,7 +767,7 @@ defmodule Macaw.Data.DerivedTest do
           id <- form_name(),
           inputs <- map(list_of(form_input(), min_length: 1, max_length: 3), &distinct/1),
           fields <-
-            map_of(form_name(), member_of([:number, :category, :color]),
+            Gen.map_of(form_name(), member_of([:number, :category, :color]),
               min_length: 1,
               max_length: 4
             ),

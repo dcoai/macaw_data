@@ -11,6 +11,7 @@ defmodule Macaw.Data.ReadersNeverRaiseTest do
 
   alias Macaw.Data.{Derived, Error, Fault, Format, Schema, Stack, Table}
   alias Macaw.Data.Source.{Description, Finish, Push, Request}
+  alias Macaw.Data.Test.Gen
 
   # A leaf of any kind, small: the shapes are the generators' work, not the values'.
   defp leaf do
@@ -253,7 +254,7 @@ defmodule Macaw.Data.ReadersNeverRaiseTest do
               map_of(
                 name(),
                 one_of([
-                  map_of(one_of([member_of(keys), leaf()]), value(), max_length: 3),
+                  Gen.map_of(one_of([member_of(keys), leaf()]), value(), max_length: 3),
                   leaf()
                 ]),
                 max_length: 3
@@ -334,11 +335,14 @@ defmodule Macaw.Data.ReadersNeverRaiseTest do
 
     check all(
             d <-
-              one_of([pairs(description), map_of(member_of(description), value(), max_length: 3)]),
+              one_of([
+                pairs(description),
+                Gen.map_of(member_of(description), value(), max_length: 3)
+              ]),
             r <-
               one_of([
                 list_of(one_of([tuple({member_of(request), value()}), leaf()]), max_length: 4),
-                map_of(member_of(request), value(), max_length: 3)
+                Gen.map_of(member_of(request), value(), max_length: 3)
               ])
           ) do
       answers(fn -> Description.new(d) end, fn -> Description.new!(d) end)
@@ -351,9 +355,9 @@ defmodule Macaw.Data.ReadersNeverRaiseTest do
     keys = [:id, :from, :schema, :elixir, :function, :per, :input]
 
     check all(
-            source <- one_of([pairs(keys), map_of(member_of(keys), value(), max_length: 4)]),
+            source <- one_of([pairs(keys), Gen.map_of(member_of(keys), value(), max_length: 4)]),
             document <-
-              map_of(
+              Gen.map_of(
                 member_of(["$version", "id", "from", "schema", "elixir", "per", "input", "x"]),
                 document_value(),
                 max_length: 4
@@ -436,8 +440,9 @@ defmodule Macaw.Data.ReadersNeverRaiseTest do
     check all(
             text <- specifier(),
             opts <- options([:locale]),
-            fields <- one_of([pairs(keys), map_of(member_of(keys), value(), max_length: 3)]),
-            symbols <- map_of(one_of([member_of(~w(USD EUR ZZZ)), leaf()]), leaf(), max_length: 2)
+            fields <- one_of([pairs(keys), Gen.map_of(member_of(keys), value(), max_length: 3)]),
+            symbols <-
+              Gen.map_of(one_of([member_of(~w(USD EUR ZZZ)), leaf()]), leaf(), max_length: 2)
           ) do
       with {:ok, format} <-
              answers(fn -> Format.parse(text, opts) end, fn -> Format.parse!(text, opts) end) do
@@ -554,7 +559,7 @@ defmodule Macaw.Data.ReadersNeverRaiseTest do
     check all(
             sources <-
               one_of([
-                map_of(
+                Gen.map_of(
                   member_of([:a, :b]),
                   one_of([constant(signal), tuple({constant(signal), leaf()}), leaf()]),
                   max_length: 2

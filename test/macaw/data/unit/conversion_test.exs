@@ -4,6 +4,7 @@ defmodule Macaw.Data.Unit.ConversionTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
+  alias Macaw.Data.Test.Gen
   alias Macaw.Data.Unit
 
   # Codes of one dimension each.
@@ -142,7 +143,7 @@ defmodule Macaw.Data.Unit.ConversionTest do
     @tag verifies: "units-convert"
     property "codes of two dimensions never convert" do
       check all(
-              [g1, g2] <- uniq_list_of(member_of(@groups), length: 2),
+              [g1, g2] <- Gen.two_of(@groups),
               from <- member_of(g1),
               to <- member_of(g2)
             ) do

@@ -36,4 +36,37 @@ defmodule Macaw.Data.Test.GenTest do
     {_, values} = floats(Gen.float(min: -1.0, max: 1.0), 1)
     assert Enum.sort(Enum.uniq(values)) == [-1.0, 0.0, 1.0]
   end
+
+  # One draw from `generator` at size 100 and `seed`, in a process of its own: `:ok`, or
+  # the exception it exited with.
+  defp draw(generator, seed) do
+    {pid, ref} =
+      spawn_monitor(fn ->
+        generator |> StreamData.resize(100) |> StreamData.seeded(seed) |> Enum.take(1)
+      end)
+
+    receive do
+      {:DOWN, ^ref, :process, ^pid, :normal} -> :ok
+      {:DOWN, ^ref, :process, ^pid, {exception, _stack}} -> exception
+    end
+  end
+
+  # macaw_data#290: `Monitor.new/3`'s never-raise property drew its sources as
+  # `map_of(member_of([:a, :b]), ..., max_length: 2)` and failed at seed 717492 with
+  # `StreamData.TooManyDuplicatesError`, testing nothing. The same keys over 5,000 fixed
+  # seeds: StreamData's gives up for some, ours for none.
+  @tag :capture_log
+  test "a map over two keys never gives up, where StreamData's map_of does" do
+    keys = StreamData.member_of([:a, :b])
+    theirs = StreamData.map_of(keys, StreamData.integer(), max_length: 2)
+    ours = Gen.map_of(keys, StreamData.integer(), max_length: 2)
+
+    gave_up = for seed <- 1..5_000, draw(theirs, seed) != :ok, do: draw(theirs, seed)
+    assert gave_up != [] and Enum.all?(gave_up, &match?(%StreamData.TooManyDuplicatesError{}, &1))
+    assert Enum.all?(1..5_000, &(draw(ours, &1) == :ok))
+
+    maps = ours |> StreamData.resize(100) |> Enum.take(500)
+    assert Enum.all?(maps, &(map_size(&1) <= 2 and Map.keys(&1) -- [:a, :b] == []))
+    assert Enum.any?(maps, &(map_size(&1) == 2)) and Enum.any?(maps, &(map_size(&1) == 1))
+  end
 end
