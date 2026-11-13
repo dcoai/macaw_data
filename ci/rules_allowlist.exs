@@ -7,7 +7,7 @@
 #   %{test_code: "lib/x/conformance.ex", reason: "..."}
 #
 # More or fewer sites than `count` fail the check, so the list shrinks as uses go. The
-# lib/ entry is a removal waiting on its proposal.
+# lib/ entry is the recorded exception of #288.
 [
   %{
     test_code: "lib/macaw/data/source/conformance.ex",
@@ -95,6 +95,6 @@
     call: "Application.compile_env",
     count: 5,
     reason:
-      "the native: configuration choosing whether the kernels build (spec/04 §1.7); a build setting, not runtime state; removal or a recorded exception is #288"
+      "native: and native_probes:, build settings (spec/04 §1.7, #288): they decide what is compiled, and a build has one set of kernels, so no call could be passed them; the recorded exception to the family's rule 3"
   }
 ]
