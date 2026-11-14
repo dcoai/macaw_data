@@ -73,6 +73,13 @@ defmodule Macaw.Data.Table.Column do
 
   # -- packing ----------------------------------------------------------------------------
 
+  # A `:point` value: a pair of numbers, any range (a position or an x/y point). What a
+  # `:point` column packs, and what `Table.column_types/1` infers one from (macaw_data#298).
+  @doc false
+  @spec point?(term()) :: boolean()
+  def point?({x, y}) when is_number(x) and is_number(y), do: true
+  def point?(_value), do: false
+
   @doc false
   @spec pack(atom(), [term()], term()) :: {:ok, t()} | {:error, [{list(), term()}, ...]}
   def pack(:number, values, name) do
@@ -90,9 +97,7 @@ defmodule Macaw.Data.Table.Column do
   end
 
   def pack(:point, values, name) do
-    point? = &match?({lon, lat} when is_number(lon) and is_number(lat), &1)
-
-    case faults(values, name, point?, :point) do
+    case faults(values, name, &point?/1, :point) do
       [] -> {:ok, Point.pack(values)}
       faults -> {:error, faults}
     end

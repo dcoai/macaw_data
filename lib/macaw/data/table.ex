@@ -1132,8 +1132,10 @@ defmodule Macaw.Data.Table do
   @doc """
   Every named column's type, read whole: all non-`nil` values temporal is `:time`, all
   numbers `:number`, all strings `:text`, all color terms `:color` (a literal or a typed
-  color, `Macaw.Data.Schema.color?/1`), all atoms or booleans `:category`. A string is
-  never a color, so a column of CSS text is `:text`. A mixed or empty column is left out.
+  color, `Macaw.Data.Schema.color?/1`), all `{x, y}` pairs of numbers `:point` (the tuple,
+  any range, as a `:point` column packs; a list `[x, y]` is not one, macaw_data#298), all
+  atoms or booleans `:category`. A string is never a color, so a column of CSS text is
+  `:text`. A mixed or empty column is left out.
   A suggestion for a tool, never something a reader relies on; a table's own declared
   types are `column_type/2`'s, and a table answers those. `{:ok, types}`, or `source/1`'s
   `{:error, faults}` for a source of no shape `rows/1` reads (macaw_data#161).
@@ -1142,6 +1144,10 @@ defmodule Macaw.Data.Table do
       ...>         %{t: ~U[2024-01-02 00:00:00Z], v: 2.5, k: :b, s: "y", c: nil, m: "two"}]
       iex> Macaw.Data.Table.column_types(rows)
       {:ok, %{t: :time, v: :number, k: :category, s: :text, c: :color}}
+      iex> Macaw.Data.Table.column_types([%{pos: {12.5, 41.9}}, %{pos: nil}, %{pos: {-0.1, 51.5}}])
+      {:ok, %{pos: :point}}
+      iex> Macaw.Data.Table.column_types([%{pos: {12.5, 41.9}}, %{pos: [1, 2]}])
+      {:ok, %{}}
       iex> Macaw.Data.Table.column_types([%{t: 1}, 2])
       {:error, [{[], {:type, :rows}}]}
   """

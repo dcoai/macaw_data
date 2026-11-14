@@ -223,6 +223,7 @@ defmodule Macaw.Data.Table.Edge do
       Enum.all?(values, &is_number/1) -> :number
       Enum.all?(values, &is_binary/1) -> :text
       Enum.all?(values, &Schema.color?/1) -> :color
+      Enum.all?(values, &Macaw.Data.Table.Column.point?/1) -> :point
       Enum.all?(values, &(is_atom(&1) and not is_nil(&1))) -> :category
       true -> nil
     end

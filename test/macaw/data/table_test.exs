@@ -244,6 +244,24 @@ defmodule Macaw.Data.TableTest do
       assert Table.column_type(table, :x) == :text
       assert Table.column_type(table, :m) == :term
     end
+
+    @tag verifies: "table-inference"
+    test "a column of number pairs is :point, any range; a list pair or a mixed column is left out" do
+      rows = [
+        %{p: {12.5, 41.9}, xy: {1, 2.5}, l: [1, 2], m: {1, 2}, o: {-0.1, 51.5}},
+        %{p: nil, xy: {-0.0, 1.0e300}, l: [3, 4], m: {1, :b}, o: nil},
+        %{p: {-0.1, 51.5}, xy: {3, 4}, l: nil, m: nil, o: {1, 2, 3}}
+      ]
+
+      assert Table.column_types(rows) == {:ok, %{p: :point, xy: :point}}
+
+      # Packing infers it too, and the rows come back as they were given (macaw_data#298).
+      assert {:ok, table} = Table.from(rows)
+      assert Table.column_type(table, :p) == :point
+      assert Table.column_type(table, :xy) == :point
+      assert Table.column_type(table, :m) == :term
+      assert Table.rows!(table) == rows
+    end
   end
 
   describe "column_types/1 and time_columns/1 of a source rows/1 refuses (#161)" do
