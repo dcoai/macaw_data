@@ -100,6 +100,28 @@ defmodule Macaw.Data.Source.Request do
     end
   end
 
+  @doc false
+  # The shape of a region or a `latest`, the faults `new/1` and `Macaw.Data.Window.check/2`
+  # share (macaw_data#295): a region is a map of names to `[from, to]` pairs, every entry
+  # judged, and `latest` a boolean. An empty region is `new/1`'s to refuse; `check/2`
+  # reads it as no region, as visualize's box with no ranges.
+  @spec shape(:region | :latest, term()) :: [{list(), term()}]
+  def shape(:region, region) when is_map(region) and not is_struct(region) do
+    Enum.flat_map(region, fn {name, range} ->
+      cond do
+        not name?(name) -> [{[:region, name], {:type, :name}}]
+        not match?([_, _], range) -> [{[:region, name], {:type, :range}}]
+        true -> []
+      end
+    end)
+  end
+
+  def shape(:region, _region), do: [{[:region], {:type, :region}}]
+  def shape(:latest, latest) when is_boolean(latest), do: []
+  def shape(:latest, _latest), do: [{[:latest], {:type, :boolean}}]
+
+  defp name?(name), do: is_binary(name) or (is_atom(name) and name not in [nil, true, false])
+
   @doc "As `new/1`, raising `Macaw.Data.Error` naming every fault."
   @spec new!(keyword() | map()) :: t()
   def new!(fields) do
@@ -118,14 +140,9 @@ defmodule Macaw.Data.Source.Request do
   defp field(:box, box), do: if(box?(box), do: [], else: [{[:box], {:type, :box}}])
   defp field(:region, nil), do: []
 
-  defp field(:region, region)
-       when is_map(region) and not is_struct(region) and map_size(region) > 0 do
-    for {name, range} <- region, not match?([_, _], range), do: {[:region, name], {:type, :range}}
-  end
-
-  defp field(:region, _), do: [{[:region], {:type, :region}}]
-  defp field(:latest, b) when is_boolean(b), do: []
-  defp field(:latest, _), do: [{[:latest], {:type, :boolean}}]
+  defp field(:region, region) when region == %{}, do: [{[:region], {:type, :region}}]
+  defp field(:region, region), do: shape(:region, region)
+  defp field(:latest, latest), do: shape(:latest, latest)
   defp field(:order, order), do: Macaw.Data.Source.Order.shape(order)
   defp field(:budget, nil), do: []
   defp field(:budget, n) when is_integer(n) and n > 0, do: []

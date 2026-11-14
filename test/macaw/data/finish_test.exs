@@ -587,5 +587,31 @@ defmodule Macaw.Data.FinishTest do
 
     assert Window.check(%{region: %{"v" => [9, 1]}, at: 1}, times) ==
              {:error, [{[:at], :unknown_key}, {[:region, "v"], {:window, :inverted}}]}
+
+    # An axis of no shape is a fault, never a raise (macaw_data#295), of the axes alone and
+    # of a request built as a struct.
+    numbers = Schema.new!(%{t: %{type: :number, window: true}, v: %{type: :number}})
+    points = Schema.new!(%{p: %{type: :point, window: true}})
+
+    for {axes, schema, faults} <- [
+          {%{region: [1, 2]}, numbers, [{[:region], {:type, :region}}]},
+          {%{region: %{{:t} => [0, 1]}}, numbers, [{[:region, {:t}], {:window, :unknown_field}}]},
+          {%{region: %{t: 5}}, numbers, [{[:region, :t], {:type, :range}}]},
+          {%{region: %{t: [1]}, v: 1}, numbers,
+           [{[:region, :t], {:type, :range}}, {[:v], :unknown_key}]},
+          {%{latest: :yes}, numbers, [{[:latest], {:type, :boolean}}]},
+          {%{latest: nil}, numbers, [{[:latest], {:type, :boolean}}]},
+          {%{box: 5}, points, [{[:box], {:type, :box}}]}
+        ] do
+      assert Window.check(axes, schema) == {:error, faults}
+
+      request = struct(Request, Map.drop(axes, [:v]))
+
+      assert Window.check(request, schema) ==
+               {:error, Enum.reject(faults, &(&1 == {[:v], :unknown_key}))}
+    end
+
+    assert Window.check(%{region: %{}}, numbers) == :ok
+    assert Window.check(%{box: %{west: 0, south: 0, east: 1, north: 1}}, points) == :ok
   end
 end

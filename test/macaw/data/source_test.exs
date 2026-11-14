@@ -147,6 +147,10 @@ defmodule Macaw.Data.SourceTest do
               ]}
 
     assert Request.new(region: %{}, now: @now) == {:error, [{[:region], {:type, :region}}]}
+
+    assert Request.new(region: %{{:t} => [0, 1], nil => [0, 1], "v" => [0, 1]}, now: @now) ==
+             {:error, [{[:region, nil], {:type, :name}}, {[:region, {:t}], {:type, :name}}]}
+
     assert_raise Macaw.Data.Error, ~r/not a request/, fn -> Request.new!([]) end
   end
 

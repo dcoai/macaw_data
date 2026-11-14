@@ -420,22 +420,40 @@ defmodule Macaw.Data.Window do
   defp window_faults(_window, type), do: [{[:window], {:invalid_for, type}}]
 
   defp box_faults(nil, _type), do: []
-  defp box_faults(_box, :point), do: []
+  defp box_faults(box, :point), do: if(Request.box?(box), do: [], else: [{[:box], {:type, :box}}])
   defp box_faults(_box, nil), do: [{[:box], {:window, :no_window_field}}]
   defp box_faults(_box, type), do: [{[:box], {:invalid_for, type}}]
 
+  # A region of no shape is `Request.shape/2`'s faults, never a raise (macaw_data#295): a
+  # region that is no map, a range that is no pair, and a key that is no name, which names
+  # no field of the schema. An empty region asks nothing, as `nil` does.
   defp region_faults(nil, _schema), do: []
+  defp region_faults(region, _schema) when region == %{}, do: []
 
   defp region_faults(region, schema) do
-    Enum.flat_map(region, fn {field, range} ->
-      path = [:region, field]
+    case Request.shape(:region, region) do
+      [{[:region], _reason}] = faults ->
+        faults
 
-      case Schema.fetch(schema, field, :type) do
-        :error -> [{path, {:window, :unknown_field}}]
-        {:ok, type} when type not in [:time, :number] -> [{path, {:invalid_for, type}}]
-        {:ok, type} -> ends_faults(path, range, type)
-      end
-    end)
+      shape ->
+        Enum.flat_map(region, fn {field, range} ->
+          path = [:region, field]
+
+          case List.keyfind(shape, path, 0) do
+            {_path, {:type, :name}} -> [{path, {:window, :unknown_field}}]
+            {_path, _reason} = fault -> [fault]
+            nil -> field_faults(path, field, range, schema)
+          end
+        end)
+    end
+  end
+
+  defp field_faults(path, field, range, schema) do
+    case Schema.fetch(schema, field, :type) do
+      :error -> [{path, {:window, :unknown_field}}]
+      {:ok, type} when type not in [:time, :number] -> [{path, {:invalid_for, type}}]
+      {:ok, type} -> ends_faults(path, range, type)
+    end
   end
 
   defp ends_faults(path, [from, to], type) do
@@ -457,6 +475,9 @@ defmodule Macaw.Data.Window do
     do: if(compare(from, to) == :gt, do: [{path, {:window, :inverted}}], else: [])
 
   defp latest_faults(false, _field, _schema), do: []
+
+  defp latest_faults(latest, _field, _schema) when not is_boolean(latest),
+    do: Request.shape(:latest, latest)
 
   # Latest is by the window field's order, which a `:point` field does not have.
   defp latest_faults(true, field, schema) do

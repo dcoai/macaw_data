@@ -9,7 +9,7 @@ defmodule Macaw.Data.ReadersNeverRaiseTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
-  alias Macaw.Data.{Derived, Error, Fault, Format, Schema, Stack, Table}
+  alias Macaw.Data.{Derived, Error, Fault, Format, Schema, Stack, Table, Window}
   alias Macaw.Data.Source.{Description, Finish, Push, Request}
   alias Macaw.Data.Test.Gen
 
@@ -349,6 +349,63 @@ defmodule Macaw.Data.ReadersNeverRaiseTest do
       answers(fn -> Request.new(r) end, fn -> Request.new!(r) end)
     end
   end
+
+  # The schemas a window is checked against: each kind of window field, none, and one
+  # declaring an identity, so every axis reaches its checks (macaw_data#295).
+  defp window_schemas do
+    [
+      Schema.new!(%{t: %{type: :number, window: true}, v: %{type: :number}}),
+      Schema.new!(%{
+        t: %{type: :time, window: true},
+        id: %{type: :category, identity: true},
+        v: %{type: :number}
+      }),
+      Schema.new!(%{p: %{type: :point, window: true}, v: %{type: :number}}),
+      Schema.new!(%{v: %{type: :number}})
+    ]
+  end
+
+  # A region of any shape: a map of names, or of other terms, to pairs or other values.
+  defp region do
+    one_of([
+      value(),
+      Gen.map_of(
+        one_of([member_of([:t, :v, :id, :p, "t"]), name(), leaf()]),
+        one_of([value(), list_of(leaf(), length: 2)]),
+        max_length: 3
+      )
+    ])
+  end
+
+  @tag verifies: "data-errors-readers"
+  property "Window.check/2 answers any axes or request as :ok or faults" do
+    axes = [:window, :box, :region, :latest, :order]
+
+    check all(
+            schema <- member_of(window_schemas()),
+            given <-
+              Gen.map_of(
+                one_of([member_of(axes), leaf()]),
+                one_of([value(), region(), list_of(leaf(), length: 2)]),
+                max_length: 4
+              ),
+            region <- region()
+          ) do
+      for axes <- [given, Map.put(given, :region, region)] do
+        request = struct(Request, Map.take(axes, axes(axes)))
+
+        for answer <- [Window.check(axes, schema), Window.check(request, schema)] do
+          case answer do
+            :ok -> :ok
+            {:error, [_ | _] = faults} -> assert is_binary(Fault.sentence(faults))
+          end
+        end
+      end
+    end
+  end
+
+  defp axes(given),
+    do: Enum.filter(Map.keys(given), &(&1 in [:window, :box, :region, :latest, :order]))
 
   @tag verifies: "data-errors-readers"
   property "Derived.new/1 and from_map/2 answer any source as a derived source or faults" do
