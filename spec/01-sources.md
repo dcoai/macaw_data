@@ -155,7 +155,7 @@ from/2 reads rows, columns and a Table.Reader source, infers or takes the types,
 - `rows/1` of a list of rows is the list itself, uncopied; of a map or keyword list of equal-length columns, one map per row; of a rank-2 tensor, one tuple per row, of a rank-1 tensor its values; of a `Table.Reader` source, its rows keyed as the reader names its columns. Each is `{:ok, rows}`. A map whose values are not equal-length lists, a tensor of another rank, and a struct with no reader are `Table.source/1`'s faults, `{:error, faults}`, never a raise (macaw_data#130, #158). `rows!/1` answers the rows alone or raises `Macaw.Data.Error` with the faults;
 - `named/2` names a tensor's columns, or tuple rows' elements, in order, or says why it can't (`{:width, n, size}`, `{:rank, rank}`), and passes any other source through;
 - `unnamed?/1` is whether a source's rows have no names to read by: a tensor, or tuple rows (never a keyword list of columns);
-- `get/2` reads a column from a row by either spelling of its name, and `key/2` is the key that spells it; no atom is made. `accessor/1` is the function of a name, a function passed through;
+- `get/2` reads a column from a row by either spelling of its name, and `key/2` is the key that spells it; no atom is made. **A present key costs one match** (macaw_data#294): `get/2` reads the name as it is given first and looks for the other spelling only on a miss, the remembered atom key, then a scan, as `key/2` finds it, so its answer is `key/2`'s key fetched. It is the read a frame loop makes for every channel of every item. `accessor/1` is the function of a name, a function passed through;
 - `column_types/1` suggests each column's type from its whole: all temporal is `:time`, all numbers `:number`, all strings `:text`, all color terms (literal or typed, §1.7) `:color`, all `{x, y}` tuples of two numbers `:point` (any range, the pair a `:point` column packs, so `from/2` packs such a column as `:point`, macaw_data#298; a list `[x, y]` is no point), all atoms or booleans `:category`, a mixed or empty column left out; a string is never a color, so a column of CSS text is `:text`; `time_columns/1` names the temporal ones; `temporal?/1` is whether a value is a `DateTime`, `Date`, `NaiveDateTime` or an ISO 8601 string one of those parses. These are suggestions for a tool; a table's declared types are `column_type/2`'s. `column_types/1` and `time_columns/1` read their source through `rows/1`, so each answers `{:ok, value}`, a table's from its declared types, or a source `Table.source/1` refuses as its `{:error, faults}`, never a raise (macaw_data#161); `column_types!/1` and `time_columns!/1` answer the value alone or raise `Macaw.Data.Error` with the faults.
 
 ```test:table-inference-source
@@ -167,7 +167,7 @@ rows/1 passes a list of rows through uncopied and tuple rows unchanged, reads co
 ```
 
 ```test:table-row-helpers
-get/2 reads a key by either spelling, the exact key first, a nil value being a value; accessor/1 wraps a name and passes a function; a tuple row has no names
+get/2 reads a key by either spelling, the exact key first, a nil value being a value, and for generated rows of atom and string keys, both spellings among them, and any names it answers as key/2's key fetched; a present key costs at most 3.5 reductions a read and the other spelling at most 8 for a string name and 10 for an atom name, under pinned bounds; accessor/1 wraps a name and passes a function; a tuple row has no names
 ```
 
 ```test:table-inference

@@ -1069,13 +1069,15 @@ defmodule Macaw.Data.Table do
   @doc """
   The value of column `name` in `row`, by either spelling of the name: the key itself, else
   an atom name as its string and a string name as the atom key spelled the same. `nil`
-  when neither is a key. No atom is ever made.
+  when neither is a key. No atom is ever made. A present key is read with one match, and
+  the other spelling is looked for only on a miss (macaw_data#294): it is the read a frame
+  loop makes for every channel of every item.
   """
   @spec get(map(), name()) :: term()
   def get(row, name) do
-    case key(row, name) do
-      nil -> nil
-      key -> Map.fetch!(row, key)
+    case row do
+      %{^name => value} -> value
+      _other -> Edge.other(row, name)
     end
   end
 

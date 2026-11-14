@@ -181,6 +181,20 @@ defmodule Macaw.Data.Table.Edge do
   # A name of neither spelling (a row map's keys are its own): only itself, above.
   def key(_row, _name), do: nil
 
+  # `Table.get/2` once `name` itself is no key of `row`: the value under the other
+  # spelling, as `key/2` finds it (the remembered atom key, then a scan), or `nil`.
+  def other(row, name) when is_atom(name), do: Map.get(row, Atom.to_string(name))
+
+  # Nothing remembered is `nil`, which a row may hold as a key: it is a scan, never a read.
+  def other(row, name) when is_binary(name) do
+    case Process.get({Macaw.Data.Table, name}) do
+      key when key != nil and is_map_key(row, key) -> :erlang.map_get(key, row)
+      _other -> if key = scan(row, name), do: :erlang.map_get(key, row)
+    end
+  end
+
+  def other(_row, _name), do: nil
+
   defp scan(row, name) do
     found = Enum.find(Map.keys(row), &(is_atom(&1) and Atom.to_string(&1) == name))
     if found, do: Process.put({Macaw.Data.Table, name}, found)

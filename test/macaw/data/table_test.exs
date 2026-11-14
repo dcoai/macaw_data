@@ -4,6 +4,7 @@ defmodule Macaw.Data.TableTest do
   use ExUnitProperties
 
   alias Macaw.Data.Table
+  alias Macaw.Data.Test.{Gen, Work}
 
   import Macaw.Data.Test.Storage, only: [storage: 2]
 
@@ -174,6 +175,59 @@ defmodule Macaw.Data.TableTest do
     @tag verifies: "table-row-helpers"
     test "a tuple row has no names" do
       assert_raise BadMapError, fn -> Table.get({1, 2}, :v) end
+    end
+
+    # A row of atom and string keys, both spellings of a name now and then, and any name.
+    defp spelled(atoms), do: one_of([member_of(atoms), map(member_of(atoms), &Atom.to_string/1)])
+
+    @tag verifies: "table-row-helpers"
+    property "get/2 answers as key/2's key fetched, for any row and name (#294)" do
+      # A row's keys may be any atom, `true` among them; a name is never `nil` (no schema or
+      # table takes it), so the names are the words and their spellings. A `nil` key is
+      # left out: `key/2` answers `nil` over one when nothing is remembered, and this
+      # property's reference is `key/2` (macaw_data#307, filed from #304).
+      words = [:cpu, :mem, :host]
+      keys = spelled(words ++ [true])
+
+      check all(
+              row <- Gen.map_of(keys, one_of([integer(), constant(nil)]), max_length: 6),
+              names <-
+                list_of(one_of([spelled(words), constant("nope"), constant(:nope)]),
+                  max_length: 4
+                )
+            ) do
+        for name <- names do
+          expected =
+            case Table.key(row, name) do
+              nil -> nil
+              key -> Map.fetch!(row, key)
+            end
+
+          assert Table.get(row, name) == expected
+        end
+      end
+    end
+
+    defp sum([], _name, acc), do: acc
+    defp sum([row | rows], name, acc), do: sum(rows, name, acc + Table.get(row, name))
+
+    # The read a frame loop makes (#294): a present key one match, the other spelling one
+    # miss more. Measured at 3 a read (6 before), 7 (9) and 9 (11), the loop's own counted.
+    @tag verifies: "table-row-helpers"
+    test "a present key costs one match; the other spelling only a miss more, under pinned bounds" do
+      atoms = for i <- 1..10_000, do: %{cpu: i, mem: i, host: "h"}
+      strings = for i <- 1..10_000, do: %{"cpu" => i, "mem" => i, "host" => "h"}
+
+      for {rows, name, bound} <- [
+            {atoms, :cpu, 35_000},
+            {strings, "cpu", 35_000},
+            {atoms, "cpu", 80_000},
+            {strings, :cpu, 100_000}
+          ] do
+        {work, total} = Work.reductions(fn -> sum(rows, name, 0) end)
+        assert total == div(10_000 * 10_001, 2)
+        assert work <= bound, "#{inspect(name)} over #{map_size(hd(rows))}-key rows: #{work}"
+      end
     end
   end
 
