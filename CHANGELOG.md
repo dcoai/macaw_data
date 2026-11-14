@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **A stale kernel library is refused at start** (#300). The kernels answer the CRC-32 of the Zig sources they were built from, `digest/0`, and the start compares it with the sources this build compiled beside: another digest is `{:stale, built, loaded}`, a failed start under `native: :required` and a warning with the Elixir path under `:optional`. The cause is gone too: the toolchain check, `__mix_recompile__?/0`, moved to a module with no NIF, since Mix loaded the kernels' module to ask it and so bound the previous library on the first build after a kernel change.
 - **The kernels' 1 ms bound is judged by the scheduler thread's CPU time** (#297). Each test of the rule read a wall clock around the call, which a loaded host stretches past 1 ms (the weekly stress job failed one run in 54). Each timed kernel now has a probe twin, `<kernel>_timed`, built only under `native_probes: true`, that answers `{answer, ns}` from `CLOCK_THREAD_CPUTIME_ID`. No change to an adopter's build: its kernels export no probe.
 
 ## v0.17.0 (2026-11-12)

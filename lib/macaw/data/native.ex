@@ -27,6 +27,16 @@ defmodule Macaw.Data.Native do
   @normal {__MODULE__, :normal_schedulers}
   # The interface version kernels.zig answers (`abi/0`), so a stale library is not used.
   @abi 8
+  # The CRC-32 of the kernels' Zig sources in name order, as kernels.zig's `digest/0`
+  # computes it when it compiles: the start refuses a library built from other sources,
+  # which `abi` alone, bumped by hand, never sees (macaw_data#300). A file kernels.zig
+  # leaves out of its digest makes the two differ, so it fails the start, never quietly.
+  @sources __DIR__
+           |> Path.join("native/*.zig")
+           |> Path.wildcard()
+           |> Enum.sort_by(&Path.basename/1)
+  for file <- @sources, do: @external_resource(file)
+  @digest @sources |> Enum.map(&File.read!/1) |> :erlang.crc32()
   # Which module this build compiled, the kernels or their stub, read when this one compiles:
   # a constant, so the start of a build without the kernels never reaches the probe.
   @built Kernels.built?()
@@ -307,20 +317,35 @@ defmodule Macaw.Data.Native do
     :ok
   end
 
-  # The built kernels are asked their interface version in a process of its own, which
-  # sends it back and ends: a library that did not load raises there, and the process's
-  # exit reason is the answer, with nothing caught.
+  # The built kernels are asked their interface version and their sources' digest in a
+  # process of its own, which sends them back and ends: a library that did not load raises
+  # there, and the process's exit reason is the answer, with nothing caught.
   defp probe do
     parent = self()
-    {pid, ref} = spawn_monitor(fn -> send(parent, {:abi, self(), Kernels.abi()}) end)
+
+    {pid, ref} =
+      spawn_monitor(fn -> send(parent, {:abi, self(), Kernels.abi(), Kernels.digest()}) end)
 
     receive do
-      {:abi, ^pid, abi} ->
+      {:abi, ^pid, abi, digest} ->
         receive do: ({:DOWN, ^ref, :process, ^pid, _normal} -> :ok)
-        if abi == @abi, do: :ok, else: {:error, {:abi, abi, @abi}}
+        verdict(abi, digest)
 
       {:DOWN, ^ref, :process, ^pid, reason} ->
         {:error, reason}
     end
   end
+
+  @doc false
+  # Whether a library answering this interface version and digest is this build's: the
+  # version first, as before, then the sources (macaw_data#300).
+  @spec verdict(non_neg_integer(), non_neg_integer()) :: :ok | {:error, term()}
+  def verdict(@abi, @digest), do: :ok
+  def verdict(@abi, digest), do: {:error, {:stale, @digest, digest}}
+  def verdict(abi, _digest), do: {:error, {:abi, abi, @abi}}
+
+  @doc false
+  # The digest of the sources this build compiled beside (`verdict/2`).
+  @spec source_digest() :: non_neg_integer()
+  def source_digest, do: @digest
 end

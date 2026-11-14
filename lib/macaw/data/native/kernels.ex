@@ -1,5 +1,18 @@
 alias Macaw.Data.Native.Toolchain
 
+# When the toolchain changes, this file compiles again (`__mix_recompile__?/0`). The check
+# is a module of its own, with no NIF, because Mix loads every module that defines one
+# before it compiles, to ask it: asked of the kernels, it loaded the previous build's
+# library, and the rebuilt one, written to the same path, then bound that library still
+# (macaw_data#300). Mix recompiles by file, so the kernels are rebuilt all the same.
+defmodule Macaw.Data.Native.Kernels.Build do
+  @moduledoc false
+  @toolchain Toolchain.detect()
+
+  @doc false
+  def __mix_recompile__?, do: Toolchain.detect() != @toolchain
+end
+
 # The native kernels (spec/04 §1.7), compiled from kernels.zig when this build has the
 # toolchain (`Toolchain.detect/0`), else a module of the same functions, never called, as
 # `Macaw.Data.Native.loaded?/0` is false. Which one is decided at compile time, under
@@ -20,7 +33,6 @@ case Toolchain.decide(
     defmodule Macaw.Data.Native.Kernels do
       @moduledoc false
       @mode Application.compile_env(:macaw_data, :native, :optional)
-      @toolchain Toolchain.detect()
 
       # kernels.zig imports a file per kernel family; a change to any of them rebuilds.
       for file <- Path.wildcard(Path.join(__DIR__, "*.zig")), do: @external_resource(file)
@@ -29,6 +41,7 @@ case Toolchain.decide(
       # normal scheduler takes within 1 ms (`Macaw.Data.Native.scheduler/1`, spec/04 §1.7).
       @kernels [
         abi: [],
+        digest: [],
         ladder: [],
         ladder_dirty: [alias: :ladder, concurrency: :dirty_cpu],
         m4_finish: [],
@@ -91,9 +104,6 @@ case Toolchain.decide(
 
       @doc false
       def mode, do: @mode
-
-      @doc false
-      def __mix_recompile__?, do: Toolchain.detect() != @toolchain
     end
 
   {:skip, warning} ->
@@ -104,7 +114,6 @@ case Toolchain.decide(
     defmodule Macaw.Data.Native.Kernels do
       @moduledoc false
       @mode Application.compile_env(:macaw_data, :native, :optional)
-      @toolchain Toolchain.detect()
 
       @doc false
       def built?, do: false
@@ -113,10 +122,10 @@ case Toolchain.decide(
       def mode, do: @mode
 
       @doc false
-      def __mix_recompile__?, do: Toolchain.detect() != @toolchain
+      def abi, do: :erlang.nif_error(:not_built)
 
       @doc false
-      def abi, do: :erlang.nif_error(:not_built)
+      def digest, do: :erlang.nif_error(:not_built)
 
       @doc false
       def ladder(_xf, _xd, _xv, _yf, _yd, _yv, _first, _count, _kind, _k),

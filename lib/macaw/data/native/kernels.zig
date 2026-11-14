@@ -13,6 +13,7 @@
 //! - `filter.zig`: filter's mask and the gather of fixed-width slots and bits (§4.1.1);
 //! - `extremes.zig`: a column's first least and greatest slot (spec/02 §2.2).
 
+const std = @import("std");
 const beam = @import("beam");
 const ladder_walk = @import("ladder.zig");
 const finishes = @import("finish.zig");
@@ -27,6 +28,20 @@ const e = @import("erl_nif");
 pub fn abi() u32 {
     comptime noErrorUnions();
     return 8;
+}
+
+/// The CRC-32 of the kernels' own Zig sources, computed when they compile (macaw_data#300):
+/// `Macaw.Data.Native` computes the same of the files it was compiled beside, and the start
+/// refuses a library whose sources differ, so a stale library can never answer. The files
+/// in name order, as `Native` reads them; a file missing here fails the start, never quietly.
+pub fn digest() u32 {
+    return comptime blk: {
+        @setEvalBranchQuota(100_000_000);
+        var crc = std.hash.Crc32.init();
+        for (.{ "buffers.zig", "extremes.zig", "filter.zig", "finish.zig", "group.zig", "kernels.zig", "ladder.zig" }) |file|
+            crc.update(@embedFile(file));
+        break :blk crc.final();
+    };
 }
 
 /// A kernel's answer as a term, never an error (macaw_data#101). Zigler turns an error
@@ -159,8 +174,6 @@ pub fn take_bits_probe(fail_at: usize, bitmap: beam.term, indexes: beam.term) be
 // runs another thread, so a loaded host does not reach it, as it reaches a wall clock read
 // around the NIF; it is the kernel's own work, which spec/04 §1.7's 1 ms rule bounds.
 // Exported only under `config :macaw_data, native_probes: true` (`kernels.ex`), the suite's.
-
-const std = @import("std");
 
 fn threadNs() u64 {
     var ts: std.c.timespec = undefined;

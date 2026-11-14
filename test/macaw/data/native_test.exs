@@ -29,6 +29,39 @@ defmodule Macaw.Data.NativeTest do
       assert Native.settle({:error, :not_built}, :optional) == :ok
       assert Native.settle(:ok, :required) == :ok
     end
+
+    @tag verifies: "operations-native-stale"
+    test "a library built from other sources is refused as stale, and Mix never loads the NIF module to ask about the toolchain" do
+      digest = Native.source_digest()
+      assert digest in 0..0xFFFF_FFFF
+
+      # The library this run loaded is the one built from these sources.
+      if Native.loaded?(), do: assert(Native.Kernels.digest() == digest)
+
+      # The verdict: this build's version and digest, a stale library, an older interface.
+      {abi, other} = {8, Bitwise.bxor(digest, 1)}
+      assert Native.verdict(abi, digest) == :ok
+      assert Native.verdict(abi, other) == {:error, {:stale, digest, other}}
+      assert Native.verdict(abi - 1, digest) == {:error, {:abi, abi - 1, abi}}
+
+      assert Native.settle({:error, {:stale, digest, other}}, :required) ==
+               {:error, {:native_kernels, {:stale, digest, other}}}
+
+      log =
+        capture_log(fn ->
+          assert Native.settle({:error, {:stale, digest, other}}, :optional) == :ok
+        end)
+
+      assert log =~ "did not load" and log =~ ":stale"
+
+      # The toolchain is asked of a module with no NIF: Mix loads every module defining
+      # __mix_recompile__?/0 before it compiles, and the kernels' would load the previous
+      # library, which the rebuilt one then bound (macaw_data#300).
+      Code.ensure_loaded!(Native.Kernels)
+      refute function_exported?(Native.Kernels, :__mix_recompile__?, 0)
+      Code.ensure_loaded!(Native.Kernels.Build)
+      assert Native.Kernels.Build.__mix_recompile__?() == false
+    end
   end
 
   describe "the native: setting" do
