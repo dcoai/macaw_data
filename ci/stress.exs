@@ -17,18 +17,26 @@
 # `tmp_dir` is a fixed path under the working directory), which no host running one suite
 # does, so a failure there would be the runner's, not the code's.
 #
-# Exit 0 when every run passes, 1 naming each failed run's seed with its output's tail, 2
-# on bad arguments.
+# A failed run's report names the tests that failed in it: ExUnit's failure blocks, found
+# anywhere in its whole output (log lines can bury them past any tail), then the tail. The
+# report ends with a tally, each failing test once with the number of runs it failed in, so
+# a flake failing in several runs reads as one line (dco-tek/macaw/macaw#320).
+#
+# Exit 0 when every run passes, 1 naming each failed run's seed, failing tests and output's
+# tail, 2 on bad arguments.
 
 defmodule Stress do
   @tail 40
+  @ansi ~r/\e\[[0-9;]*m/
+  @heading ~r/^ {2,}\d+\) ((?:test|doctest|property) .+ \(.+\)|.+: failure on setup_all callback.*)$/
 
   @doc """
   Run `rounds` rounds of `at_once` concurrent runs of `command` (a list: the executable
   and its arguments), each with `--seed N` appended from `seeds`. `run` executes one
   command in a slot, `run.(command, slot)` with `slot` in `0..at_once - 1` and no two runs
   of a round in one slot, and answers `{output, status}`. Answers `[]` when every run
-  passed, else `[%{seed:, status:, tail:}]`.
+  passed, else `[%{seed:, status:, failures:, tail:}]`, `failures` as `failures/1` answers
+  them.
   """
   def stress(command, rounds, at_once, seeds, run) do
     seeds
@@ -46,13 +54,70 @@ defmodule Stress do
       |> Enum.map(fn {:ok, result} -> result end)
     end)
     |> Enum.flat_map(fn
-      {_seed, {_output, 0}} -> []
-      {seed, {output, status}} -> [%{seed: seed, status: status, tail: tail(output)}]
+      {_seed, {_output, 0}} ->
+        []
+
+      {seed, {output, status}} ->
+        [%{seed: seed, status: status, failures: failures(output), tail: tail(output)}]
     end)
   end
 
   defp tail(output),
     do: output |> String.split("\n") |> Enum.take(-@tail) |> Enum.join("\n")
+
+  @doc """
+  The failure blocks ExUnit wrote in `output`, in order: `[%{test:, block:}]`, `test` the
+  heading without its number (`test a name (Module)`), `block` the heading and the indented
+  lines under it (location, assertion, code, left, right, stacktrace). Colors are stripped,
+  and a line that isn't indented, such as a log line, ends a block.
+  """
+  def failures(output) do
+    output
+    |> String.replace(@ansi, "")
+    |> String.split("\n")
+    |> Enum.reduce([], fn line, blocks ->
+      case {Regex.run(@heading, line), blocks} do
+        {[_, test], blocks} ->
+          [%{test: test, lines: [line], open: true} | blocks]
+
+        {nil, [%{open: true} = block | rest]} ->
+          if line == "" or String.starts_with?(line, " "),
+            do: [%{block | lines: [line | block.lines]} | rest],
+            else: [%{block | open: false} | rest]
+
+        {nil, blocks} ->
+          blocks
+      end
+    end)
+    |> Enum.reverse()
+    |> Enum.map(fn %{test: test, lines: lines} ->
+      block = lines |> Enum.drop_while(&(String.trim(&1) == "")) |> Enum.reverse()
+      %{test: test, block: Enum.join(block, "\n")}
+    end)
+  end
+
+  @doc """
+  Each test that failed in `failed` runs, once, with the number of runs it failed in: most
+  first, then by name, `[{test, runs}]`.
+  """
+  def tally(failed) do
+    failed
+    |> Enum.flat_map(fn run -> run.failures |> Enum.map(& &1.test) |> Enum.uniq() end)
+    |> Enum.frequencies()
+    |> Enum.sort_by(fn {test, runs} -> {-runs, test} end)
+  end
+
+  @doc "One failed run's report: its seed, its failing tests' blocks, then its output's tail."
+  def report(%{seed: seed, status: status, failures: failures, tail: tail}, command) do
+    named =
+      case failures do
+        [] -> "no failing test named in its output"
+        failures -> Enum.map_join(failures, "\n\n", & &1.block)
+      end
+
+    "--- seed #{seed} failed (exit #{status}); reproduce: #{Enum.join(command, " ")} --seed #{seed}\n" <>
+      "#{named}\n--- its output's last #{@tail} lines:\n#{tail}\n"
+  end
 
   @doc """
   Copy the checkout at `from` into `n` slots under `root`, every entry but `tmp/` (ExUnit's
@@ -126,13 +191,56 @@ defmodule Stress do
 
     File.rm_rf!(root)
 
+    buried =
+      Enum.join(
+        [
+          "12:00:00.001 [info] starting",
+          "",
+          "\e[31m  1) test a (A)\e[0m",
+          "     test/a_test.exs:3",
+          "     left:  1",
+          "     right: 2",
+          "",
+          "12:00:00.002 [error] a log line between blocks",
+          "  2) test b in a describe (B)",
+          "     test/b_test.exs:9",
+          "     ** (RuntimeError) x",
+          "",
+          "Finished in 1.0 seconds",
+          "12 tests, 2 failures"
+        ],
+        "\n"
+      )
+
     cases = [
       {"every run passing is []", stress(["t"], 3, 6, seeds, echo) == []},
       {"each failed run names its seed and status",
        stress(["t"], 1, 4, seeds, odd) == [
-         %{seed: 1, status: 1, tail: "boom"},
-         %{seed: 3, status: 1, tail: "boom"}
+         %{seed: 1, status: 1, failures: [], tail: "boom"},
+         %{seed: 3, status: 1, failures: [], tail: "boom"}
        ]},
+      {"failure blocks buried in log lines are found, colors stripped",
+       failures(buried) == [
+         %{
+           test: "test a (A)",
+           block: "  1) test a (A)\n     test/a_test.exs:3\n     left:  1\n     right: 2"
+         },
+         %{
+           test: "test b in a describe (B)",
+           block:
+             "  2) test b in a describe (B)\n     test/b_test.exs:9\n     ** (RuntimeError) x"
+         }
+       ]},
+      {"a run with no heading names none, and its report says so",
+       failures("** (CompileError) lib/x.ex:1\nboom") == [] and
+         report(%{seed: 7, status: 1, failures: [], tail: "boom"}, ["mix", "test"]) =~
+           "no failing test named in its output"},
+      {"the tally counts a test failing in two runs once, with 2, most first",
+       tally([
+         %{failures: [%{test: "test a (A)"}, %{test: "test b (B)"}]},
+         %{failures: [%{test: "test a (A)"}]},
+         %{failures: []}
+       ]) == [{"test a (A)", 2}, {"test b (B)", 1}]},
       {"rounds × at_once runs, each with its own --seed, a round's runs in distinct slots",
        stress(["mix", "test"], 2, 3, seeds, seen) == [] and
          Enum.sort(for(_ <- 1..6, do: receive(do: ({:ran, c, slot} -> {c, slot})))) ==
@@ -198,10 +306,13 @@ case System.argv() do
             )
 
           failed ->
-            for %{seed: seed, status: status, tail: tail} <- failed do
-              IO.puts(
-                "--- seed #{seed} failed (exit #{status}); reproduce: #{Enum.join(command, " ")} --seed #{seed}\n#{tail}\n"
-              )
+            for run <- failed, do: IO.puts(Stress.report(run, command))
+
+            IO.puts("stress: the failing tests, each with the number of runs it failed in")
+
+            case Stress.tally(failed) do
+              [] -> IO.puts("  none named; read each run's output above")
+              tally -> for {test, runs} <- tally, do: IO.puts("  #{runs}× #{test}")
             end
 
             IO.puts("stress: #{length(failed)} of #{rounds * at_once} runs failed")
