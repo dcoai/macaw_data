@@ -1,12 +1,23 @@
 # Changelog
 
-## Unreleased
+## v0.18.0 (2026-11-16)
+
+**`Macaw.Data.Window.check/2` answers every malformed axis as a fault, a column of number pairs is inferred `:point`, `Macaw.Data.Table.get/2` reads a present key with one match, and a stale kernel library is refused at start** (#294, #295, #297, #298, #300). It changes behavior for a caller that relied on a malformed region key or box passing, and for a reader of an inferred column's type. So this is a minor.
+
+### Upgrading from 0.17.x
+
+- **A column of `{x, y}` number pairs is now `:point`.** `Macaw.Data.Table.from/2` without `types:` packs it as `:point` where it was `:term`, and `Macaw.Data.Table.column_type/2` answers `:point`. Its rows read back equal. A caller that wants the old packing passes `types: %{field => :term}`.
+- **A region key that is no name is refused.** `Macaw.Data.Source.Request.new/1` answers `{[:region, key], {:type, :name}}`, and `Macaw.Data.Window.check/2` answers `{[:region, key], {:window, :unknown_field}}`. A box over a `:point` window field that is not a box is `{[:box], {:type, :box}}` from `check/2`, where it passed. An empty region still passes `check/2`.
+- **Every other change is internal or a fault where there was a raise:** `check/2` no longer raises on a malformed region, range or `latest`, and `get/2` answers as before, faster.
+
+### Changes
 
 - **`Macaw.Data.Table.get/2` reads a present key with one match** (#294). It looked the key up through `key/2` and then fetched it; it now matches the name as given and looks for the other spelling only on a miss. Over 10,000 reads a present key costs 3 reductions a read where it cost 6 (the loop's own counted), and the other spelling 7 where it cost 9 (a string name) and 9 where it cost 11 (an atom name). The answers are unchanged.
 - **`Macaw.Data.Table.column_types/1` infers `:point` for a column of `{x, y}` number pairs** (#298), any range, the test a `:point` column packs by. `Macaw.Data.Table.from/2` without `types:` therefore packs such a column as `:point` where it was `:term`: its rows read back equal, and only `Macaw.Data.Table.column_type/2` answers differently. A list `[x, y]` is not a point.
 - **`Macaw.Data.Window.check/2` names a malformed axis instead of raising** (#295). A region that is no map, a range that is no pair, a region key that is no name, a `latest` that is no boolean (`nil` among them) and a box over a `:point` window field that is none each raised `FunctionClauseError`, or passed in the box's case. Each is now a fault, the same `Source.Request.new/1` gives, and the two share one shape check. `Request.new/1` also refuses a region key that is no name, `{[:region, key], {:type, :name}}`. An empty region still passes `check/2`.
 - **A stale kernel library is refused at start** (#300). The kernels answer the CRC-32 of the Zig sources they were built from, `digest/0`, and the start compares it with the sources this build compiled beside: another digest is `{:stale, built, loaded}`, a failed start under `native: :required` and a warning with the Elixir path under `:optional`. The cause is gone too: the toolchain check, `__mix_recompile__?/0`, moved to a module with no NIF, since Mix loaded the kernels' module to ask it and so bound the previous library on the first build after a kernel change.
 - **The kernels' 1 ms bound is judged by the scheduler thread's CPU time** (#297). Each test of the rule read a wall clock around the call, which a loaded host stretches past 1 ms (the weekly stress job failed one run in 54). Each timed kernel now has a probe twin, `<kernel>_timed`, built only under `native_probes: true`, that answers `{answer, ns}` from `CLOCK_THREAD_CPUTIME_ID`. No change to an adopter's build: its kernels export no probe.
+- **Test and CI only** (#291, #292, #293, macaw#320): a property's map over a finite key list never retries; the suite loads every module first, as a release does; `Native.Kernels`' build settings are a recorded exception to the family's rule 3 (spec/04 §1.7); the stress script names each failed run's failing tests. Nothing changes for a host.
 
 ## v0.17.0 (2026-11-12)
 
